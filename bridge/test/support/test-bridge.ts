@@ -6,6 +6,7 @@ import { loadConfig } from "../../src/config";
 import { startBridge, type BridgeServer } from "../../src/server";
 
 const FAKE_GATEWAY_ARGV = JSON.stringify([process.execPath, join(import.meta.dir, "fake-hermes-gateway.ts")]);
+const FAKE_HELPER_ARGV = JSON.stringify([process.execPath, join(import.meta.dir, "fake-hermes-helper.ts")]);
 
 export type TestBridge = BridgeServer & {
   readonly stateDir: string;
@@ -23,6 +24,8 @@ export async function startTestBridge(env: Readonly<Record<string, string>> = {}
       HELLUM_STATE_DIR: stateDir,
       HELLUM_WEB_DIST: join(import.meta.dir, "../fixtures/web"),
       HELLUM_HERMES_GATEWAY_ARGV: FAKE_GATEWAY_ARGV,
+      HELLUM_HERMES_HELPER_ARGV: FAKE_HELPER_ARGV,
+      FAKE_HERMES_MEMORY_FILE: join(stateDir, "fake-memory.json"),
       ...env,
     }),
   );

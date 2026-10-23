@@ -1,6 +1,8 @@
 import { UnknownAttachmentError } from "../attachments/attachment-stager";
 import { ConversationNotFoundError } from "../conversations/conversation-service";
+import { HermesHelperError } from "../hermes/helper-process";
 import { HermesRpcError, HermesUnavailableError } from "../hermes/rpc-peer";
+import { MemoryWriteRejectedError } from "../memory/memory-service";
 import { errorResponse } from "../http/json";
 import { log } from "../log";
 import { matchRoute, type Route } from "./route-table";
@@ -15,6 +17,13 @@ function toErrorResponse(error: unknown, method: string, path: string): Response
   }
   if (error instanceof UnknownAttachmentError) {
     return errorResponse(400, "unknown_attachment", error.message);
+  }
+  if (error instanceof MemoryWriteRejectedError) {
+    return errorResponse(422, "memory_rejected", error.message);
+  }
+  if (error instanceof HermesHelperError) {
+    log.error("hermes helper failed", { method, path, error: error.message });
+    return errorResponse(502, "hermes_helper_failed", error.message);
   }
   if (error instanceof HermesUnavailableError) {
     return errorResponse(503, "hermes_unavailable", error.message);
