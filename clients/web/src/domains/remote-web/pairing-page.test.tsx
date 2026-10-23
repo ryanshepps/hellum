@@ -494,10 +494,10 @@ describe("RemoteWebPairingPage", () => {
     );
 
     const link = await screen.findByRole("link", {
-      name: "Open in the Vellum app",
+      name: "Open in the Hellum app",
     });
     const href = link.getAttribute("href") ?? "";
-    expect(href.startsWith("vellum-assistant://connect?")).toBe(true);
+    expect(href.startsWith("hellum://connect?")).toBe(true);
     const query = new URLSearchParams(href.slice(href.indexOf("?") + 1));
     expect(query.get("url")).toBe(window.location.origin);
     expect(query.get("code")).toBe("device-1");
@@ -527,7 +527,7 @@ describe("RemoteWebPairingPage", () => {
     );
 
     const link = await screen.findByRole("link", {
-      name: "Open in the Vellum app",
+      name: "Open in the Hellum app",
     });
     const href = link.getAttribute("href") ?? "";
     expect(href.startsWith("intent://connect?")).toBe(true);
@@ -536,7 +536,7 @@ describe("RemoteWebPairingPage", () => {
     expect(query.get("url")).toBe(window.location.origin);
     expect(query.get("code")).toBe("android-device");
     expect(href.slice(intentIndex)).toContain(
-      "#Intent;scheme=vellum-assistant;package=ai.vellum.assistant;",
+      "#Intent;scheme=hellum;package=ai.vellum.assistant;",
     );
     expect(androidIntentFallback(href)).toBe(window.location.href);
     expect(exchangeRemoteWebPairingTokenMock).not.toHaveBeenCalled();
@@ -556,7 +556,7 @@ describe("RemoteWebPairingPage", () => {
     );
 
     const link = await screen.findByRole("link", {
-      name: "Open in the Vellum app",
+      name: "Open in the Hellum app",
     });
     const href = link.getAttribute("href") ?? "";
     const query = new URLSearchParams(href.slice(href.indexOf("?") + 1));
@@ -581,7 +581,7 @@ describe("RemoteWebPairingPage", () => {
     );
 
     const link = await screen.findByRole("link", {
-      name: "Open in the Vellum app",
+      name: "Open in the Hellum app",
     });
     const href = link.getAttribute("href") ?? "";
     expect(androidIntentQuery(href).get("name")).toBe("My Homelab");
@@ -604,7 +604,7 @@ describe("RemoteWebPairingPage", () => {
       );
 
       const link = await screen.findByRole("link", {
-        name: "Open in the Vellum app",
+        name: "Open in the Hellum app",
       });
       const href = link.getAttribute("href") ?? "";
       const query = new URLSearchParams(href.slice(href.indexOf("?") + 1));
@@ -632,7 +632,7 @@ describe("RemoteWebPairingPage", () => {
     );
 
     const link = await screen.findByRole("link", {
-      name: "Open in the Vellum app",
+      name: "Open in the Hellum app",
     });
     const href = link.getAttribute("href") ?? "";
     const query = androidIntentQuery(href);
@@ -657,7 +657,7 @@ describe("RemoteWebPairingPage", () => {
       );
     });
     expect(
-      screen.queryByRole("link", { name: "Open in the Vellum app" }),
+      screen.queryByRole("link", { name: "Open in the Hellum app" }),
     ).toBeNull();
   });
 
@@ -680,7 +680,7 @@ describe("RemoteWebPairingPage", () => {
       );
 
       const link = await screen.findByRole("link", {
-        name: "Open in the Vellum app",
+        name: "Open in the Hellum app",
       });
       const href = link.getAttribute("href") ?? "";
       expect(androidIntentFallback(href)).toBe(window.location.href);
@@ -698,7 +698,7 @@ describe("RemoteWebPairingPage", () => {
         );
       });
       expect(
-        screen.queryByRole("link", { name: "Open in the Vellum app" }),
+        screen.queryByRole("link", { name: "Open in the Hellum app" }),
       ).toBeNull();
     } finally {
       window.history.pushState(null, "", "/");
@@ -730,7 +730,7 @@ describe("RemoteWebPairingPage", () => {
         );
       });
       expect(
-        screen.queryByRole("link", { name: "Open in the Vellum app" }),
+        screen.queryByRole("link", { name: "Open in the Hellum app" }),
       ).toBeNull();
     },
   );

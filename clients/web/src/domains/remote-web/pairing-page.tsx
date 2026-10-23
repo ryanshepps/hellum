@@ -146,7 +146,7 @@ function clearDeviceCodeFromUrl(): void {
  * handoff link intentionally targets the production app — the common case for
  * a phone that scanned a pairing QR with its camera.
  */
-const VELLUM_APP_SCHEME = "vellum-assistant";
+const VELLUM_APP_SCHEME = "hellum";
 const VELLUM_ANDROID_PACKAGE = "ai.vellum.assistant";
 type AppHandoffPlatform = "ios" | "android";
 
