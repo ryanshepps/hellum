@@ -1,3 +1,4 @@
+import { UnknownAttachmentError } from "../attachments/attachment-stager";
 import { ConversationNotFoundError } from "../conversations/conversation-service";
 import { HermesRpcError, HermesUnavailableError } from "../hermes/rpc-peer";
 import { errorResponse } from "../http/json";
@@ -11,6 +12,9 @@ export type AssistantApi = (request: Request) => Promise<Response | null>;
 function toErrorResponse(error: unknown, method: string, path: string): Response {
   if (error instanceof ConversationNotFoundError) {
     return errorResponse(404, "not_found", error.message);
+  }
+  if (error instanceof UnknownAttachmentError) {
+    return errorResponse(400, "unknown_attachment", error.message);
   }
   if (error instanceof HermesUnavailableError) {
     return errorResponse(503, "hermes_unavailable", error.message);

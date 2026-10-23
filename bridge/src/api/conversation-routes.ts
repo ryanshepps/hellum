@@ -120,13 +120,11 @@ export function conversationRoutes(conversations: ConversationService, hub: Even
       pattern: "messages",
       handle: async ({ request }) => {
         const body = await readJsonBody(request, SendBodySchema);
-        if (!body || !body.content.trim()) {
-          return errorResponse(400, "invalid_request", "content is required");
+        const attachmentIds = body?.attachmentIds ?? [];
+        if (!body || (!body.content.trim() && attachmentIds.length === 0)) {
+          return errorResponse(400, "invalid_request", "content or attachments are required");
         }
-        if ((body.attachmentIds ?? []).length > 0) {
-          return errorResponse(422, "attachments_unsupported", "Hellum cannot send attachments yet");
-        }
-        const sent = await conversations.send(body.conversationId ?? null, body.content, body.clientMessageId);
+        const sent = await conversations.send(body.conversationId ?? null, body.content, body.clientMessageId, attachmentIds);
         return Response.json({ accepted: true, conversationId: sent.conversationId, messageId: sent.messageId }, { status: 202 });
       },
     },

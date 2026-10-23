@@ -1,5 +1,7 @@
 import { adminSocketPath, startAdminServer } from "./admin/admin-server";
+import { attachmentRoutes } from "./api/attachment-routes";
 import { createAssistantApi } from "./api/assistant-api";
+import { AttachmentStore } from "./attachments/attachment-store";
 import { conversationRoutes } from "./api/conversation-routes";
 import { pushRoutes } from "./api/push-routes";
 import { systemRoutes } from "./api/system-routes";
@@ -59,7 +61,8 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
   const hub = new EventHub();
   const notifier = await startPushNotifier(config, hub, pushTokens);
   const gateway = new HermesGateway(config.hermesGateway, spawnGatewayProcess);
-  const conversations = await ConversationService.open(gateway, hub, createFileConversationStore(config.stateDir));
+  const attachments = await AttachmentStore.open(config.stateDir);
+  const conversations = await ConversationService.open(gateway, hub, createFileConversationStore(config.stateDir), attachments);
   gateway.start().catch((error: unknown) => {
     log.error("hermes gateway failed to start", { error: error instanceof Error ? error.message : String(error) });
   });
@@ -68,6 +71,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
   const assistantApi = createAssistantApi(new Set([SELF_ASSISTANT_ID, config.assistantId, identity.platformAssistantId]), [
     ...systemRoutes(config.assistantName),
     ...pushRoutes(pushTokens, identity.platformAssistantId),
+    ...attachmentRoutes(attachments),
     ...conversationRoutes(conversations, hub),
   ]);
   const socketPath = adminSocketPath(config.stateDir);

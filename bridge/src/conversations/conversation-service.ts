@@ -1,5 +1,8 @@
 import type { ConversationMessage } from "@vellumai/assistant-api";
 import { z } from "zod";
+import type { AttachmentStore } from "../attachments/attachment-store";
+import { resolveAttachments, stageAttachments } from "../attachments/attachment-stager";
+import { attachmentsByMessage, messageAttachmentView } from "../attachments/attachment-views";
 import type { EventHub } from "../events/event-hub";
 import type { HermesGateway } from "../hermes/hermes-gateway";
 import { parseTurnEvent } from "../hermes/schemas";
@@ -8,12 +11,14 @@ import { log } from "../log";
 import { toConversationSummary, type ConversationActivity, type ConversationSummary } from "../translate/conversations";
 import { historyToMessages } from "../translate/history";
 import { foldLiveTurn, mergeLiveTurn, openLiveTurn, type LiveTurn } from "../translate/live-turn";
+import { decorateUserMessages, promptWithFileRefs } from "../translate/message-attachments";
 import { assistantMessageId, userMessageId } from "../translate/message-ids";
 import { resolveApproval, startTurn, translateTurnEvent, type TranslatedTurn, type TurnState } from "../translate/turn-translator";
 import {
   withActivity,
   withArchived,
   withoutConversation,
+  withPromptText,
   type ConversationState,
   type ConversationStore,
 } from "./conversation-store";
@@ -69,6 +74,7 @@ export class ConversationService {
     private readonly gateway: HermesGateway,
     private readonly hub: EventHub,
     private readonly store: ConversationStore,
+    private readonly attachments: AttachmentStore,
     private state: ConversationState,
   ) {
     this.live = new LiveSessions(gateway);
@@ -77,8 +83,13 @@ export class ConversationService {
     gateway.onDisconnect((reason) => this.handleDisconnect(reason));
   }
 
-  static async open(gateway: HermesGateway, hub: EventHub, store: ConversationStore): Promise<ConversationService> {
-    return new ConversationService(gateway, hub, store, await store.load());
+  static async open(
+    gateway: HermesGateway,
+    hub: EventHub,
+    store: ConversationStore,
+    attachments: AttachmentStore,
+  ): Promise<ConversationService> {
+    return new ConversationService(gateway, hub, store, attachments, await store.load());
   }
 
   async list(offset: number, limit: number, filter: ArchiveFilter): Promise<ConversationPage> {
@@ -106,21 +117,34 @@ export class ConversationService {
     }
     const history = await this.live.history(conversationId);
     const startedAtMs = row ? Math.round(row.started_at * 1000) : Date.now();
+    const messages = mergeLiveTurn(historyToMessages(conversationId, startedAtMs, history), this.liveTurns.get(conversationId) ?? null);
     return {
-      messages: mergeLiveTurn(historyToMessages(conversationId, startedAtMs, history), this.liveTurns.get(conversationId) ?? null),
+      messages: decorateUserMessages(messages, await attachmentsByMessage(this.attachments, messages), this.state.promptTexts),
       processing: this.processing.has(conversationId),
     };
   }
 
-  async send(conversationId: string | null, text: string, clientMessageId: string | undefined): Promise<SentMessage> {
+  async send(
+    conversationId: string | null,
+    text: string,
+    clientMessageId: string | undefined,
+    attachmentIds: readonly string[],
+  ): Promise<SentMessage> {
+    const attached = resolveAttachments(this.attachments, attachmentIds);
     const live = conversationId && (await this.isKnown(conversationId)) ? await this.live.open(conversationId) : await this.createSession();
+    const staged = await stageAttachments(this.gateway, this.attachments, live.sid, attached);
     const turn = this.live.claimTurn(live.conversationId);
     const messageId = userMessageId(live.conversationId, turn);
+    await this.attachments.link(attachmentIds, live.conversationId, messageId);
+    if (attached.length > 0) {
+      await this.updateState((state) => withPromptText(state, messageId, text));
+    }
+    const attachmentViews = await Promise.all(attached.map((attachment) => messageAttachmentView(this.attachments, attachment)));
     this.turns.set(live.conversationId, startTurn(live.conversationId, turn, this.turns.get(live.conversationId) ?? null));
     this.processing.add(live.conversationId);
     this.liveTurns.set(
       live.conversationId,
-      openLiveTurn(messageId, assistantMessageId(live.conversationId, turn), clientMessageId, text, Date.now()),
+      openLiveTurn(messageId, assistantMessageId(live.conversationId, turn), clientMessageId, text, attachmentViews, Date.now()),
     );
     this.hub.publish({
       type: "user_message_echo",
@@ -131,7 +155,11 @@ export class ConversationService {
     });
     await this.recordActivity(live.conversationId);
     try {
-      await this.gateway.request("prompt.submit", { session_id: live.sid, text }, z.object({ status: z.string() }).passthrough());
+      await this.gateway.request(
+        "prompt.submit",
+        { session_id: live.sid, text: promptWithFileRefs(text, staged.fileRefs) },
+        z.object({ status: z.string() }).passthrough(),
+      );
     } catch (error) {
       this.applyTurn(live.conversationId, (turnState) =>
         translateTurnEvent(turnState, { type: "error", message: error instanceof Error ? error.message : String(error) }, Date.now()),
@@ -199,6 +227,7 @@ export class ConversationService {
     this.turns.delete(conversationId);
     this.liveTurns.delete(conversationId);
     this.processing.delete(conversationId);
+    await this.attachments.removeConversation(conversationId);
     await this.updateState((state) => withoutConversation(state, conversationId));
   }
 

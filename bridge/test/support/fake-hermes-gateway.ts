@@ -13,6 +13,7 @@ type Request = { id: string; method: string; params: Record<string, string | und
 const stored = new Map<string, StoredSession>();
 const liveToStored = new Map<string, string>();
 const running = new Map<string, { resumeApproval: (() => void) | null; interrupted: boolean }>();
+const pendingImages = new Map<string, number>();
 let counter = 0;
 
 function write(frame: object): void {
@@ -48,12 +49,15 @@ function traceFrames(name: string): { type: string; payload: Record<string, unkn
 async function runTurn(sid: string, session: StoredSession, text: string): Promise<void> {
   const turn = { resumeApproval: null as (() => void) | null, interrupted: false };
   running.set(sid, turn);
+  const images = pendingImages.get(sid) ?? 0;
+  pendingImages.delete(sid);
+  const reply = `echo: ${text}${images > 0 ? ` [images:${images}]` : ""}`;
   const frames = text.startsWith("trace:")
     ? traceFrames(text.slice("trace:".length))
     : [
         { type: "message.start", payload: undefined },
-        { type: "message.delta", payload: { text: `echo: ${text}` } },
-        { type: "message.complete", payload: { text: `echo: ${text}`, status: "complete" } },
+        { type: "message.delta", payload: { text: reply } },
+        { type: "message.complete", payload: { text: reply, status: "complete" } },
       ];
   for (const frame of frames) {
     await Bun.sleep(1);
@@ -119,6 +123,13 @@ function handle({ id, method, params }: Request): void {
       ok(id, { status: "streaming" });
       void runTurn(sid, session, params.text ?? "");
       return;
+    case "image.attach_bytes":
+      if (!session) return fail(id, 4001, "session not found");
+      pendingImages.set(sid, (pendingImages.get(sid) ?? 0) + 1);
+      return ok(id, { attached: true, count: pendingImages.get(sid) });
+    case "file.attach":
+      if (!session) return fail(id, 4001, "session not found");
+      return ok(id, { attached: true, name: params.name, ref_text: `@file:uploads/${params.name}` });
     case "approval.respond": {
       const turn = running.get(sid);
       turn?.resumeApproval?.();

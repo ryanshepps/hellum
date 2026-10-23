@@ -5,14 +5,16 @@ import { privateJsonFile } from "../storage/json-file";
 const ConversationStateSchema = z.object({
   archivedAt: z.record(z.string(), z.number()),
   lastActivityAt: z.record(z.string(), z.number()),
+  promptTexts: z.record(z.string(), z.string()).default({}),
 });
 
 export type ConversationState = {
   readonly archivedAt: Readonly<Record<string, number>>;
   readonly lastActivityAt: Readonly<Record<string, number>>;
+  readonly promptTexts: Readonly<Record<string, string>>;
 };
 
-export const EMPTY_CONVERSATION_STATE: ConversationState = { archivedAt: {}, lastActivityAt: {} };
+export const EMPTY_CONVERSATION_STATE: ConversationState = { archivedAt: {}, lastActivityAt: {}, promptTexts: {} };
 
 export type ConversationStore = {
   readonly load: () => Promise<ConversationState>;
@@ -33,8 +35,13 @@ export function withActivity(state: ConversationState, conversationId: string, a
   return { ...state, lastActivityAt: { ...state.lastActivityAt, [conversationId]: at } };
 }
 
+export function withPromptText(state: ConversationState, messageId: string, text: string): ConversationState {
+  return { ...state, promptTexts: { ...state.promptTexts, [messageId]: text } };
+}
+
 export function withoutConversation(state: ConversationState, conversationId: string): ConversationState {
   const { [conversationId]: _archived, ...archivedAt } = state.archivedAt;
   const { [conversationId]: _activity, ...lastActivityAt } = state.lastActivityAt;
-  return { archivedAt, lastActivityAt };
+  const promptTexts = Object.fromEntries(Object.entries(state.promptTexts).filter(([messageId]) => !messageId.startsWith(`${conversationId}:`)));
+  return { archivedAt, lastActivityAt, promptTexts };
 }

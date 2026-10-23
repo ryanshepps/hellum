@@ -5,7 +5,7 @@ import { foldLiveTurn, mergeLiveTurn, openLiveTurn, type LiveTurn } from "../../
 const T0 = Date.UTC(2026, 9, 23, 18, 0, 0);
 
 function folded(events: readonly AssistantEvent[]): LiveTurn {
-  return events.reduce(foldLiveTurn, openLiveTurn("c:u1", "c:a1", "client-7", "do the thing", T0));
+  return events.reduce(foldLiveTurn, openLiveTurn("c:u1", "c:a1", "client-7", "do the thing", [], T0));
 }
 
 const savedUser: ConversationMessage = {

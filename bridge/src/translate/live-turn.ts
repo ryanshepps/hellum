@@ -1,10 +1,11 @@
-import type { AssistantEvent, ConversationContentBlock, ConversationMessage } from "@vellumai/assistant-api";
+import type { AssistantEvent, ConversationContentBlock, ConversationMessage, ConversationMessageAttachment } from "@vellumai/assistant-api";
 
 export type LiveTurn = {
   readonly userMessageId: string;
   readonly assistantMessageId: string;
   readonly clientMessageId: string | undefined;
   readonly text: string;
+  readonly attachments: readonly ConversationMessageAttachment[];
   readonly startedAt: number;
   readonly blocks: readonly ConversationContentBlock[];
 };
@@ -14,9 +15,10 @@ export function openLiveTurn(
   assistantMessageId: string,
   clientMessageId: string | undefined,
   text: string,
+  attachments: readonly ConversationMessageAttachment[],
   startedAt: number,
 ): LiveTurn {
-  return { userMessageId, assistantMessageId, clientMessageId, text, startedAt, blocks: [] };
+  return { userMessageId, assistantMessageId, clientMessageId, text, attachments, startedAt, blocks: [] };
 }
 
 function appendText(blocks: readonly ConversationContentBlock[], type: "text" | "thinking", chunk: string): readonly ConversationContentBlock[] {
@@ -71,7 +73,7 @@ export function liveTurnMessages(turn: LiveTurn): readonly ConversationMessage[]
     id: turn.userMessageId,
     role: "user",
     timestamp: new Date(turn.startedAt).toISOString(),
-    attachments: [],
+    attachments: [...turn.attachments],
     contentBlocks: [{ type: "text", text: turn.text }],
     textSegments: [turn.text],
     ...(turn.clientMessageId ? { clientMessageId: turn.clientMessageId } : {}),
