@@ -2,7 +2,7 @@ import type { ConversationMessage } from "@vellumai/assistant-api";
 import { z } from "zod";
 import type { EventHub } from "../events/event-hub";
 import type { HermesGateway } from "../hermes/hermes-gateway";
-import { parseTurnEvent, SessionListResultSchema, type SessionRow } from "../hermes/schemas";
+import { parseTurnEvent } from "../hermes/schemas";
 import type { HermesEvent } from "../hermes/wire";
 import { log } from "../log";
 import { toConversationSummary, type ConversationActivity, type ConversationSummary } from "../translate/conversations";
@@ -16,9 +16,9 @@ import {
   type ConversationState,
   type ConversationStore,
 } from "./conversation-store";
-import { LiveSessions } from "./live-sessions";
+import { LiveSessions, type LiveSession } from "./live-sessions";
+import { SessionCatalog } from "./session-catalog";
 
-const SESSION_SCAN_LIMIT = 500;
 const TitleResultSchema = z.object({ title: z.string() });
 
 export type ArchiveFilter = "active" | "archived" | "all";
@@ -59,6 +59,7 @@ export class ConversationNotFoundError extends Error {
 
 export class ConversationService {
   private readonly live: LiveSessions;
+  private readonly catalog: SessionCatalog;
   private readonly turns = new Map<string, TurnState>();
   private readonly processing = new Set<string>();
 
@@ -69,6 +70,7 @@ export class ConversationService {
     private state: ConversationState,
   ) {
     this.live = new LiveSessions(gateway);
+    this.catalog = new SessionCatalog(gateway);
     gateway.onEvent((event) => this.handleHermesEvent(event));
     gateway.onDisconnect((reason) => this.handleDisconnect(reason));
   }
@@ -96,16 +98,20 @@ export class ConversationService {
   }
 
   async snapshot(conversationId: string): Promise<Snapshot> {
-    const row = await this.findRow(conversationId);
+    const row = await this.catalog.find(conversationId);
+    if (!row && !this.live.get(conversationId)) {
+      return { messages: [], processing: false };
+    }
     const history = await this.live.history(conversationId);
+    const startedAtMs = row ? Math.round(row.started_at * 1000) : Date.now();
     return {
-      messages: historyToMessages(conversationId, Math.round(row.started_at * 1000), history),
+      messages: historyToMessages(conversationId, startedAtMs, history),
       processing: this.processing.has(conversationId),
     };
   }
 
   async send(conversationId: string | null, text: string, clientMessageId: string | undefined): Promise<SentMessage> {
-    const live = conversationId ? await this.live.open(conversationId) : await this.live.create();
+    const live = conversationId && (await this.isKnown(conversationId)) ? await this.live.open(conversationId) : await this.createSession();
     const turn = this.live.claimTurn(live.conversationId);
     const messageId = userMessageId(live.conversationId, turn);
     this.turns.set(live.conversationId, startTurn(live.conversationId, turn, this.turns.get(live.conversationId) ?? null));
@@ -172,6 +178,7 @@ export class ConversationService {
   async rename(conversationId: string, title: string): Promise<void> {
     const live = await this.live.open(conversationId);
     await this.gateway.request("session.title", { session_id: live.sid, title }, TitleResultSchema.passthrough());
+    this.catalog.invalidate();
     this.hub.publish({ type: "conversation_title_updated", conversationId, title });
   }
 
@@ -182,33 +189,36 @@ export class ConversationService {
       this.live.forget(conversationId);
     }
     await this.gateway.request("session.delete", { session_id: conversationId }, z.unknown());
+    this.catalog.invalidate();
     this.turns.delete(conversationId);
     this.processing.delete(conversationId);
     await this.updateState((state) => withoutConversation(state, conversationId));
   }
 
   async setArchived(conversationId: string, archived: boolean): Promise<void> {
-    await this.findRow(conversationId);
+    if (!(await this.isKnown(conversationId))) {
+      throw new ConversationNotFoundError(conversationId);
+    }
     await this.updateState((state) => withArchived(state, conversationId, archived ? Date.now() : null));
   }
 
   private async summaries(): Promise<readonly ConversationSummary[]> {
-    const { sessions } = await this.gateway.request("session.list", { limit: SESSION_SCAN_LIMIT }, SessionListResultSchema);
     const activity: ConversationActivity = {
       lastActivityAt: new Map(Object.entries(this.state.lastActivityAt)),
       archivedAt: new Map(Object.entries(this.state.archivedAt)),
       processing: this.processing,
     };
-    return sessions.map((row) => toConversationSummary(row, activity));
+    return (await this.catalog.rows()).map((row) => toConversationSummary(row, activity));
   }
 
-  private async findRow(conversationId: string): Promise<SessionRow> {
-    const { sessions } = await this.gateway.request("session.list", { limit: SESSION_SCAN_LIMIT }, SessionListResultSchema);
-    const row = sessions.find((candidate) => candidate.id === conversationId);
-    if (!row) {
-      throw new ConversationNotFoundError(conversationId);
-    }
-    return row;
+  private async isKnown(conversationId: string): Promise<boolean> {
+    return this.live.get(conversationId) !== null || (await this.catalog.find(conversationId)) !== null;
+  }
+
+  private async createSession(): Promise<LiveSession> {
+    const created = await this.live.create();
+    this.catalog.invalidate();
+    return created;
   }
 
   private handleHermesEvent(event: HermesEvent): void {
@@ -242,6 +252,7 @@ export class ConversationService {
   }
 
   private async afterTurn(conversationId: string): Promise<void> {
+    this.catalog.invalidate();
     try {
       await this.recordActivity(conversationId);
       const live = this.live.get(conversationId);

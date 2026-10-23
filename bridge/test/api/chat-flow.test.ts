@@ -94,6 +94,25 @@ describe("sending a message", () => {
   });
 });
 
+describe("draft conversations", () => {
+  const DRAFT_ID = "1c9c1991-2751-4e8c-88a0-e07c7f736440";
+
+  test("a draft id the client minted has an empty transcript and no conversation yet", async () => {
+    const { api } = await start();
+    const messages = await api.get(`messages?conversationId=${DRAFT_ID}`);
+    expect(messages.status).toBe(200);
+    expect(((await messages.json()) as { messages: unknown[] }).messages).toEqual([]);
+    expect((await api.get(`conversations/${DRAFT_ID}`)).status).toBe(404);
+  });
+
+  test("sending to a draft id starts a new Hermes conversation", async () => {
+    const { api, events } = await start();
+    const sent = await sendMessage(api, "first words", DRAFT_ID);
+    expect(sent.conversationId).not.toBe(DRAFT_ID);
+    await events.until(isType("message_complete", sent.conversationId));
+  });
+});
+
 describe("tool approvals", () => {
   test("a confirmation pauses the turn until the device decides", async () => {
     const { api, events } = await start();
