@@ -172,8 +172,8 @@ export class AuthService {
     };
   }
 
-  private async saveRegistry(registry: DeviceRegistry): Promise<void> {
-    await this.store.save(registry);
+  private saveRegistry(registry: DeviceRegistry): Promise<void> {
     this.registry = registry;
+    return this.store.save(registry);
   }
 }
