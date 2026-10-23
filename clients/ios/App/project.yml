@@ -62,8 +62,6 @@ targetTemplates:
           - "App.entitlements"
           - "Config/**"
           - "AppIcon.icon"
-          - "AppIcon-Dev.icon"
-          - "AppIcon-Staging.icon"
           - "capacitor.config.json"
           - "config.xml"
           - "public"
@@ -248,53 +246,11 @@ targets:
       - target: NotificationService
         embed: true
 
-  "App Staging":
-    templates: [AppEnvironment]
-    sources:
-      - path: App/AppIcon-Staging.icon
-    configFiles:
-      Debug: App/Config/App-Staging.xcconfig
-      Release: App/Config/App-Staging.xcconfig
-    dependencies:
-      - target: "VoiceActivity Staging"
-        embed: true
-      - target: "Share Staging"
-        embed: true
-      - target: "NotificationService Staging"
-        embed: true
-
-  "App Dev":
-    templates: [AppEnvironment]
-    sources:
-      - path: App/AppIcon-Dev.icon
-    configFiles:
-      Debug: App/Config/App-Dev.xcconfig
-      Release: App/Config/App-Dev.xcconfig
-    dependencies:
-      - target: "VoiceActivity Dev"
-        embed: true
-      - target: "Share Dev"
-        embed: true
-      - target: "NotificationService Dev"
-        embed: true
-
   VoiceActivity:
     templates: [ExtensionEnvironment]
     configFiles:
       Debug: App/Config/Extension.xcconfig
       Release: App/Config/Extension.xcconfig
-
-  "VoiceActivity Staging":
-    templates: [ExtensionEnvironment]
-    configFiles:
-      Debug: App/Config/Extension-Staging.xcconfig
-      Release: App/Config/Extension-Staging.xcconfig
-
-  "VoiceActivity Dev":
-    templates: [ExtensionEnvironment]
-    configFiles:
-      Debug: App/Config/Extension-Dev.xcconfig
-      Release: App/Config/Extension-Dev.xcconfig
 
   Share:
     templates: [ShareExtensionEnvironment]
@@ -302,35 +258,11 @@ targets:
       Debug: App/Config/Share.xcconfig
       Release: App/Config/Share.xcconfig
 
-  "Share Staging":
-    templates: [ShareExtensionEnvironment]
-    configFiles:
-      Debug: App/Config/Share-Staging.xcconfig
-      Release: App/Config/Share-Staging.xcconfig
-
-  "Share Dev":
-    templates: [ShareExtensionEnvironment]
-    configFiles:
-      Debug: App/Config/Share-Dev.xcconfig
-      Release: App/Config/Share-Dev.xcconfig
-
   NotificationService:
     templates: [NotificationServiceEnvironment]
     configFiles:
       Debug: App/Config/NotificationService.xcconfig
       Release: App/Config/NotificationService.xcconfig
-
-  "NotificationService Staging":
-    templates: [NotificationServiceEnvironment]
-    configFiles:
-      Debug: App/Config/NotificationService-Staging.xcconfig
-      Release: App/Config/NotificationService-Staging.xcconfig
-
-  "NotificationService Dev":
-    templates: [NotificationServiceEnvironment]
-    configFiles:
-      Debug: App/Config/NotificationService-Dev.xcconfig
-      Release: App/Config/NotificationService-Dev.xcconfig
 
   # Logic-only unit tests for the framework-free helpers under `App/`.
   # Sources are listed file by file rather than as the whole `App`
@@ -359,7 +291,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: "YES"
-        PRODUCT_BUNDLE_IDENTIFIER: ai.vellum.assistant.AppTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.ryanshepps.hellum.AppTests
     scheme:
       testTargets:
         - AppTests

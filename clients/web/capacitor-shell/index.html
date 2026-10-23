@@ -3,9 +3,151 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>Vellum</title>
+    <title>Hellum</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f5f4f1;
+        --card: #ffffff;
+        --text: #1c1b19;
+        --muted: #6b6862;
+        --border: #e4e1da;
+        --accent: #1c1b19;
+        --accent-text: #ffffff;
+        --error: #b42318;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #161513;
+          --card: #201f1c;
+          --text: #f2f0ea;
+          --muted: #a19d94;
+          --border: #34322d;
+          --accent: #f2f0ea;
+          --accent-text: #161513;
+          --error: #f97066;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: calc(env(safe-area-inset-top) + 24px) 20px calc(env(safe-area-inset-bottom) + 24px);
+      }
+      main {
+        width: 100%;
+        max-width: 420px;
+      }
+      h1 {
+        font-size: 28px;
+        line-height: 1.2;
+        margin: 0 0 8px;
+      }
+      p {
+        margin: 0 0 16px;
+        color: var(--muted);
+      }
+      ol {
+        margin: 0 0 24px;
+        padding-left: 20px;
+      }
+      li {
+        margin-bottom: 8px;
+      }
+      code {
+        font: 14px ui-monospace, "SF Mono", Menlo, monospace;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 1px 6px;
+      }
+      form {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 16px;
+      }
+      label {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+      input {
+        width: 100%;
+        font: inherit;
+        color: var(--text);
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px;
+        margin-bottom: 12px;
+      }
+      button {
+        width: 100%;
+        font: inherit;
+        font-weight: 600;
+        color: var(--accent-text);
+        background: var(--accent);
+        border: 0;
+        border-radius: 10px;
+        padding: 12px;
+      }
+      #error {
+        color: var(--error);
+        margin: 12px 0 0;
+        min-height: 1.5em;
+      }
+    </style>
   </head>
   <body>
-    Loading&hellip;
+    <main>
+      <h1>Connect Hellum</h1>
+      <p>Hellum talks to the Hermes agent running on your Mac.</p>
+      <ol>
+        <li>Start the bridge on your Mac.</li>
+        <li>Run <code>hellum pair</code> there and scan the QR code with your iPhone camera.</li>
+      </ol>
+      <form id="connect">
+        <label for="address">Or enter your bridge address</label>
+        <input id="address" type="url" inputmode="url" autocomplete="url" autocapitalize="off" spellcheck="false" placeholder="https://your-mac.your-tailnet.ts.net" required />
+        <button type="submit">Connect</button>
+        <p id="error" role="alert"></p>
+      </form>
+    </main>
+    <script>
+      const form = document.getElementById("connect");
+      const address = document.getElementById("address");
+      const error = document.getElementById("error");
+
+      function originOf(raw) {
+        const url = new URL(raw.trim());
+        if (url.protocol !== "https:") {
+          throw new Error("The address must start with https://");
+        }
+        return url.origin;
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        error.textContent = "";
+        try {
+          const plugin = window.Capacitor?.Plugins?.SelfHostedServers;
+          if (!plugin) {
+            throw new Error("Open this screen in the Hellum app.");
+          }
+          await plugin.switchTo({ url: originOf(address.value) });
+        } catch (failure) {
+          error.textContent = failure instanceof Error ? failure.message : String(failure);
+        }
+      });
+    </script>
   </body>
 </html>

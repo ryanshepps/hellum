@@ -40,15 +40,15 @@
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>NSFaceIDUsageDescription</key>
-	<string>Unlock Vellum with Face ID to access your conversations.</string>
+	<string>Unlock Hellum with Face ID to access your conversations.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Allow Vellum to take photos and videos to attach to messages.</string>
+	<string>Allow Hellum to take photos and videos to attach to messages.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Vellum uses the microphone to record voice messages and dictate prompts to your assistant.</string>
+	<string>Hellum uses the microphone to record voice messages and dictate prompts to your assistant.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Vellum uses speech recognition to transcribe what you dictate into text.</string>
+	<string>Hellum uses speech recognition to transcribe what you dictate into text.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Allow Vellum to attach photos and videos from your library to messages.</string>
+	<string>Allow Hellum to attach photos and videos from your library to messages.</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
 	<key>UISupportedInterfaceOrientations</key>

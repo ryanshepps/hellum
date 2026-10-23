@@ -32,3 +32,6 @@ App/App/config.xml
 # writes here is unnecessary because `CapApp-SPM/Package.swift`
 # already pins `capacitor-swift-pm` with `exact:`.
 App/App.xcodeproj/
+
+# Per-developer signing overrides (DEVELOPMENT_TEAM), see README.md
+App/App/Config/Local.xcconfig
