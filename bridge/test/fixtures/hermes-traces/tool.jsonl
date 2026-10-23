@@ -1,0 +1,18 @@
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "message.start", "session_id": "live0001"}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "thinking.delta", "session_id": "live0001", "payload": {"text": "( \u0361\u00b0 \u035c\u0296 \u0361\u00b0) ruminating..."}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "thinking.delta", "session_id": "live0001", "payload": {"text": ""}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "reasoning.delta", "session_id": "live0001", "payload": {"text": "I'll run the command to"}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "reasoning.delta", "session_id": "live0001", "payload": {"text": " see what happens."}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "reasoning.delta", "session_id": "live0001", "payload": {"text": "\n\n"}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "tool.generating", "session_id": "live0001", "payload": {"name": "terminal"}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "thinking.delta", "session_id": "live0001", "payload": {"text": ""}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "tool.start", "session_id": "live0001", "payload": {"tool_id": "toolu_01QRQA6exjjWDjvGdQEtSR8F", "name": "terminal", "context": "Running echo hellum-trace-ok"}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "tool.complete", "session_id": "live0001", "payload": {"tool_id": "toolu_01QRQA6exjjWDjvGdQEtSR8F", "name": "terminal", "args": {"command": "echo hellum-trace-ok"}, "duration_s": 0.4918699264526367, "result": {"output": "hellum-trace-ok", "exit_code": 0, "error": null}}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "thinking.delta", "session_id": "live0001", "payload": {"text": "(\u00b0\u30ed\u00b0) contemplating..."}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "thinking.delta", "session_id": "live0001", "payload": {"text": ""}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "message.delta", "session_id": "live0001", "payload": {"text": "\n\nThe command print"}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "message.delta", "session_id": "live0001", "payload": {"text": "ed: hellum-trace"}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "message.delta", "session_id": "live0001", "payload": {"text": "-ok"}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "thinking.delta", "session_id": "live0001", "payload": {"text": ""}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "reasoning.available", "session_id": "live0001", "payload": {"text": "The command printed: hellum-trace-ok"}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "message.complete", "session_id": "live0001", "payload": {"text": "The command printed: hellum-trace-ok", "usage": {"input": 4, "output": 80}, "status": "complete", "reasoning": "I'll run the command to see what happens."}}}

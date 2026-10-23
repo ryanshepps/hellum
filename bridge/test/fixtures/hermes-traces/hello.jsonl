@@ -1,0 +1,8 @@
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "message.start", "session_id": "live0001"}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "thinking.delta", "session_id": "live0001", "payload": {"text": "\u30fd(>\u2200<\u2606)\u2606 musing..."}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "thinking.delta", "session_id": "live0001", "payload": {"text": ""}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "message.delta", "session_id": "live0001", "payload": {"text": "h"}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "message.delta", "session_id": "live0001", "payload": {"text": "ello there"}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "thinking.delta", "session_id": "live0001", "payload": {"text": ""}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "reasoning.available", "session_id": "live0001", "payload": {"text": "hello there"}}}
+{"jsonrpc": "2.0", "method": "event", "params": {"type": "message.complete", "session_id": "live0001", "payload": {"text": "hello there", "usage": {"input": 2, "output": 5}, "status": "complete"}}}
