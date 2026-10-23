@@ -1,6 +1,7 @@
 import type { AssistantEvent } from "@vellumai/assistant-api";
-import type { HermesTurnEvent } from "../hermes/schemas";
+import type { HermesPrompt, HermesTurnEvent } from "../hermes/schemas";
 import { approvalRequestId, assistantMessageId } from "./message-ids";
+import { promptSurface } from "./prompt-surfaces";
 import { formatToolResult } from "./tool-result";
 import { toVellumToolCall } from "./tool-names";
 
@@ -15,6 +16,11 @@ export type PendingApproval = {
   readonly confirmation: ConfirmationEvent;
 };
 
+export type PendingPrompt = {
+  readonly surfaceId: string;
+  readonly prompt: HermesPrompt;
+};
+
 export type TurnState = {
   readonly conversationId: string;
   readonly turn: number;
@@ -23,6 +29,7 @@ export type TurnState = {
   readonly approvals: number;
   readonly lastTool: { readonly id: string; readonly name: string } | null;
   readonly pendingApproval: PendingApproval | null;
+  readonly pendingPrompt: PendingPrompt | null;
 };
 
 export type TranslatedTurn = {
@@ -39,6 +46,7 @@ export function startTurn(conversationId: string, turn: number, previous: TurnSt
     approvals: 0,
     lastTool: null,
     pendingApproval: null,
+    pendingPrompt: null,
   };
 }
 
@@ -143,14 +151,24 @@ export function translateTurnEvent(state: TurnState, event: HermesTurnEvent, now
         "confirmation_requested",
       );
     }
+    case "prompt.request": {
+      const surface = promptSurface(conversationId, messageId, event.prompt);
+      return emit(
+        { ...state, pendingPrompt: { surfaceId: surface.surfaceId, prompt: event.prompt } },
+        [surface],
+        "awaiting_confirmation",
+        "confirmation_requested",
+      );
+    }
     case "message.complete":
       return event.status === "interrupted"
-        ? emit({ ...state, pendingApproval: null }, [{ type: "generation_cancelled", conversationId }], "idle", "generation_cancelled")
-        : emit({ ...state, pendingApproval: null }, [{ type: "message_complete", messageId, conversationId }], "idle", "message_complete");
+        ? emit(settled(state), [...dismissedPrompt(state), { type: "generation_cancelled", conversationId }], "idle", "generation_cancelled")
+        : emit(settled(state), [...dismissedPrompt(state), { type: "message_complete", messageId, conversationId }], "idle", "message_complete");
     case "error":
       return emit(
-        { ...state, pendingApproval: null },
+        settled(state),
         [
+          ...dismissedPrompt(state),
           {
             type: "conversation_error",
             conversationId,
@@ -167,6 +185,27 @@ export function translateTurnEvent(state: TurnState, event: HermesTurnEvent, now
       return exhaustive;
     }
   }
+}
+
+function settled(state: TurnState): TurnState {
+  return { ...state, pendingApproval: null, pendingPrompt: null };
+}
+
+function dismissedPrompt(state: TurnState): readonly AssistantEvent[] {
+  return state.pendingPrompt ? [{ type: "ui_surface_dismiss", conversationId: state.conversationId, surfaceId: state.pendingPrompt.surfaceId }] : [];
+}
+
+export function resolvePrompt(state: TurnState, summary: string): TranslatedTurn {
+  const pending = state.pendingPrompt;
+  if (!pending) {
+    return { state, events: [] };
+  }
+  return emit(
+    { ...state, pendingPrompt: null },
+    [{ type: "ui_surface_complete", conversationId: state.conversationId, surfaceId: pending.surfaceId, summary }],
+    "thinking",
+    "confirmation_resolved",
+  );
 }
 
 export function resolveApproval(state: TurnState, decision: "approved" | "rejected"): TranslatedTurn {

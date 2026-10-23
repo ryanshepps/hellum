@@ -14,6 +14,11 @@ const SendBodySchema = z.object({
 });
 
 const ConfirmBodySchema = z.object({ requestId: z.string().min(1), decision: z.enum(["allow", "deny"]) });
+const SurfaceActionBodySchema = z.object({
+  surfaceId: z.string().min(1),
+  actionId: z.string().min(1),
+  data: z.record(z.string(), z.unknown()).default({}),
+});
 const RenameBodySchema = z.object({ name: z.string().trim().min(1).max(200) });
 
 function pageNumber(query: URLSearchParams, key: string, fallback: number): number {
@@ -137,6 +142,20 @@ export function conversationRoutes(conversations: ConversationService, hub: Even
           return errorResponse(400, "invalid_request", "requestId and decision are required");
         }
         return Response.json({ accepted: await conversations.confirm(body.requestId, body.decision) });
+      },
+    },
+    {
+      method: "POST",
+      pattern: "surface-actions",
+      handle: async ({ request }) => {
+        const body = await readJsonBody(request, SurfaceActionBodySchema);
+        if (!body) {
+          return errorResponse(400, "invalid_request", "surfaceId and actionId are required");
+        }
+        const conversationId = await conversations.surfaceAction(body.surfaceId, body.actionId, body.data);
+        return conversationId
+          ? Response.json({ ok: true, applied: true, conversationId })
+          : Response.json({ ok: true, applied: false, reason: "This question was already answered or has expired." });
       },
     },
     {

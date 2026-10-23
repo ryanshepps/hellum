@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { AssistantEventEnvelopeSchema, ConversationMessageSchema, type AssistantEventEnvelope } from "@vellumai/assistant-api";
+import { isType, sendMessage } from "../support/chat";
 import { authedClient, openEventStream, pairDevice, startTestBridge, type AuthedClient, type EventStreamReader, type TestBridge } from "../support/test-bridge";
 
 let bridge: TestBridge | null = null;
@@ -19,24 +20,6 @@ async function start(): Promise<Started> {
   const token = await pairDevice(bridge);
   stream = await openEventStream(bridge, token);
   return { api: authedClient(bridge, token), events: stream, target: bridge };
-}
-
-type Sent = { readonly accepted: boolean; readonly conversationId: string; readonly messageId: string };
-
-async function sendMessage(api: AuthedClient, content: string, conversationId?: string): Promise<Sent> {
-  const response = await api.send("POST", "messages", {
-    content,
-    sourceChannel: "vellum",
-    interface: "web",
-    clientMessageId: "client-1",
-    ...(conversationId ? { conversationId } : {}),
-  });
-  expect(response.status).toBe(202);
-  return (await response.json()) as Sent;
-}
-
-function isType(type: string, conversationId?: string): (envelope: AssistantEventEnvelope) => boolean {
-  return (envelope) => envelope.message.type === type && (!conversationId || envelope.conversationId === conversationId);
 }
 
 describe("sending a message", () => {

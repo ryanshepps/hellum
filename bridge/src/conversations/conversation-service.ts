@@ -13,7 +13,8 @@ import { historyToMessages } from "../translate/history";
 import { foldLiveTurn, mergeLiveTurn, openLiveTurn, type LiveTurn } from "../translate/live-turn";
 import { decorateUserMessages, promptWithFileRefs } from "../translate/message-attachments";
 import { assistantMessageId, userMessageId } from "../translate/message-ids";
-import { resolveApproval, startTurn, translateTurnEvent, type TranslatedTurn, type TurnState } from "../translate/turn-translator";
+import { promptReply } from "../translate/prompt-surfaces";
+import { resolveApproval, resolvePrompt, startTurn, translateTurnEvent, type TranslatedTurn, type TurnState } from "../translate/turn-translator";
 import {
   withActivity,
   withArchived,
@@ -192,6 +193,18 @@ export class ConversationService {
     await this.gateway.request("approval.respond", { session_id: live.sid, choice: decision === "allow" ? "once" : "deny" }, z.unknown());
     this.applyTurn(entry[0], (turnState) => resolveApproval(turnState, decision === "allow" ? "approved" : "rejected"));
     return true;
+  }
+
+  async surfaceAction(surfaceId: string, actionId: string, data: Readonly<Record<string, unknown>>): Promise<string | null> {
+    const entry = [...this.turns.entries()].find(([, turnState]) => turnState.pendingPrompt?.surfaceId === surfaceId);
+    const pending = entry?.[1].pendingPrompt;
+    if (!entry || !pending) {
+      return null;
+    }
+    const reply = promptReply(pending.prompt, actionId, data);
+    await this.gateway.request(reply.method, reply.params, z.unknown());
+    this.applyTurn(entry[0], (turnState) => resolvePrompt(turnState, reply.summary));
+    return entry[0];
   }
 
   pendingInteractions(conversationId: string | null): PendingInteractions {

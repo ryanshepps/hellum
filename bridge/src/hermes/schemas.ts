@@ -48,6 +48,25 @@ const ToolCompletePayloadSchema = z.object({
   result: JsonValueSchema.optional(),
 });
 
+const ClarifyPayloadSchema = z.object({
+  request_id: z.string(),
+  question: z.string(),
+  choices: z.array(z.string()).nullish(),
+});
+
+const SecretPayloadSchema = z.object({
+  request_id: z.string(),
+  prompt: z.string(),
+  env_var: z.string(),
+});
+
+const SudoPayloadSchema = z.object({ request_id: z.string() });
+
+export type HermesPrompt =
+  | { readonly kind: "clarify"; readonly requestId: string; readonly question: string; readonly choices: readonly string[] }
+  | { readonly kind: "secret"; readonly requestId: string; readonly prompt: string; readonly envVar: string }
+  | { readonly kind: "sudo"; readonly requestId: string };
+
 const ApprovalPayloadSchema = z.object({
   command: z.string(),
   description: z.string().nullish(),
@@ -75,6 +94,7 @@ export type HermesTurnEvent =
       readonly result: ToolResultPayload;
     }
   | { readonly type: "approval.request"; readonly command: string; readonly description: string | null }
+  | { readonly type: "prompt.request"; readonly prompt: HermesPrompt }
   | { readonly type: "message.complete"; readonly text: string; readonly status: "complete" | "interrupted" }
   | { readonly type: "error"; readonly message: string };
 
@@ -108,6 +128,22 @@ export function parseTurnEvent(type: string, payload: unknown): HermesTurnEvent 
     case "approval.request": {
       const parsed = ApprovalPayloadSchema.safeParse(payload);
       return parsed.success ? { type, command: parsed.data.command, description: parsed.data.description ?? null } : null;
+    }
+    case "clarify.request": {
+      const parsed = ClarifyPayloadSchema.safeParse(payload);
+      return parsed.success
+        ? { type: "prompt.request", prompt: { kind: "clarify", requestId: parsed.data.request_id, question: parsed.data.question, choices: parsed.data.choices ?? [] } }
+        : null;
+    }
+    case "secret.request": {
+      const parsed = SecretPayloadSchema.safeParse(payload);
+      return parsed.success
+        ? { type: "prompt.request", prompt: { kind: "secret", requestId: parsed.data.request_id, prompt: parsed.data.prompt, envVar: parsed.data.env_var } }
+        : null;
+    }
+    case "sudo.request": {
+      const parsed = SudoPayloadSchema.safeParse(payload);
+      return parsed.success ? { type: "prompt.request", prompt: { kind: "sudo", requestId: parsed.data.request_id } } : null;
     }
     case "message.complete": {
       const parsed = CompletePayloadSchema.safeParse(payload);

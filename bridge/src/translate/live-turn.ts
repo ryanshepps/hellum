@@ -63,6 +63,35 @@ export function foldLiveTurn(turn: LiveTurn, event: AssistantEvent): LiveTurn {
             : block,
         ),
       };
+    case "ui_surface_show":
+      return {
+        ...turn,
+        blocks: [
+          ...turn.blocks,
+          {
+            type: "surface",
+            surface: {
+              surfaceId: event.surfaceId,
+              surfaceType: event.surfaceType,
+              data: event.data,
+              ...(event.title ? { title: event.title } : {}),
+              ...(event.actions ? { actions: event.actions } : {}),
+              ...(event.display ? { display: event.display } : {}),
+            },
+          },
+        ],
+      };
+    case "ui_surface_complete":
+      return {
+        ...turn,
+        blocks: turn.blocks.map((block) =>
+          block.type === "surface" && block.surface.surfaceId === event.surfaceId
+            ? { ...block, surface: { ...block.surface, completed: true, completionSummary: event.summary } }
+            : block,
+        ),
+      };
+    case "ui_surface_dismiss":
+      return { ...turn, blocks: turn.blocks.filter((block) => block.type !== "surface" || block.surface.surfaceId !== event.surfaceId) };
     default:
       return turn;
   }

@@ -14,6 +14,7 @@ const stored = new Map<string, StoredSession>();
 const liveToStored = new Map<string, string>();
 const running = new Map<string, { resumeApproval: (() => void) | null; interrupted: boolean }>();
 const pendingImages = new Map<string, number>();
+const pendingPrompts = new Map<string, (answer: string) => void>();
 let counter = 0;
 
 function write(frame: object): void {
@@ -46,16 +47,40 @@ function traceFrames(name: string): { type: string; payload: Record<string, unkn
     .map((line) => JSON.parse(line).params);
 }
 
+function askHermes(sid: string, type: string, payload: object): Promise<string> {
+  counter += 1;
+  const requestId = `req${counter}`;
+  return new Promise((resolve) => {
+    pendingPrompts.set(requestId, resolve);
+    emit(type, sid, { ...payload, request_id: requestId });
+  });
+}
+
+async function promptReply(sid: string, text: string): Promise<string | null> {
+  if (text.startsWith("ask:")) {
+    const [question = "", choices = ""] = text.slice("ask:".length).split("|");
+    const answer = await askHermes(sid, "clarify.request", { question, choices: choices ? choices.split(",") : null });
+    return `you said: ${answer || "(nothing)"}`;
+  }
+  if (text.startsWith("secret:")) {
+    const value = await askHermes(sid, "secret.request", { prompt: "Paste your key", env_var: text.slice("secret:".length) });
+    return value ? `stored ${value.length} characters` : "skipped";
+  }
+  return null;
+}
+
 async function runTurn(sid: string, session: StoredSession, text: string): Promise<void> {
   const turn = { resumeApproval: null as (() => void) | null, interrupted: false };
   running.set(sid, turn);
   const images = pendingImages.get(sid) ?? 0;
   pendingImages.delete(sid);
-  const reply = `echo: ${text}${images > 0 ? ` [images:${images}]` : ""}`;
+  if (!text.startsWith("trace:")) {
+    emit("message.start", sid);
+  }
+  const reply = (await promptReply(sid, text)) ?? `echo: ${text}${images > 0 ? ` [images:${images}]` : ""}`;
   const frames = text.startsWith("trace:")
     ? traceFrames(text.slice("trace:".length))
     : [
-        { type: "message.start", payload: undefined },
         { type: "message.delta", payload: { text: reply } },
         { type: "message.complete", payload: { text: reply, status: "complete" } },
       ];
@@ -134,6 +159,14 @@ function handle({ id, method, params }: Request): void {
       const turn = running.get(sid);
       turn?.resumeApproval?.();
       return ok(id, { resolved: Boolean(turn) });
+    }
+    case "clarify.respond":
+    case "secret.respond": {
+      const answer = pendingPrompts.get(params.request_id ?? "");
+      if (!answer) return fail(id, 4009, "no pending request");
+      pendingPrompts.delete(params.request_id ?? "");
+      answer(params.answer ?? params.value ?? "");
+      return ok(id, { status: "ok" });
     }
     case "session.interrupt": {
       const turn = running.get(sid);
