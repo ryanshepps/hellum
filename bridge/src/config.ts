@@ -4,7 +4,7 @@ import { z } from "zod";
 
 const EnvSchema = z.object({
   HELLUM_HOST: z.string().default("127.0.0.1"),
-  HELLUM_PORT: z.coerce.number().int().min(1).max(65535).default(7870),
+  HELLUM_PORT: z.coerce.number().int().min(0).max(65535).default(7870),
   HELLUM_WEB_DIST: z.string().default(resolve(import.meta.dir, "../../clients/web/dist")),
   HELLUM_STATE_DIR: z.string().default(join(homedir(), ".hellum")),
   HELLUM_ASSISTANT_NAME: z.string().min(1).default("Hellum"),
