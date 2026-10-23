@@ -8,11 +8,14 @@ const IMMUTABLE = "public, max-age=31536000, immutable";
 export type SpaHandler = (request: Request) => Promise<Response | null>;
 
 export function createSpaHandler(webDistDir: string, config: RemoteGatewayConfig): SpaHandler {
-  const indexFile = Bun.file(join(webDistDir, "index.html"));
-  let renderedIndex: Promise<string> | null = null;
+  const indexPath = join(webDistDir, "index.html");
+  let rendered: { readonly modifiedAt: number; readonly html: Promise<string> } | null = null;
   const renderIndex = (): Promise<string> => {
-    renderedIndex ??= indexFile.text().then((html) => injectConfig(html, config));
-    return renderedIndex;
+    const indexFile = Bun.file(indexPath);
+    if (rendered?.modifiedAt !== indexFile.lastModified) {
+      rendered = { modifiedAt: indexFile.lastModified, html: indexFile.text().then((html) => injectConfig(html, config)) };
+    }
+    return rendered.html;
   };
 
   return async (request) => {
