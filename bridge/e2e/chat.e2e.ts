@@ -7,6 +7,7 @@ import { loadConfig } from "../src/config";
 import { startBridge } from "../src/server";
 
 const REPLY_TIMEOUT_MS = 120_000;
+const RED_PNG = join(import.meta.dir, "fixtures", "red.png");
 const MARKER = `hellum-e2e-${Date.now().toString(36)}`;
 
 function check(condition: boolean, message: string): asserts condition {
@@ -73,7 +74,17 @@ try {
   process.stdout.write("reply survives reload\n");
   await page.screenshot({ path: join(stateDir, "chat.png") });
   await deleteConversation(bridge.url, bridge.adminSocketPath, conversationIdFrom(page.url()));
-  process.stdout.write(`PASS (screenshot ${join(stateDir, "chat.png")})\n`);
+
+  await startNewChat(page);
+  await page.locator("input[type=file]").first().setInputFiles(RED_PNG);
+  const imageComposer = page.getByRole("textbox").first();
+  await imageComposer.fill("What color is this image? Answer with one word.");
+  await imageComposer.press("Enter");
+  await page.getByText(/^red\.?$/i).last().waitFor({ timeout: REPLY_TIMEOUT_MS });
+  process.stdout.write("image attachment understood\n");
+  await page.screenshot({ path: join(stateDir, "image.png") });
+  await deleteConversation(bridge.url, bridge.adminSocketPath, conversationIdFrom(page.url()));
+  process.stdout.write(`PASS (screenshots in ${stateDir})\n`);
 } finally {
   await browser.close();
   await bridge.stop();
