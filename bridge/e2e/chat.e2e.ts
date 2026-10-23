@@ -21,6 +21,28 @@ async function pairingLink(baseUrl: URL, socketPath: string): Promise<string> {
   return `${new URL("/assistant/pair", baseUrl).toString()}#device_code=${encodeURIComponent(deviceCode)}`;
 }
 
+async function deleteConversation(baseUrl: URL, socketPath: string, conversationId: string): Promise<void> {
+  const created = await fetch("http://hellum/pairings", { method: "POST", unix: socketPath });
+  const { deviceCode } = z.object({ deviceCode: z.string() }).parse(await created.json());
+  const exchanged = await fetch(new URL("/v1/remote-web/pairing-token", baseUrl), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ deviceCode, clientReportedName: "hellum e2e cleanup" }),
+  });
+  const { accessToken } = z.object({ accessToken: z.string() }).parse(await exchanged.json());
+  const deleted = await fetch(new URL(`/v1/assistants/self/conversations/${encodeURIComponent(conversationId)}`, baseUrl), {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  check(deleted.ok, `could not delete the e2e conversation ${conversationId}: ${deleted.status}`);
+}
+
+function conversationIdFrom(url: string): string {
+  const match = /\/assistant\/conversations\/([^/?#]+)/.exec(new URL(url).pathname);
+  check(match?.[1] !== undefined, `no conversation id in ${url}`);
+  return decodeURIComponent(match[1]);
+}
+
 async function startNewChat(page: Page): Promise<void> {
   await page.goto(page.url().replace(/\/assistant\/.*$/, "/assistant/"));
   await page.getByRole("button", { name: /new (chat|conversation)/i }).first().click();
@@ -50,6 +72,7 @@ try {
   await page.getByText(MARKER, { exact: true }).last().waitFor({ timeout: 30_000 });
   process.stdout.write("reply survives reload\n");
   await page.screenshot({ path: join(stateDir, "chat.png") });
+  await deleteConversation(bridge.url, bridge.adminSocketPath, conversationIdFrom(page.url()));
   process.stdout.write(`PASS (screenshot ${join(stateDir, "chat.png")})\n`);
 } finally {
   await browser.close();
