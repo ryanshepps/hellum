@@ -30,22 +30,21 @@ export function handleSkills(request: SkillsRequest): object {
       return skill ? { success: true, files: [fileView(skill)] } : { success: false, error: "not_found" };
     case "file":
       return skill && request.path === "SKILL.md" ? { success: true, ...fileView(skill) } : { success: false, error: "not_found" };
-    case "restore":
-      if (!skill || skill.state !== "archived") {
-        return { success: false, error: `skill '${request.name}' is not archived` };
+    case "install":
+      if (!skill || skill.state === "enabled") {
+        return { success: false, error: `skill '${request.name}' not found` };
       }
-      if (skill.provenance === "hub") {
+      if (skill.state === "archived" && skill.provenance === "hub") {
         return { success: false, error: `skill '${request.name}' is now hub-installed; restore would shadow the upstream version` };
       }
       skill.state = "enabled";
       save();
       return { success: true, error: null };
     case "remove":
-      if (!skill || skill.state === "archived") {
-        return { success: false, error: `skill '${request.name}' not found` };
+      if (skill) {
+        skill.state = "disabled";
+        save();
       }
-      skill.state = "archived";
-      save();
       return { success: true, error: null };
     default:
       return { success: false, error: `unknown action ${request.action}` };

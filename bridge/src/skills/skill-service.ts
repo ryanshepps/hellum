@@ -75,7 +75,7 @@ export class SkillService {
 
   async install(id: string): Promise<void> {
     await this.get(id);
-    await this.write({ action: "restore", name: id });
+    await this.write({ action: "install", name: id });
   }
 
   async remove(id: string): Promise<void> {

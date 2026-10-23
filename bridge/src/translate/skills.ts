@@ -24,7 +24,7 @@ export type VellumSkill = {
   readonly name: string;
   readonly description: string;
   readonly kind: "installed" | "catalog";
-  readonly status: "enabled" | "disabled" | "available";
+  readonly status: "enabled" | "available";
   readonly category: string;
   readonly origin: "custom";
   readonly slug: string;
@@ -79,13 +79,13 @@ function titleCase(slug: string): string {
 }
 
 export function toVellumSkill(skill: HermesSkill): VellumSkill {
-  const archived = skill.state === "archived";
+  const active = skill.state === "enabled";
   return {
     id: skill.name,
     name: skill.name,
     description: skill.description,
-    kind: archived ? "catalog" : "installed",
-    status: skill.state === "archived" ? "available" : skill.state,
+    kind: active ? "installed" : "catalog",
+    status: active ? "enabled" : "available",
     category: skill.category,
     origin: "custom",
     slug: skill.name,

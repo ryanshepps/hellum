@@ -23,10 +23,10 @@ async function ids(api: Awaited<ReturnType<typeof start>>, query: string): Promi
 
 describe("skills", () => {
   test.each([
-    ["", ["himalaya", "plan"]],
-    ["?include=catalog", ["himalaya", "plan", "arxiv", "pinned"]],
-    ["?include=catalog&kind=available", ["arxiv", "pinned"]],
-    ["?include=catalog&kind=installed", ["himalaya", "plan"]],
+    ["", ["plan"]],
+    ["?include=catalog", ["plan", "arxiv", "himalaya", "pinned"]],
+    ["?include=catalog&kind=available", ["arxiv", "himalaya", "pinned"]],
+    ["?include=catalog&kind=installed", ["plan"]],
     ["?include=catalog&q=ARXIV", ["arxiv"]],
     ["?include=catalog&category=research", ["arxiv", "pinned"]],
   ])("listing skills%s", async (query, expected) => {
@@ -52,13 +52,20 @@ describe("skills", () => {
     expect(problems).toEqual([]);
   });
 
-  test("installing a catalog skill restores it and removing archives it again", async () => {
+  test("removing a skill turns it off and installing turns it back on", async () => {
     const api = await start();
-    expect(await (await api.send("POST", "skills/install", { slug: "arxiv" })).json()).toEqual({ ok: true, skillId: "arxiv" });
-    expect(await ids(api, "")).toContain("arxiv");
+    expect((await api.send("DELETE", "skills/plan")).status).toBe(200);
+    expect(await ids(api, "")).not.toContain("plan");
+    expect(await ids(api, "?include=catalog&kind=available")).toContain("plan");
 
-    expect((await api.send("DELETE", "skills/arxiv")).status).toBe(200);
-    expect(await ids(api, "")).not.toContain("arxiv");
+    expect(await (await api.send("POST", "skills/install", { slug: "plan" })).json()).toEqual({ ok: true, skillId: "plan" });
+    expect(await ids(api, "")).toContain("plan");
+  });
+
+  test("installing an archived skill restores it", async () => {
+    const api = await start();
+    await api.send("POST", "skills/install", { slug: "arxiv" });
+    expect(await ids(api, "")).toContain("arxiv");
   });
 
   test("Hermes refusing an install is reported to the client", async () => {

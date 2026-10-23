@@ -13,16 +13,14 @@ sys.path.insert(0, os.getcwd())
 
 from agent.skill_utils import extract_skill_description, is_excluded_skill_path, parse_frontmatter  # noqa: E402
 from hermes_cli.config import load_config  # noqa: E402
-from hermes_cli.skills_config import get_disabled_skills  # noqa: E402
+from hermes_cli.skills_config import get_disabled_skills, save_disabled_skills  # noqa: E402
 from tools.skill_usage import (  # noqa: E402
     _archive_dir,
     _find_skill_dir,
-    archive_skill,
     is_bundled,
     is_hub_installed,
     restore_skill,
 )
-from tools.skills_hub import uninstall_skill  # noqa: E402
 from tools.skills_tool import _find_all_skills  # noqa: E402
 
 FILE_LIMIT = 200
@@ -135,9 +133,27 @@ def read_file(name, relative, root=None):
     }
 
 
-def outcome(result):
-    ok, message = result
+def set_disabled(name, disabled):
+    config = load_config()
+    names = get_disabled_skills(config)
+    if disabled:
+        names.add(name)
+    else:
+        names.discard(name)
+    save_disabled_skills(config, names)
+
+
+def install(name):
+    if name in get_disabled_skills(load_config()):
+        set_disabled(name, False)
+        return {"success": True, "error": None}
+    ok, message = restore_skill(name)
     return {"success": ok, "error": None if ok else message}
+
+
+def remove(name):
+    set_disabled(name, True)
+    return {"success": True, "error": None}
 
 
 def main():
@@ -151,10 +167,10 @@ def main():
     elif action == "file":
         file = read_file(name, str(request.get("path") or "SKILL.md"))
         result = file if "error" in file else {"success": True, **file}
-    elif action == "restore":
-        result = outcome(restore_skill(name))
+    elif action == "install":
+        result = install(name)
     elif action == "remove":
-        result = outcome(uninstall_skill(name) if is_hub_installed(name) else archive_skill(name))
+        result = remove(name)
     else:
         result = {"success": False, "error": f"unknown action {action!r}"}
     sys.stdout.write(json.dumps(result, default=str))

@@ -6,7 +6,7 @@ const base: HermesSkill = { name: "plan", description: "d", category: "software-
 describe("toVellumSkill", () => {
   test.each([
     ["enabled", "installed", "enabled"],
-    ["disabled", "installed", "disabled"],
+    ["disabled", "catalog", "available"],
     ["archived", "catalog", "available"],
   ] as const)("a %s Hermes skill is %s and %s", (state, kind, status) => {
     expect(toVellumSkill({ ...base, state })).toMatchObject({ kind, status });
