@@ -5,7 +5,7 @@ import { resolveAttachments, stageAttachments } from "../attachments/attachment-
 import { attachmentsByMessage, messageAttachmentView } from "../attachments/attachment-views";
 import type { EventHub } from "../events/event-hub";
 import type { HermesGateway } from "../hermes/hermes-gateway";
-import { parseTurnEvent } from "../hermes/schemas";
+import { parseTurnEvent, type SessionRow } from "../hermes/schemas";
 import type { HermesEvent } from "../hermes/wire";
 import { log } from "../log";
 import { toConversationSummary, type ConversationActivity, type ConversationSummary } from "../translate/conversations";
@@ -90,6 +90,10 @@ export class ConversationService {
     attachments: AttachmentStore,
   ): Promise<ConversationService> {
     return new ConversationService(gateway, hub, store, attachments, await store.load());
+  }
+
+  sessionRows(): Promise<readonly SessionRow[]> {
+    return this.catalog.rows();
   }
 
   async list(offset: number, limit: number, filter: ArchiveFilter): Promise<ConversationPage> {

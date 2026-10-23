@@ -3,6 +3,7 @@ import { ConversationNotFoundError } from "../conversations/conversation-service
 import { HermesHelperError } from "../hermes/helper-process";
 import { HermesRpcError, HermesUnavailableError } from "../hermes/rpc-peer";
 import { MemoryWriteRejectedError } from "../memory/memory-service";
+import { ScheduleNotFoundError, ScheduleRejectedError } from "../schedules/schedule-service";
 import { errorResponse } from "../http/json";
 import { log } from "../log";
 import { matchRoute, type Route } from "./route-table";
@@ -14,6 +15,12 @@ export type AssistantApi = (request: Request) => Promise<Response | null>;
 function toErrorResponse(error: unknown, method: string, path: string): Response {
   if (error instanceof ConversationNotFoundError) {
     return errorResponse(404, "not_found", error.message);
+  }
+  if (error instanceof ScheduleNotFoundError) {
+    return errorResponse(404, "not_found", error.message);
+  }
+  if (error instanceof ScheduleRejectedError) {
+    return errorResponse(422, "schedule_rejected", error.message);
   }
   if (error instanceof UnknownAttachmentError) {
     return errorResponse(400, "unknown_attachment", error.message);

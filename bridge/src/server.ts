@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { adminSocketPath, startAdminServer } from "./admin/admin-server";
 import { attachmentRoutes } from "./api/attachment-routes";
 import { createAssistantApi } from "./api/assistant-api";
@@ -5,6 +6,7 @@ import { memoryRoutes } from "./api/memory-routes";
 import { AttachmentStore } from "./attachments/attachment-store";
 import { conversationRoutes } from "./api/conversation-routes";
 import { pushRoutes } from "./api/push-routes";
+import { scheduleRoutes } from "./api/schedule-routes";
 import { systemRoutes } from "./api/system-routes";
 import { createAuthRoutes } from "./auth/auth-routes";
 import { AuthService } from "./auth/auth-service";
@@ -23,8 +25,10 @@ import { APNS_ORIGINS, createApnsClient } from "./push/apns-client";
 import { createTokenCache } from "./push/apns-jwt";
 import { PushNotifier } from "./push/push-notifier";
 import { PushTokenRegistry } from "./push/push-tokens";
+import { ScheduleDescriptionsSchema, ScheduleService } from "./schedules/schedule-service";
 import { buildRemoteGatewayConfig } from "./spa/index-html";
 import { createSpaHandler } from "./spa/spa-handler";
+import { privateJsonFile } from "./storage/json-file";
 
 const SELF_ASSISTANT_ID = "self";
 const MAX_IDLE_TIMEOUT_SECONDS = 255;
@@ -75,6 +79,14 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
     ...pushRoutes(pushTokens, identity.platformAssistantId),
     ...attachmentRoutes(attachments),
     ...memoryRoutes(new MemoryService(config.hermesHelpers)),
+    ...scheduleRoutes(
+      new ScheduleService(
+        config.hermesHelpers,
+        privateJsonFile(join(config.stateDir, "schedule-descriptions.json"), ScheduleDescriptionsSchema, {}),
+        () => conversations.sessionRows(),
+        Intl.DateTimeFormat().resolvedOptions().timeZone,
+      ),
+    ),
     ...conversationRoutes(conversations, hub),
   ]);
   const socketPath = adminSocketPath(config.stateDir);
