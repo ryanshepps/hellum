@@ -3,6 +3,7 @@ import { clearedRefreshCookie, isSecureRequest, readCookie, REFRESH_COOKIE_NAME,
 import { errorResponse, readJsonBody } from "../http/json";
 import type { AuthService, IssuedSession } from "./auth-service";
 import { PLATFORMS } from "./devices";
+import { describeUserAgent } from "./user-agent";
 
 const PAIRING_CHALLENGE_PATH = "/v1/remote-web/pairing-challenge";
 const PAIRING_TOKEN_PATH = "/v1/remote-web/pairing-token";
@@ -70,10 +71,11 @@ export function createAuthRoutes(auth: AuthService, assistantId: string): AuthRo
     if (!body) {
       return errorResponse(400, "invalid_request", "deviceCode is required");
     }
+    const described = describeUserAgent(request.headers.get("User-Agent"));
     const outcome = await auth.exchange(body.deviceCode, {
       deviceId: body.deviceId,
-      platform: body.platform ?? "desktop",
-      name: body.clientReportedName ?? request.headers.get("User-Agent") ?? "Unknown device",
+      platform: body.platform ?? described.platform,
+      name: body.clientReportedName ?? described.name,
     });
     switch (outcome.kind) {
       case "unknown":
