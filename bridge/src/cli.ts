@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { buildRemoteWebPairingUrl } from "@vellumai/service-contracts/remote-web-pairing";
+import QRCode from "qrcode";
 import { z } from "zod";
 import { adminSocketPath } from "./admin/admin-server";
 import { loadConfig } from "./config";
@@ -50,8 +51,10 @@ async function pair(publicUrl: string | undefined): Promise<void> {
   const baseUrl = base.replace(/\/+$/, "");
   const link = buildRemoteWebPairingUrl({ verificationUri: `${baseUrl}/assistant/pair`, deviceCode: pairing.deviceCode });
   const appLink = `hellum://connect?${new URLSearchParams({ url: baseUrl, code: pairing.deviceCode }).toString().replace(/\+/g, "%20")}`;
-  print(`Browser link: ${link}`);
+  print(await QRCode.toString(appLink, { type: "terminal", small: true }));
+  print("Scan with your iPhone camera to pair the Hellum app.");
   print(`App link:     ${appLink}`);
+  print(`Browser link: ${link}`);
   print(`Expires:      ${new Date(pairing.expiresAt).toLocaleTimeString()}`);
 }
 
