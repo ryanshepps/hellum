@@ -3,13 +3,14 @@ import { adminSocketPath, startAdminServer } from "./admin/admin-server";
 import { attachmentRoutes } from "./api/attachment-routes";
 import { createAssistantApi } from "./api/assistant-api";
 import { memoryRoutes } from "./api/memory-routes";
+import { modelRoutes } from "./api/model-routes";
 import { AttachmentStore } from "./attachments/attachment-store";
 import { conversationRoutes } from "./api/conversation-routes";
 import { pushRoutes } from "./api/push-routes";
 import { scheduleRoutes } from "./api/schedule-routes";
 import { skillRoutes } from "./api/skill-routes";
 import { voiceRoutes } from "./api/voice-routes";
-import { systemRoutes } from "./api/system-routes";
+import { DEFAULT_CONFIG, systemRoutes } from "./api/system-routes";
 import { createAuthRoutes } from "./auth/auth-routes";
 import { AuthService } from "./auth/auth-service";
 import { createFileDeviceStore } from "./auth/device-store";
@@ -23,6 +24,8 @@ import { bearerToken, errorResponse } from "./http/json";
 import { loadIdentity } from "./identity";
 import { log } from "./log";
 import { MemoryService } from "./memory/memory-service";
+import { ModelService } from "./models/model-service";
+import { EMPTY_PROFILE_STORE, ProfileStoreSchema } from "./translate/inference";
 import { APNS_ORIGINS, createApnsClient } from "./push/apns-client";
 import { createTokenCache } from "./push/apns-jwt";
 import { PushNotifier } from "./push/push-notifier";
@@ -83,6 +86,15 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
     ...pushRoutes(pushTokens, identity.platformAssistantId),
     ...attachmentRoutes(attachments),
     ...memoryRoutes(new MemoryService(config.hermesHelpers)),
+    ...modelRoutes(
+      new ModelService(
+        config.hermesHelpers,
+        gateway,
+        privateJsonFile(join(config.stateDir, "llm-profiles.json"), ProfileStoreSchema, EMPTY_PROFILE_STORE),
+        () => conversations.releaseIdleSessions(),
+      ),
+      DEFAULT_CONFIG,
+    ),
     ...scheduleRoutes(
       new ScheduleService(
         config.hermesHelpers,

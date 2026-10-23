@@ -25,6 +25,10 @@ export class LiveSessions {
     return this.byConversation.get(conversationId) ?? null;
   }
 
+  openConversations(): readonly string[] {
+    return [...this.byConversation.keys()];
+  }
+
   clear(): void {
     this.byConversation.clear();
     this.conversationBySid.clear();

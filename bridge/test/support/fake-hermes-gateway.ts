@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readModelState, writeModelState } from "./fake-hermes-models";
 
 type HistoryEntry =
   | { role: "user"; text: string }
@@ -168,6 +169,16 @@ function handle({ id, method, params }: Request): void {
       answer(params.answer ?? params.value ?? "");
       return ok(id, { status: "ok" });
     }
+    case "config.set": {
+      const [model = "", ...flags] = (params.value ?? "").split(" ");
+      const provider = flags[flags.indexOf("--provider") + 1] ?? "";
+      const state = readModelState();
+      if (!state.keys[provider]) return fail(id, 5001, `No credentials for provider '${provider}'`);
+      writeModelState({ ...state, model, provider });
+      return ok(id, { key: "model", value: model, warning: "", confirm_required: false });
+    }
+    case "reload.env":
+      return ok(id, { updated: 1 });
     case "session.interrupt": {
       const turn = running.get(sid);
       if (turn) turn.interrupted = true;

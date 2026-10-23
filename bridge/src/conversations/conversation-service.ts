@@ -93,6 +93,19 @@ export class ConversationService {
     return new ConversationService(gateway, hub, store, attachments, await store.load());
   }
 
+  async releaseIdleSessions(): Promise<void> {
+    const idle = this.live.openConversations().filter((conversationId) => !this.processing.has(conversationId));
+    await Promise.all(
+      idle.map(async (conversationId) => {
+        const live = this.live.get(conversationId);
+        this.live.forget(conversationId);
+        if (live) {
+          await this.gateway.request("session.close", { session_id: live.sid }, z.unknown()).catch(() => undefined);
+        }
+      }),
+    );
+  }
+
   sessionRows(): Promise<readonly SessionRow[]> {
     return this.catalog.rows();
   }

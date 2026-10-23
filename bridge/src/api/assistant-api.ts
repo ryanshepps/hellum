@@ -3,6 +3,7 @@ import { ConversationNotFoundError } from "../conversations/conversation-service
 import { HermesHelperError } from "../hermes/helper-process";
 import { HermesRpcError, HermesUnavailableError } from "../hermes/rpc-peer";
 import { MemoryWriteRejectedError } from "../memory/memory-service";
+import { ModelSettingRejectedError, ProfileNotFoundError } from "../models/model-service";
 import { ScheduleNotFoundError, ScheduleRejectedError } from "../schedules/schedule-service";
 import { SkillNotFoundError, SkillRejectedError } from "../skills/skill-service";
 import { SpeechUnavailableError, TranscriptionFailedError } from "../voice/voice-service";
@@ -18,11 +19,14 @@ function toErrorResponse(error: unknown, method: string, path: string): Response
   if (error instanceof ConversationNotFoundError) {
     return errorResponse(404, "not_found", error.message);
   }
-  if (error instanceof ScheduleNotFoundError || error instanceof SkillNotFoundError) {
+  if (error instanceof ScheduleNotFoundError || error instanceof SkillNotFoundError || error instanceof ProfileNotFoundError) {
     return errorResponse(404, "not_found", error.message);
   }
   if (error instanceof ScheduleRejectedError) {
     return errorResponse(422, "schedule_rejected", error.message);
+  }
+  if (error instanceof ModelSettingRejectedError) {
+    return errorResponse(422, "model_setting_rejected", error.message);
   }
   if (error instanceof SkillRejectedError) {
     return errorResponse(422, "skill_rejected", error.message);

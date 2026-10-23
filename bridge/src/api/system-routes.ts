@@ -2,7 +2,7 @@ import type { Route } from "./route-table";
 
 const VERSION = "hellum-0.1.0";
 
-const DEFAULT_CONFIG = {
+export const DEFAULT_CONFIG = {
   conversations: { autoArchive: { enabled: false, afterDays: 30 } },
   notifications: { newMessageEnabled: true, allAlertsEnabled: false },
   memory: { enabled: true },
@@ -34,8 +34,6 @@ export function systemRoutes(assistantName: string): readonly Route[] {
           capabilities: { memoryOptOut: false, retryLastTurn: false, appPins: false },
         }),
     },
-    { method: "GET", pattern: "config", handle: () => json(DEFAULT_CONFIG) },
-    { method: "PATCH", pattern: "config", handle: () => json(DEFAULT_CONFIG) },
     { method: "GET", pattern: "feature-flags", handle: () => json({ flags: [] }) },
     { method: "GET", pattern: "permissions/thresholds", handle: () => json(DEFAULT_THRESHOLDS) },
     { method: "GET", pattern: "sounds/config", handle: () => json(DEFAULT_SOUNDS) },
