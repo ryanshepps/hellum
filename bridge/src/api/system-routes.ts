@@ -58,5 +58,14 @@ export function systemRoutes(): readonly Route[] {
     { method: "GET", pattern: "conversations/unread-count", handle: () => json({ count: 0 }) },
     { method: "GET", pattern: "conversations/attention", handle: () => json({ conversations: [], hasMore: false }) },
     { method: "POST", pattern: "conversations/seen", handle: () => json({ ok: true }) },
+    { method: "GET", pattern: "acp/sessions", handle: () => json({ sessions: [] }) },
+    { method: "GET", pattern: "background-tools", handle: () => json({ tools: [], completed: [] }) },
+    { method: "GET", pattern: "documents", handle: () => json({ documents: [] }) },
+    { method: "GET", pattern: "suggestion", handle: () => json({ suggestion: null, messageId: null, source: "none" }) },
+    {
+      method: "GET",
+      pattern: "permissions/thresholds/conversations/:conversationId",
+      handle: () => json({ threshold: DEFAULT_THRESHOLDS.interactive }),
+    },
   ];
 }

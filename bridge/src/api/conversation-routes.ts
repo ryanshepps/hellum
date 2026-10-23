@@ -143,6 +143,11 @@ export function conversationRoutes(conversations: ConversationService, hub: Even
     },
     {
       method: "GET",
+      pattern: "pending-interactions",
+      handle: ({ query }) => Response.json(conversations.pendingInteractions(query.get("conversationId"))),
+    },
+    {
+      method: "GET",
       pattern: "events",
       handle: ({ request, query }) => {
         const cursor = Number(query.get("lastSeenSeq"));

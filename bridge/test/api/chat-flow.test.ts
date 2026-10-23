@@ -102,10 +102,18 @@ describe("tool approvals", () => {
     const confirmation = received.find(isType("confirmation_request"))?.message;
     if (confirmation?.type !== "confirmation_request") throw new Error("expected a confirmation");
 
+    const pending = (await (await api.get(`pending-interactions?conversationId=${sent.conversationId}`)).json()) as {
+      pendingConfirmation?: { requestId: string; input: object };
+      interactions: object[];
+    };
+    expect(pending.pendingConfirmation).toMatchObject({ requestId: confirmation.requestId, input: { command: "rm -rf ./hellum-nonexistent-dir" } });
+    expect(pending.interactions).toHaveLength(1);
+
     const decided = await api.send("POST", "confirm", { requestId: confirmation.requestId, decision: "deny" });
     expect(await decided.json()).toEqual({ accepted: true });
     const after = await events.until(isType("message_complete", sent.conversationId));
     expect(after.some((envelope) => envelope.message.type === "interaction_resolved" && envelope.message.state === "rejected")).toBe(true);
+    expect(await (await api.get(`pending-interactions?conversationId=${sent.conversationId}`)).json()).toEqual({ interactions: [] });
   });
 
   test("an unknown confirmation is not accepted", async () => {

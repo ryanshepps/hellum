@@ -1,0 +1,10 @@
+import { chromium } from "playwright";
+const [target, expression, settle = "8000"] = process.argv.slice(2);
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+page.on("pageerror", (error) => process.stdout.write(`PAGEERROR ${error.message}\n`));
+await page.goto(target ?? "");
+await page.waitForTimeout(Number(settle));
+const result = await page.evaluate(expression ?? "null");
+process.stdout.write(`${JSON.stringify(result, null, 1).slice(0, 6000)}\n`);
+await browser.close();

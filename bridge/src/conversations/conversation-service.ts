@@ -39,6 +39,17 @@ export type Snapshot = {
   readonly processing: boolean;
 };
 
+export type PendingInteractions = {
+  readonly pendingConfirmation?: object;
+  readonly interactions: readonly {
+    readonly requestId: string;
+    readonly conversationId: string;
+    readonly kind: "confirmation";
+    readonly toolName: string;
+    readonly riskLevel: string;
+  }[];
+};
+
 export class ConversationNotFoundError extends Error {
   constructor(conversationId: string) {
     super(`No conversation ${conversationId}`);
@@ -137,6 +148,25 @@ export class ConversationService {
     await this.gateway.request("approval.respond", { session_id: live.sid, choice: decision === "allow" ? "once" : "deny" }, z.unknown());
     this.applyTurn(entry[0], (turnState) => resolveApproval(turnState, decision === "allow" ? "approved" : "rejected"));
     return true;
+  }
+
+  pendingInteractions(conversationId: string | null): PendingInteractions {
+    const pending = [...this.turns.values()].flatMap((turnState) =>
+      turnState.pendingApproval && (!conversationId || turnState.conversationId === conversationId)
+        ? [turnState.pendingApproval.confirmation]
+        : [],
+    );
+    const { type: _type, ...pendingConfirmation } = pending[0] ?? { type: null };
+    return {
+      ...(pending[0] ? { pendingConfirmation } : {}),
+      interactions: pending.map((confirmation) => ({
+        requestId: confirmation.requestId,
+        conversationId: confirmation.conversationId ?? "",
+        kind: "confirmation",
+        toolName: confirmation.toolName,
+        riskLevel: confirmation.riskLevel,
+      })),
+    };
   }
 
   async rename(conversationId: string, title: string): Promise<void> {
