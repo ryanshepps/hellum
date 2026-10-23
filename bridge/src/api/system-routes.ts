@@ -16,7 +16,7 @@ function json(body: object, status = 200): Response {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-export function systemRoutes(): readonly Route[] {
+export function systemRoutes(assistantName: string): readonly Route[] {
   return [
     {
       method: "GET",
@@ -59,6 +59,12 @@ export function systemRoutes(): readonly Route[] {
     { method: "GET", pattern: "conversations/attention", handle: () => json({ conversations: [], hasMore: false }) },
     { method: "POST", pattern: "conversations/seen", handle: () => json({ ok: true }) },
     { method: "GET", pattern: "acp/sessions", handle: () => json({ sessions: [] }) },
+    { method: "GET", pattern: "conversation-starters", handle: () => json({ starters: [], total: 0, status: "empty" }) },
+    {
+      method: "GET",
+      pattern: "identity",
+      handle: () => json({ name: assistantName, role: "", personality: "", emoji: "", home: "", version: VERSION }),
+    },
     { method: "GET", pattern: "background-tools", handle: () => json({ tools: [], completed: [] }) },
     { method: "GET", pattern: "documents", handle: () => json({ documents: [] }) },
     { method: "GET", pattern: "suggestion", handle: () => json({ suggestion: null, messageId: null, source: "none" }) },

@@ -60,10 +60,13 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
   const notifier = await startPushNotifier(config, hub, pushTokens);
   const gateway = new HermesGateway(config.hermesGateway, spawnGatewayProcess);
   const conversations = await ConversationService.open(gateway, hub, createFileConversationStore(config.stateDir));
+  gateway.start().catch((error: unknown) => {
+    log.error("hermes gateway failed to start", { error: error instanceof Error ? error.message : String(error) });
+  });
   const spa = createSpaHandler(config.webDistDir, buildRemoteGatewayConfig(config.assistantName, config.assistantId));
   const authRoutes = createAuthRoutes(auth, config.assistantId);
   const assistantApi = createAssistantApi(new Set([SELF_ASSISTANT_ID, config.assistantId, identity.platformAssistantId]), [
-    ...systemRoutes(),
+    ...systemRoutes(config.assistantName),
     ...pushRoutes(pushTokens, identity.platformAssistantId),
     ...conversationRoutes(conversations, hub),
   ]);
@@ -75,7 +78,11 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
     if (!token || !auth.authenticate(token)) {
       return errorResponse(401, "unauthorized", "Missing or expired access token");
     }
-    return (await assistantApi(request)) ?? notFound(request);
+    const response = (await assistantApi(request)) ?? notFound(request);
+    if (response.status >= 400 && response.status !== 404) {
+      log.warn("assistant api error", { method: request.method, path: new URL(request.url).pathname, status: response.status });
+    }
+    return response;
   }
 
   const server = Bun.serve({

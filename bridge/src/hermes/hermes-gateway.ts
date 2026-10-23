@@ -32,6 +32,10 @@ export class HermesGateway {
     return () => this.disconnectListeners.delete(listener);
   }
 
+  async start(): Promise<void> {
+    await this.ensurePeer();
+  }
+
   async request<T>(method: string, params: RpcParams, schema: z.ZodType<T>, timeoutMs?: number): Promise<T> {
     const peer = await this.ensurePeer();
     return peer.request(method, params, schema, timeoutMs);
