@@ -1,6 +1,7 @@
 import type { ConversationContentBlock, ConversationMessage } from "@vellumai/assistant-api";
 import type { HistoryMessage } from "../hermes/schemas";
 import { assistantMessageId, userMessageId } from "./message-ids";
+import { toVellumToolCall } from "./tool-names";
 
 type Draft = {
   readonly id: string;
@@ -63,21 +64,19 @@ export function historyToMessages(
           timestamp: timestampAt(startedAtMs, messages.length),
           attachments: [],
           contentBlocks: [{ type: "text", text: entry.text }],
+          textSegments: [entry.text],
         };
         return { messages: [...messages, message], turn, draft: null };
       }
       case "tool": {
         const draft = draftFor(fold, conversationId);
         const toolIndex = draft.blocks.filter((block) => block.type === "tool_use").length;
+        const tool = toVellumToolCall(entry.name, entry.context ?? null);
+        const at = startedAtMs + fold.messages.length;
         return appendBlocks(fold, conversationId, [
           {
             type: "tool_use",
-            toolCall: {
-              id: `${draft.id}:tool:${toolIndex}`,
-              name: entry.name,
-              input: entry.context ? { description: entry.context } : {},
-              result: "",
-            },
+            toolCall: { id: `${draft.id}:tool:${toolIndex}`, name: tool.toolName, input: tool.input, result: "", startedAt: at, completedAt: at },
           },
         ]);
       }

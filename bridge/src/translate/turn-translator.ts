@@ -2,14 +2,17 @@ import type { AssistantEvent } from "@vellumai/assistant-api";
 import type { HermesTurnEvent } from "../hermes/schemas";
 import { approvalRequestId, assistantMessageId } from "./message-ids";
 import { formatToolResult } from "./tool-result";
+import { toVellumToolCall } from "./tool-names";
 
 type ActivityEvent = Extract<AssistantEvent, { type: "assistant_activity_state" }>;
 type ActivityPhase = ActivityEvent["phase"];
 type ActivityReason = ActivityEvent["reason"];
 
+type ConfirmationEvent = Extract<AssistantEvent, { type: "confirmation_request" }>;
+
 export type PendingApproval = {
   readonly requestId: string;
-  readonly toolUseId: string | null;
+  readonly confirmation: ConfirmationEvent;
 };
 
 export type TurnState = {
@@ -78,14 +81,15 @@ export function translateTurnEvent(state: TurnState, event: HermesTurnEvent, now
       );
     case "message.delta":
       return emit(state, [{ type: "assistant_text_delta", text: event.text, messageId, conversationId }], "streaming", "first_text_delta");
-    case "tool.start":
+    case "tool.start": {
+      const tool = toVellumToolCall(event.name, event.context);
       return emit(
-        { ...state, lastTool: { id: event.toolId, name: event.name } },
+        { ...state, lastTool: { id: event.toolId, name: tool.toolName } },
         [
           {
             type: "tool_use_start",
-            toolName: event.name,
-            input: event.context ? { description: event.context } : {},
+            toolName: tool.toolName,
+            input: tool.input,
             toolUseId: event.toolId,
             messageId,
             conversationId,
@@ -95,6 +99,7 @@ export function translateTurnEvent(state: TurnState, event: HermesTurnEvent, now
         "tool_running",
         "tool_use_start",
       );
+    }
     case "tool.complete": {
       const formatted = formatToolResult(event.result);
       return emit(
@@ -102,7 +107,7 @@ export function translateTurnEvent(state: TurnState, event: HermesTurnEvent, now
         [
           {
             type: "tool_result",
-            toolName: event.name,
+            toolName: toVellumToolCall(event.name, null, event.args).toolName,
             result: formatted.text,
             isError: formatted.isError,
             ...(formatted.status ? { status: formatted.status } : {}),
@@ -117,27 +122,23 @@ export function translateTurnEvent(state: TurnState, event: HermesTurnEvent, now
     }
     case "approval.request": {
       const approval = state.approvals + 1;
-      const pendingApproval: PendingApproval = {
-        requestId: approvalRequestId(conversationId, state.turn, approval),
-        toolUseId: state.lastTool?.id ?? null,
+      const requestId = approvalRequestId(conversationId, state.turn, approval);
+      const confirmation: ConfirmationEvent = {
+        type: "confirmation_request",
+        requestId,
+        toolName: state.lastTool?.name ?? "bash",
+        input: { command: event.command },
+        riskLevel: "high",
+        ...(event.description ? { riskReason: event.description } : {}),
+        allowlistOptions: [],
+        scopeOptions: [],
+        conversationId,
+        persistentDecisionsAllowed: false,
+        ...(state.lastTool ? { toolUseId: state.lastTool.id } : {}),
       };
       return emit(
-        { ...state, approvals: approval, pendingApproval },
-        [
-          {
-            type: "confirmation_request",
-            requestId: pendingApproval.requestId,
-            toolName: state.lastTool?.name ?? "terminal",
-            input: { command: event.command },
-            riskLevel: "high",
-            ...(event.description ? { riskReason: event.description } : {}),
-            allowlistOptions: [],
-            scopeOptions: [],
-            conversationId,
-            persistentDecisionsAllowed: false,
-            ...(pendingApproval.toolUseId ? { toolUseId: pendingApproval.toolUseId } : {}),
-          },
-        ],
+        { ...state, approvals: approval, pendingApproval: { requestId, confirmation } },
+        [confirmation],
         "awaiting_confirmation",
         "confirmation_requested",
       );

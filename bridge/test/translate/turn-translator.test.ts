@@ -109,7 +109,7 @@ describe("translateTurnEvent over recorded Hermes turns", () => {
     const confirmation = events.find((event) => event.type === "confirmation_request");
     if (confirmation?.type !== "confirmation_request") throw new Error("missing confirmation");
     expect(confirmation.requestId).toBe(`${CONVERSATION}:a0:approval:1`);
-    expect(confirmation.toolName).toBe("terminal");
+    expect(confirmation.toolName).toBe("bash");
     expect(confirmation.input).toEqual({ command: "rm -rf ./hellum-nonexistent-dir" });
     expect(confirmation.riskReason).toBe("recursive delete");
   });

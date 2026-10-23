@@ -24,11 +24,21 @@ describe("historyToMessages", () => {
       ["conv:a1", "assistant"],
     ]);
     expect(messages[1]?.contentBlocks).toEqual([
-      { type: "tool_use", toolCall: { id: "conv:a0:tool:0", name: "terminal", input: { description: "Running echo hi" }, result: "" } },
+      {
+        type: "tool_use",
+        toolCall: {
+          id: "conv:a0:tool:0",
+          name: "bash",
+          input: { command: "echo hi" },
+          result: "",
+          startedAt: STARTED_AT + 1,
+          completedAt: STARTED_AT + 1,
+        },
+      },
       { type: "thinking", thinking: "Run the command." },
       { type: "text", text: "It printed hi." },
     ]);
-    expect(messages[2]?.contentBlocks).toEqual([{ type: "text", text: "thanks" }]);
+    expect(messages[2]).toMatchObject({ contentBlocks: [{ type: "text", text: "thanks" }], textSegments: ["thanks"] });
   });
 
   test("produces messages that satisfy Vellum's message schema in chronological order", () => {
