@@ -1,0 +1,30 @@
+{
+  "name": "hellum",
+  "private": true,
+  "workspaces": [
+    "assistant/src/api",
+    "clients/web",
+    "packages/app-icons",
+    "packages/avatar-catalog",
+    "packages/avatar-manifest",
+    "packages/design-library",
+    "packages/environments",
+    "packages/ipc-contract",
+    "packages/local-mode",
+    "packages/service-contracts"
+  ],
+  "overrides": {
+    "es-toolkit": "1.46.1",
+    "lodash": "4.18.1",
+    "path-to-regexp": "8.4.2"
+  },
+  "patchedDependencies": {
+    "storybook@10.4.0": "patches/storybook@10.4.0.patch",
+    "@capacitor-community/camera-preview@8.0.1": "patches/@capacitor-community%2Fcamera-preview@8.0.1.patch",
+    "@capawesome/capacitor-file-picker@8.0.4": "patches/@capawesome%2Fcapacitor-file-picker@8.0.4.patch",
+    "@sentry/capacitor@4.1.0": "patches/@sentry%2Fcapacitor@4.1.0.patch"
+  },
+  "trustedDependencies": [
+    "@playwright/browser-chromium"
+  ]
+}

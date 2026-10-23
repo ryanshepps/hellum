@@ -1,0 +1,541 @@
+// Pure, leaf helpers for projecting and rendering a `DisplayMessage`'s ordered
+// content. NO React/DOM imports so this can be exercised with `bun test` and
+// imported by both the pure activity projection (`turn-activity.ts`) and the
+// React render path (`transcript-message-body.tsx`) WITHOUT a circular
+// dependency. This module is the single source of truth for the grouping /
+// anchor / suppression logic so the projection and the rendered DOM anchors
+// cannot drift.
+
+import type {
+  ConversationContentBlock,
+  ConversationMessageToolCall,
+  ConversationSurfaceBlock,
+  ConversationTextBlock,
+  ConversationThinkingBlock,
+} from "@vellumai/assistant-api";
+
+import type { ChatMessageToolCall } from "@/domains/chat/api/event-types";
+import type { Surface } from "@/domains/chat/types/types";
+import type { ToolCallCardItem } from "@/domains/chat/utils/tool-call-card-utils";
+import {
+  type AssistantTextVisibility,
+  isSendUserMessageCall,
+} from "@/domains/chat/utils/assistant-text-visibility";
+import {
+  isSilentToolCall,
+  isUiSurfaceToolCall,
+} from "@/domains/chat/utils/silent-tool-calls";
+import { isArtifactPointerSurface } from "@/domains/chat/transcript/response-artifacts";
+import {
+  containsInlineThinkingTag,
+  parseInlineThinkingTags,
+} from "@/domains/chat/utils/parse-inline-thinking";
+
+/**
+ * One item inside a blocks-driven `activity` run, reusing the server block
+ * shapes rather than re-declaring them: a `thinking` item is the wire
+ * `thinking` block (a contiguous reasoning run is pre-merged into one
+ * synthesized block — text newline-joined, timing widened to the earliest
+ * start / latest completion), and a `tool_use` item is the wire `tool_use`
+ * block with its `toolCall` narrowed to the client `ChatMessageToolCall`. The
+ * id is guaranteed at ingest, so the narrow happens once here and the render
+ * body needs no per-item check.
+ */
+export type ContentBlockActivityItem =
+  | ConversationThinkingBlock
+  | { type: "tool_use"; toolCall: ChatMessageToolCall };
+
+/**
+ * Grouped content for the blocks-driven render body. Adjacent thinking +
+ * tool_use blocks merge into one `activity` group (broken only by a `text` or
+ * `surface` block); `text` and `surface` reuse the server block as-is. The
+ * `activity` wrapper is the only shape with no wire analog — collapsing a run
+ * of blocks into one card is a render concern. Pure — no React/DOM; the blocks
+ * embed their referents, so there are no positional resolvers.
+ */
+export type ContentBlockGroup =
+  | ConversationTextBlock
+  | ConversationSurfaceBlock
+  | { type: "activity"; items: ContentBlockActivityItem[] };
+
+/**
+ * Narrow a wire `ConversationMessageToolCall` to the client `ChatMessageToolCall`
+ * by asserting its `id` is present. The daemon guarantees an id on every wire
+ * tool call (>= v0.8.8) and the ingest boundary re-synthesizes one for older
+ * daemons, so every tool_use block carries an id by the time it reaches render;
+ * the guard is the cast-free way to surface that narrowing to the type system.
+ */
+function hasToolCallId(
+  toolCall: ConversationMessageToolCall,
+): toolCall is ChatMessageToolCall {
+  return typeof toolCall.id === "string" && toolCall.id.length > 0;
+}
+
+export interface GroupContentBlocksOptions {
+  /**
+   * Split inline `<thinking>`/`<think>` tags out of text blocks into
+   * synthesized thinking blocks before grouping, so tag-emitted reasoning
+   * renders through the same activity path as native thinking blocks
+   * (matching macOS). Pass for assistant messages only — user-typed tags must
+   * render verbatim.
+   */
+  splitInlineThinking?: boolean;
+  /**
+   * Drop `thinking` blocks instead of grouping them. Pass for a row whose
+   * prose is a scratchpad: its reasoning is the same working text the reply
+   * tool already spoke around, so a "Thinking" row over the delivered message
+   * shows the user their assistant talking to itself. Dropping the blocks
+   * here, rather than at each render site, keeps the inline view, the steps
+   * timeline, and the detail drawer reading one projection.
+   */
+  dropThinking?: boolean;
+  /**
+   * Drop bookkeeping and surface tool calls (see `isSilentToolCall`) instead of
+   * grouping them, the way a `send_user_message` call is dropped. Pass under
+   * the `send-user-message` flag, where the assistant's own filing away, a
+   * memory write landing after the answer, a skill body load, a follow-up it
+   * left for itself, is not a step of the work the user asked for. Dropping
+   * rather than suppressing later leaves the surrounding run open, so the tool
+   * calls either side merge as they would had the call never been made.
+   */
+  dropSilentTools?: boolean;
+}
+
+/**
+ * The grouping options a message row implies. One place decides both, so the
+ * render body, the live activity group, and the thinking drawer project the
+ * same row the same way.
+ *
+ * `hideThinkingUi` is the transcript-wide gate (see `useHideThinkingUi`); the
+ * row's own `private` marker says the same thing about this row alone. Either
+ * is enough to drop the reasoning. Only the transcript-wide gate drops the
+ * silent tools, so a transcript rendered with the flag off keeps every step it
+ * has always drawn.
+ */
+export function groupOptionsForMessage(
+  message: {
+    role?: string;
+    assistantTextVisibility?: AssistantTextVisibility;
+  },
+  hideThinkingUi = false,
+): GroupContentBlocksOptions {
+  return {
+    splitInlineThinking: message.role !== "user",
+    dropThinking:
+      hideThinkingUi || message.assistantTextVisibility === "private",
+    dropSilentTools: hideThinkingUi,
+  };
+}
+
+/**
+ * Whether a row shows reasoning the user can open. The inline thinking link
+ * owns the streaming loading state whenever it renders, so the standalone
+ * thinking-dots row reads this to know when to defer to it; a row whose
+ * reasoning the projection drops has no such link, and the dots keep the wait.
+ */
+export function hasRenderedThinking(
+  message: {
+    role?: string;
+    assistantTextVisibility?: AssistantTextVisibility;
+    thinkingSegments?: string[];
+    contentBlocks?: ConversationContentBlock[];
+  },
+  hideThinkingUi = false,
+): boolean {
+  if (groupOptionsForMessage(message, hideThinkingUi).dropThinking) {
+    return false;
+  }
+  return (
+    (message.thinkingSegments?.length ?? 0) > 0 ||
+    !!message.contentBlocks?.some((block) => block.type === "thinking")
+  );
+}
+
+/**
+ * Whether a row already shows a step stack: at least one tool call the
+ * projection renders as a step. Under `send-user-message` the step stack is
+ * the turn's one progress label, so the standalone thinking row reads this to
+ * stand down once a step exists. A bookkeeping call the projection drops does
+ * not count, and the flag-off path never asks.
+ */
+export function hasRenderedStepStack(message: {
+  toolCalls?: { name: string; pendingConfirmation?: unknown }[];
+}): boolean {
+  return !!message.toolCalls?.some(
+    (toolCall) =>
+      !isSendUserMessageCall(toolCall) && !isSilentToolCall(toolCall),
+  );
+}
+
+/**
+ * Expand text blocks containing inline `<thinking>`/`<think>` tags into
+ * interleaved thinking + text blocks. Returns the input array untouched when
+ * no text block carries a tag (the common case).
+ */
+function splitInlineThinkingBlocks(
+  blocks: ConversationContentBlock[],
+): ConversationContentBlock[] {
+  if (
+    !blocks.some((b) => b.type === "text" && containsInlineThinkingTag(b.text))
+  ) {
+    return blocks;
+  }
+  return blocks.flatMap((block): ConversationContentBlock[] => {
+    const segments =
+      block.type === "text" ? parseInlineThinkingTags(block.text) : null;
+    if (!segments) {
+      return [block];
+    }
+    return segments.map((seg) =>
+      seg.type === "thinking"
+        ? { type: "thinking", thinking: seg.thinking }
+        : { type: "text", text: seg.text },
+    );
+  });
+}
+
+/**
+ * Group a message's unified `contentBlocks` into merged activity runs for the
+ * render path. A contiguous run of `thinking` + `tool_use`
+ * blocks collapses into one `activity` group whose `items` preserve interleaved
+ * order; consecutive `thinking` blocks merge into one item (text joined with
+ * newlines, timing widened to the earliest start / latest completion), matching
+ * macOS. Nonblank `text` and non-pointer `surface` blocks close the open
+ * activity group and pass through unchanged as their own groups. Blank text,
+ * pointer surfaces, and attachment blocks do not separate activity. The render
+ * body reads the surface straight off the block's `surface`, narrowed to the
+ * display `Surface` at render. `attachment` blocks are skipped — attachments
+ * render in their own region from `message.attachments`, and so are pointer
+ * surfaces naming an asset, which the transcript draws once per response
+ * instead (see the branch for why). Pure: no React/DOM.
+ */
+export function groupContentBlocks(
+  blocks: ConversationContentBlock[],
+  options?: GroupContentBlocksOptions,
+): ContentBlockGroup[] {
+  const walked = options?.splitInlineThinking
+    ? splitInlineThinkingBlocks(blocks)
+    : blocks;
+
+  const groups: ContentBlockGroup[] = [];
+  let current: { type: "activity"; items: ContentBlockActivityItem[] } | null =
+    null;
+
+  const openActivity = () => {
+    if (!current) {
+      current = { type: "activity", items: [] };
+      groups.push(current);
+    }
+    return current;
+  };
+
+  for (const block of walked) {
+    if (block.type === "thinking") {
+      if (options?.dropThinking) {
+        continue;
+      }
+      const activity = openActivity();
+      const lastItem = activity.items[activity.items.length - 1];
+      if (lastItem?.type === "thinking") {
+        lastItem.thinking = lastItem.thinking
+          ? `${lastItem.thinking}\n${block.thinking}`
+          : block.thinking;
+        if (block.startedAt != null) {
+          lastItem.startedAt =
+            lastItem.startedAt == null
+              ? block.startedAt
+              : Math.min(lastItem.startedAt, block.startedAt);
+        }
+        if (block.completedAt != null) {
+          lastItem.completedAt =
+            lastItem.completedAt == null
+              ? block.completedAt
+              : Math.max(lastItem.completedAt, block.completedAt);
+        }
+      } else {
+        // Synthesize a fresh thinking block so the merge above never mutates a
+        // block held by `message.contentBlocks`.
+        activity.items.push({
+          type: "thinking",
+          thinking: block.thinking,
+          startedAt: block.startedAt,
+          completedAt: block.completedAt,
+        });
+      }
+    } else if (block.type === "tool_use") {
+      if (!hasToolCallId(block.toolCall)) {
+        continue;
+      }
+      // A `send_user_message` call is dropped rather than grouped, the way a
+      // pointer surface is: its message is already a text block beside it, and
+      // grouping it would open an activity run holding nothing renderable,
+      // which draws a shimmering "Thinking" row under the reply for the rest of
+      // a streaming turn and counts a step no card has anything to show.
+      // Leaving the open run open lets the tool calls either side of it merge
+      // into one run, the way they would had the call never been made.
+      if (isSendUserMessageCall(block.toolCall)) {
+        continue;
+      }
+      // Every other silent tool is dropped the same way, and for the same
+      // reason: it draws nothing, so grouping it only opens a run with nothing
+      // renderable in it and adds a step no card can show.
+      if (options?.dropSilentTools && isSilentToolCall(block.toolCall)) {
+        continue;
+      }
+      openActivity().items.push({
+        type: "tool_use",
+        toolCall: block.toolCall,
+      });
+    } else if (block.type === "text") {
+      if (block.text.trim().length === 0) {
+        continue;
+      }
+      current = null;
+      groups.push(block);
+    } else if (block.type === "surface") {
+      // A pointer surface, one that merely names an asset (see
+      // `response-artifacts.ts`), is dropped rather than grouped: the
+      // transcript draws a response's assets once each, as a card at the end of
+      // the response, so drawing this one where its tool ran produced a second
+      // card for the same asset. Dropping it here, rather than at the render
+      // body, keeps every consumer indexing the same group list, since
+      // `groupIndex` is what the activity drawer resolves a group by (see
+      // `use-live-activity-group.ts`). It also leaves the open activity run
+      // open, so the tool calls either side of a pointer merge into one run the
+      // way they would have had it never been emitted.
+      if (isArtifactPointerSurface(block.surface)) {
+        continue;
+      }
+      current = null;
+      groups.push(block);
+    }
+  }
+
+  return groups;
+}
+
+/**
+ * Where an assistant response's final answer begins: the index of the last
+ * non-empty text group, extended left across every surface that group sits
+ * after and the prose introducing those surfaces. Everything before the
+ * returned index is the turn's intermediate work, which the render body
+ * collapses into "Earlier activity".
+ *
+ * A surface is part of the answer, not the work behind it, so a turn that
+ * replies with prose and an interactive surface keeps its prose in the answer
+ * even when a scrap of text trails the surface. That is the shape the
+ * onboarding greeting produces: greeting, `ui_show`, choice surface, then a
+ * lone emoji.
+ *
+ * `drawsVisibleOutput` reports whether a group draws anything the user can
+ * see: a timeline row, a dedicated inline card (subagent, workflow, ACP run,
+ * background task, answered question), or other visible group output. A group
+ * that draws nothing cannot separate two that do, so the walk passes straight
+ * through it. The `ui_show` call that opened a surface draws no output of its
+ * own, and neither does a thought whose reasoning never arrived. The first
+ * activity group that does draw visible output is real intermediate work and
+ * ends the answer.
+ *
+ * Returns -1 when the response carries no text at all, which leaves every group
+ * outside the answer's range.
+ */
+export function finalResponseStartIndex(
+  groups: readonly ContentBlockGroup[],
+  drawsVisibleOutput: (group: ContentBlockGroup, index: number) => boolean,
+): number {
+  const lastTextIndex = groups.findLastIndex(
+    (group) => group.type === "text" && group.text.trim().length > 0,
+  );
+  let start = lastTextIndex;
+  let crossedSurface = false;
+  for (let index = lastTextIndex - 1; index >= 0; index--) {
+    const group = groups[index];
+    if (!group || !drawsVisibleOutput(group, index)) {
+      continue;
+    }
+    if (group.type === "surface") {
+      crossedSurface = true;
+      start = index;
+      continue;
+    }
+    // Prose joins the answer only once the walk has crossed a surface it could
+    // be introducing. Text that merely precedes more text is a lead-in to the
+    // work between them, and stays collapsible.
+    if (group.type === "text" && crossedSurface) {
+      start = index;
+      continue;
+    }
+    break;
+  }
+  return start;
+}
+
+/**
+ * Project an activity group's ordered items into the card-rendering shape:
+ * ordered `ToolCallCardItem`s (thinking text interleaved with tool calls)
+ * plus the flat tool-call list. Empty thinking segments and suppressed UI
+ * tools are dropped. Single source of truth for the transcript's
+ * `MultiActivityGroup` props and the activity-steps side panel's live
+ * re-derivation, so the two views cannot drift.
+ */
+export function activityItemsToCardData(items: ContentBlockActivityItem[]): {
+  cardItems: ToolCallCardItem[];
+  toolCalls: ChatMessageToolCall[];
+} {
+  const cardItems: ToolCallCardItem[] = [];
+  const toolCalls: ChatMessageToolCall[] = [];
+  for (const item of items) {
+    if (item.type === "thinking") {
+      if (item.thinking) {
+        cardItems.push({
+          kind: "thinking",
+          text: item.thinking,
+          startedAt: item.startedAt,
+          completedAt: item.completedAt,
+        });
+      }
+      continue;
+    }
+    const tc = item.toolCall;
+    if (isSuppressedUiTool(tc)) {
+      continue;
+    }
+    toolCalls.push(tc);
+    cardItems.push({ kind: "toolCall", toolCall: tc });
+  }
+  return { cardItems, toolCalls };
+}
+
+/**
+ * Tool calls that draw no chip of their own. UI surface tools are rendered by
+ * the inline surface widget, unless they carry a pending confirmation, in
+ * which case the chip must render so the inline confirmation card is visible.
+ * `send_user_message` is rendered as the prose it carries, and has no
+ * confirmation policy, so it is suppressed unconditionally.
+ */
+export function isSuppressedUiTool(tc: ChatMessageToolCall): boolean {
+  return isSendUserMessageCall(tc) || isUiSurfaceToolCall(tc);
+}
+
+/**
+ * Detect whether a tool call is a `subagent_spawn` invocation. The daemon
+ * exposes `subagent_spawn` as a bundled-skill tool, which means the LLM
+ * actually emits a `skill_execute` call with `input.tool === "subagent_spawn"`
+ * — the daemon's `skill_execute` interceptor (see
+ * `assistant/src/daemon/conversation-tool-setup.ts`) re-dispatches to the
+ * real executor, but the `tool_use_start` event the frontend receives still
+ * carries `toolName: "skill_execute"`. Matching on the raw `toolName` would
+ * miss every spawn and leave inline subagent cards unrendered.
+ */
+export function isSubagentSpawnCall(toolCall: ChatMessageToolCall): boolean {
+  if (toolCall.name === "subagent_spawn") {
+    return true;
+  }
+  if (toolCall.name !== "skill_execute") {
+    return false;
+  }
+  const input = toolCall.input;
+  if (input == null || typeof input !== "object") {
+    return false;
+  }
+  return (input as Record<string, unknown>).tool === "subagent_spawn";
+}
+
+/**
+ * Detect whether a tool call is a `run_workflow` invocation. Like
+ * `subagent_spawn`, the daemon exposes `run_workflow` as a bundled-skill tool,
+ * so the LLM emits a `skill_execute` call with `input.tool === "run_workflow"`
+ * — the `tool_use_start` event the frontend receives still carries
+ * `toolName: "skill_execute"`. Matching on the raw `toolName` alone would miss
+ * every launch and leave the inline workflow card unrendered.
+ */
+export function isRunWorkflowCall(toolCall: ChatMessageToolCall): boolean {
+  if (toolCall.name === "run_workflow") {
+    return true;
+  }
+  if (toolCall.name !== "skill_execute") {
+    return false;
+  }
+  const input = toolCall.input;
+  if (input == null || typeof input !== "object") {
+    return false;
+  }
+  return (input as Record<string, unknown>).tool === "run_workflow";
+}
+
+/**
+ * Detect whether a tool call is an `acp_spawn` invocation. Like
+ * `subagent_spawn`/`run_workflow`, the daemon exposes `acp_spawn` as a
+ * bundled-skill tool, so the LLM emits a `skill_execute` call with
+ * `input.tool === "acp_spawn"` — the `tool_use_start` event the frontend
+ * receives still carries `toolName: "skill_execute"`. Matching on the raw
+ * `toolName` alone would miss every spawn and leave the inline ACP run card
+ * unrendered.
+ */
+export function isAcpSpawnCall(toolCall: ChatMessageToolCall): boolean {
+  if (toolCall.name === "acp_spawn") {
+    return true;
+  }
+  if (toolCall.name !== "skill_execute") {
+    return false;
+  }
+  const input = toolCall.input;
+  if (input == null || typeof input !== "object") {
+    return false;
+  }
+  return (input as Record<string, unknown>).tool === "acp_spawn";
+}
+
+/**
+ * Detect whether a tool call is a backgrounded `bash`/`host_bash` invocation.
+ * Unlike the subagent/workflow/ACP triad, background bash is not a
+ * `skill_execute` envelope — it's an `input.background === true` flag on the
+ * real `bash`/`host_bash` tool, so we match the raw tool name plus the flag.
+ */
+export function isBackgroundBashCall(toolCall: ChatMessageToolCall): boolean {
+  if (toolCall.name !== "bash" && toolCall.name !== "host_bash") {
+    return false;
+  }
+  const input = toolCall.input;
+  if (input == null || typeof input !== "object") {
+    return false;
+  }
+  return (input as Record<string, unknown>).background === true;
+}
+
+/**
+ * Whether an activity group's tool calls produce a dedicated inline card
+ * rather than a timeline row: a subagent spawn, or a call the render path
+ * treats as card-backed (workflow, ACP run, background task, answered
+ * question). Those cards are visible output and bound the final-response walk
+ * the same way a drawn chip does.
+ */
+export function activityHasDedicatedCard(
+  items: readonly ContentBlockActivityItem[],
+  isCardBacked: (toolCall: ChatMessageToolCall) => boolean,
+): boolean {
+  for (const item of items) {
+    if (item.type !== "tool_use") {
+      continue;
+    }
+    if (isSubagentSpawnCall(item.toolCall) || isCardBacked(item.toolCall)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Detect a task-progress card surface — `template === "task_progress"` with a
+ * non-empty `steps` array. Used by the activity-summary hoist-detection path.
+ */
+export function isTaskProgressSurface(surface: Surface): boolean {
+  const data = surface.data as
+    | { template?: string; templateData?: { steps?: unknown } }
+    | undefined;
+  return (
+    data?.template === "task_progress" &&
+    Array.isArray(data.templateData?.steps) &&
+    (data.templateData!.steps as unknown[]).length > 0
+  );
+}

@@ -1,0 +1,53 @@
+/**
+ * Quiet "Learned from this conversation" link shown on skill detail surfaces
+ * (skill detail page, chat skill sidepanel) for skills the assistant authored
+ * from a conversation. Renders only for `assistant-memory` skills whose
+ * install-meta recorded a source conversation — callers pass whatever skill
+ * shape they have and the gate lives here.
+ */
+
+import { ArrowRight } from "lucide-react";
+import { Link } from "react-router";
+
+import { useTranslation } from "@/i18n";
+import { cn } from "@/utils/misc";
+import { routes } from "@/utils/routes";
+import { textLinkVariants } from "@vellumai/design-library/components/text-link";
+
+interface SkillLineageLinkProps {
+  /**
+   * Origin plus the lineage id when known. The generated skill detail union
+   * and `SkillInfo` both satisfy this shape without narrowing.
+   */
+  skill: { origin: string; sourceConversationId?: string | null };
+  className?: string;
+  /** Invoked on click before navigation (e.g. to close the hosting panel). */
+  onNavigate?: () => void;
+}
+
+export function SkillLineageLink({
+  skill,
+  className,
+  onNavigate,
+}: SkillLineageLinkProps) {
+  const { t } = useTranslation();
+
+  if (skill.origin !== "assistant-memory" || !skill.sourceConversationId) {
+    return null;
+  }
+
+  return (
+    <Link
+      to={routes.conversation(skill.sourceConversationId)}
+      onClick={onNavigate}
+      className={cn(
+        textLinkVariants({ tone: "quiet" }),
+        "inline-flex w-fit items-center gap-1 text-body-small-default text-[var(--content-tertiary)]",
+        className,
+      )}
+    >
+      {t("skillLineageLink.label")}
+      <ArrowRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
+    </Link>
+  );
+}

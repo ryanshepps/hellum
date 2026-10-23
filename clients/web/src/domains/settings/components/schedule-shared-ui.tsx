@@ -1,0 +1,112 @@
+import { Skeleton } from "@vellumai/design-library/components/skeleton";
+
+import {
+  formatScheduleCost,
+  formatScheduleRunCount,
+  type ScheduleRowUsage,
+} from "@/domains/settings/utils/schedule-formatters";
+import { useTranslation } from "@/i18n";
+
+// ---------------------------------------------------------------------------
+// StatusDot — shared status indicator for schedules and runs
+// ---------------------------------------------------------------------------
+
+export function StatusDot({ status }: { status: string | null }) {
+  const { t } = useTranslation("settings");
+  const color =
+    status === "ok" || status === "completed"
+      ? "var(--system-positive-strong)"
+      : status === "error" || status === "failed"
+        ? "var(--system-negative-strong)"
+        : "var(--content-tertiary)";
+  return (
+    <span
+      className="inline-block h-2 w-2 rounded-full"
+      style={{ backgroundColor: color }}
+      aria-label={status ?? t("scheduleSharedUi.unknownStatus")}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ScheduleUsageStats — cost + run count display for schedule rows
+// ---------------------------------------------------------------------------
+
+// Rows render bare values (no inline column labels). Zero values are dimmed
+// so the eye lands on rows that actually cost or ran something.
+
+export function ScheduleUsageStats({
+  scheduleName,
+  usage,
+  onOpenUsage,
+}: {
+  scheduleName: string;
+  usage: ScheduleRowUsage;
+  onOpenUsage?: () => void;
+}) {
+  const { t } = useTranslation("settings");
+
+  if (usage.status === "loading") {
+    return (
+      <div
+        aria-label={t("scheduleSharedUi.loadingUsage")}
+        className="flex w-[156px] shrink-0 items-center justify-end gap-3"
+      >
+        <Skeleton as="span" className="h-5 w-16" />
+        <Skeleton as="span" className="h-5 w-16" />
+      </div>
+    );
+  }
+
+  const isUnavailable = usage.status === "error";
+  const cost = isUnavailable
+    ? "--"
+    : formatScheduleCost(usage.summary.totalEstimatedCostUsd);
+  const runs = isUnavailable
+    ? "--"
+    : formatScheduleRunCount(usage.summary.runCount);
+  const costIsZero =
+    usage.status === "ready" && !(usage.summary.totalEstimatedCostUsd > 0);
+  const runsIsZero = usage.status === "ready" && usage.summary.runCount === 0;
+
+  const costClass = costIsZero
+    ? "text-[var(--content-tertiary)]"
+    : "text-[var(--content-default)]";
+  const runsClass = runsIsZero
+    ? "text-[var(--content-tertiary)]"
+    : "text-[var(--content-default)]";
+
+  return (
+    <div className="flex w-[156px] shrink-0 items-center justify-end gap-3 text-right text-body-small-default">
+      {onOpenUsage ? (
+        <button
+          type="button"
+          onClick={onOpenUsage}
+          aria-label={t("scheduleSharedUi.viewUsageFor", { name: scheduleName })}
+          className={`min-w-[64px] cursor-pointer rounded px-1 py-0.5 text-right transition-colors hover:bg-[var(--surface-hover)] ${costClass}`}
+        >
+          {cost}
+        </button>
+      ) : (
+        <span
+          aria-label={t("scheduleSharedUi.costFor", {
+            name: scheduleName,
+            cost,
+          })}
+          className={`block min-w-[64px] px-1 py-0.5 ${costClass}`}
+        >
+          {cost}
+        </span>
+      )}
+      <span
+        aria-label={t("scheduleSharedUi.runsFor", {
+          name: scheduleName,
+          runs,
+        })}
+        className={`block min-w-[64px] px-1 py-0.5 ${runsClass}`}
+      >
+        {runs}
+      </span>
+    </div>
+  );
+}

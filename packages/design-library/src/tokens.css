@@ -1,0 +1,1117 @@
+/* ---------------------------------------------------------------------------
+ * Design system tokens — @vellumai/design-library
+ *
+ * Single source of truth for color, typography, and component tokens.
+ * Consuming apps import this file to provide the CSS variable context that
+ * design-library components depend on.
+ *
+ * Usage (in a consuming app's global CSS):
+ *   @import "@vellumai/design-library/tokens.css";
+ *
+ * Theme selection is controlled by a `data-theme` attribute on any ancestor
+ * element (typically <html> or a wrapper <div>):
+ *   <html data-theme="dark">   — dark mode
+ *   <html data-theme="velvet"> — velvet mode
+ *   (no attribute or "light")  — light mode (default)
+ *
+ * Source of truth: Figma cCGBcpVDbn22kj3OPU58W8
+ *   Light: node 2674:20625
+ *   Dark:  node 2674:20730
+ * --------------------------------------------------------------------------- */
+
+/* The library declares its own Tailwind scan target, so every consumer that
+ * imports these tokens picks it up — `@source` resolves relative to this file.
+ * `.ts` as well as `.tsx`: shared class strings live in plain modules too
+ * (`utils/menu-styles.ts`), and a `.tsx`-only glob drops any utility that
+ * appears nowhere else, including its `data-[disabled]:` variants. */
+@source "./**/*.{ts,tsx}";
+
+/* ---------------------------------------------------------------------------
+ * Brand fonts.
+ *
+ * DM Sans ships as a single variable font driving weights (300–700) through
+ * the `wght` axis, so one @font-face with a variable weight range covers the
+ * full range. DM Mono and Instrument Serif are static cuts. Italic is
+ * intentionally not bundled — browser-synthesized oblique is used instead.
+ * --------------------------------------------------------------------------- */
+
+@font-face {
+  font-family: "DM Sans";
+  src: url("./fonts/DMSans-Regular.ttf") format("truetype-variations");
+  font-weight: 100 1000;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "DM Mono";
+  src: url("./fonts/DMMono-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "DM Mono";
+  src: url("./fonts/DMMono-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Instrument Serif";
+  src: url("./fonts/InstrumentSerif-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ---------------------------------------------------------------------------
+ * Tailwind v4 dark variant — wired to the data-theme attribute.
+ * Enables `dark:` utility prefixes (e.g. `dark:bg-white`) that activate
+ * when any dark-family theme is set on an ancestor element.
+ * Velvet is a dark theme variant, so `dark:` utilities apply to it too.
+ * https://tailwindcss.com/docs/dark-mode#using-a-data-attribute
+ * --------------------------------------------------------------------------- */
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *, [data-theme=velvet], [data-theme=velvet] *));
+
+/* ---------------------------------------------------------------------------
+ * Keyboard-only focus ring variant.
+ *
+ * Replaces bare `focus-visible:` on interactive elements so focus rings
+ * only appear during keyboard navigation — not on touch/tap or
+ * programmatic focus. Mirrors the heuristic browsers apply to native
+ * `<button>` and `<a>` elements but NOT to generic focusable elements
+ * like `<div role="button" tabIndex={0}>` (WebKit omission tracked in
+ * w3c/csswg-drafts#12127).
+ *
+ * The `initInputModality()` utility sets `data-modality="pointer"` on
+ * `<html>` during pointer interactions and `data-modality="keyboard"`
+ * during keyboard navigation. The `:not([data-modality=pointer])`
+ * selector means focus rings show by default when the tracker has not
+ * been initialized — safe progressive enhancement.
+ *
+ * @see utils/input-modality.ts
+ * @see https://react-aria.adobe.com/useFocusVisible — same concept
+ * --------------------------------------------------------------------------- */
+@custom-variant keyboard-focus (&:where(:root:not([data-modality=pointer]) *, :root:not([data-modality=pointer])):focus-visible);
+
+/* ---------------------------------------------------------------------------
+ * Touch-mobile variant — gates on BOTH a narrow viewport AND a coarse (touch)
+ * pointer. Plain `max-md:` fires on any narrow viewport, wrongly enabling
+ * mobile affordances (larger tap targets, circular chrome) on desktop windows
+ * shrunk by DevTools or macOS tiling. The `pointer: coarse` half keeps them to
+ * actual touch devices (iOS, Android), never Electron or desktop browsers.
+ * --------------------------------------------------------------------------- */
+@custom-variant touch-mobile {
+  @media (width < 48rem) and (pointer: coarse) {
+    @slot;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * @theme bridge — registers CSS variables as Tailwind theme variables so
+ * they generate first-class utility classes (e.g. `bg-background`,
+ * `text-foreground`, `font-sans`).
+ *
+ * Only tokens that benefit from utility-class generation are bridged here.
+ * Semantic tokens (--primary-base, --content-default, etc.) are referenced
+ * via var() in @utility classes and component styles — they don't need
+ * Tailwind utility generation.
+ *
+ * When adding new tokens that should be usable as Tailwind utilities
+ * (e.g. a new color scale or spacing value), add the bridge entry here.
+ * https://tailwindcss.com/docs/theme
+ * --------------------------------------------------------------------------- */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+/* ---------------------------------------------------------------------------
+ * Palette ramps — `static` so every step is emitted to `:root`.
+ *
+ * Tailwind tree-shakes a plain `@theme` block: a variable survives into the
+ * generated `:root` only when some utility references it, which leaves most
+ * ramp steps undeclared at runtime. Sandboxed widget iframes read these
+ * properties off `getComputedStyle(document.documentElement)` and re-emit them
+ * inside the frame (`clients/web/src/utils/widget-tokens.ts`), so a step that
+ * is not declared resolves to nothing and the widget's `fill`/`color`
+ * declaration is dropped. `static` opts this block out of tree-shaking so the
+ * full vocabulary exists whether or not a utility happens to use it.
+ *
+ * `inline` is kept alongside so utilities still emit the literal value rather
+ * than a `var()` reference, matching the rest of the bridge.
+ * https://tailwindcss.com/docs/theme#using-static-values
+ * --------------------------------------------------------------------------- */
+@theme static inline {
+  /* Moss (cool neutral — synced with macOS Figma tokens) */
+  --color-moss-950: #111214;
+  --color-moss-900: #17191C;
+  --color-moss-800: #1C2024;
+  --color-moss-700: #24292E;
+  --color-moss-600: #2D3339;
+  --color-moss-500: #444D56;
+  --color-moss-400: #71808E;
+  --color-moss-300: #A9B2BB;
+  --color-moss-200: #CFCCC9;
+  --color-moss-100: #E9E6E2;
+  --color-moss-50:  #F6F5F4;
+
+  /* Stone (warm neutral — synced with macOS Figma tokens; overrides
+   * Tailwind v4's default stone scale to match the assistant palette) */
+  --color-stone-950: #111214;
+  --color-stone-900: #17191C;
+  --color-stone-800: #24292E;
+  --color-stone-700: #5A6672;
+  --color-stone-600: #71808E;
+  --color-stone-500: #8D99A5;
+  --color-stone-400: #A9B2BB;
+  --color-stone-300: #CFCCC9;
+  --color-stone-200: #E9E6E2;
+  --color-stone-100: #F2F0EE;
+  --color-stone-50:  #F6F5F4;
+
+  /* Forest (green accent — synced with macOS system-positive) */
+  --color-forest-950: #0D2818;
+  --color-forest-900: #1C251F;
+  --color-forest-800: #1B5E30;
+  --color-forest-700: #277E41;
+  --color-forest-600: #2E9A4E;
+  --color-forest-500: #3DB85E;
+  --color-forest-400: #6ECF87;
+  --color-forest-300: #A4E2B5;
+  --color-forest-200: #D0F0DA;
+  --color-forest-100: #E9F2EC;
+
+  /* Emerald (success — synced with macOS system-positive; overrides
+   * Tailwind v4's default emerald scale) */
+  --color-emerald-950: #0D2818;
+  --color-emerald-900: #1C251F;
+  --color-emerald-800: #1B5E30;
+  --color-emerald-700: #277E41;
+  --color-emerald-600: #2E9A4E;
+  --color-emerald-500: #3DB85E;
+  --color-emerald-400: #6ECF87;
+  --color-emerald-300: #A4E2B5;
+  --color-emerald-200: #D0F0DA;
+  --color-emerald-100: #E9F2EC;
+
+  /* Danger (error/destructive) */
+  --color-danger-950: #4E281D;
+  --color-danger-900: #803017;
+  --color-danger-800: #AB3F1C;
+  --color-danger-700: #DA491A;
+  --color-danger-600: #E86B40;
+  --color-danger-500: #F39B74;
+  --color-danger-400: #F9C0A2;
+  --color-danger-300: #F7DAC9;
+  --color-danger-200: #FFE4D5;
+  --color-danger-100: #FFF3EE;
+
+  /* Amber (warning — synced with macOS system-mid; overrides Tailwind v4's
+   * default amber scale) */
+  --color-amber-950: #4B3D1E;
+  --color-amber-900: #6B5520;
+  --color-amber-800: #8C7225;
+  --color-amber-700: #C9990F;
+  --color-amber-600: #F1B21E;
+  --color-amber-500: #F5C94E;
+  --color-amber-400: #F9D978;
+  --color-amber-300: #FCE9A0;
+  --color-amber-200: #FCF3DD;
+  --color-amber-100: #FDF8EE;
+}
+
+/* ---------------------------------------------------------------------------
+ * Border-radius scale, `static` for the same reason as the ramps above.
+ *
+ * The Stripe Elements appearance reads `--radius-lg` off
+ * `getComputedStyle(document.documentElement)` at runtime
+ * (`clients/web/src/domains/settings/billing/stripe-appearance.ts`) so the
+ * card fields match the app's corners. Today that read resolves only because
+ * the widget-token bridge (`clients/web/src/utils/widget-tokens.ts`) names
+ * every step, which keeps them emitted; `static` makes the values reach
+ * `:root` on their own rather than depending on that second consumer.
+ * --------------------------------------------------------------------------- */
+@theme static inline {
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-xxl: 20px;
+  --radius-pill: 999px;
+}
+
+@theme inline {
+  /* Font tokens — DM Sans across the board, matching the Swift macOS
+   * client's VFont (TypographyTokens.swift). */
+  --font-sans: "DM Sans", system-ui, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: "DM Sans", system-ui, sans-serif;
+  --font-body: "DM Sans", system-ui, sans-serif;
+  --font-serif: "Instrument Serif", serif;
+
+  /* App spacing tokens. The `--app-spacing-*` prefix avoids collisions with
+   * Tailwind's `--spacing-*` namespace (which generates the default spacing
+   * scale used by `p-*`, `m-*`, `gap-*`, etc.). Consumed via `var()` in
+   * arbitrary-value utilities like `gap-[var(--app-spacing-sm)]`. */
+  --app-spacing-xxs: 2px;
+  --app-spacing-xs: 4px;
+  --app-spacing-sm: 8px;
+  --app-spacing-md: 12px;
+  --app-spacing-lg: 16px;
+  --app-spacing-xl: 24px;
+  --app-spacing-xxl: 32px;
+  --app-spacing-xxxl: 48px;
+
+  /* Shadow scale — synced with macOS design system. `--shadow-popover` is
+   * theme-aware (defined per-mode below); the rest are mode-agnostic. */
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.12);
+  --shadow-lg: 0 8px 16px rgba(0, 0, 0, 0.16);
+  --shadow-glow: 0 0 12px rgba(241, 178, 30, 0.3);
+  --shadow-accent-glow: 0 0 8px rgba(39, 126, 65, 0.3);
+
+  /* Layout: shared max-width for the chat surface (transcript + composer +
+   * panel surfaces). The chat column is centered and clamped to this width
+   * while the surrounding scroll container remains full-bleed. */
+  --chat-max-width: 800px;
+
+  /* Motion tokens — mirror the Swift client's VAnimation presets
+   * (AnimationTokens.swift): snappy 0.12s easeOut · fast 0.15s easeOut ·
+   * standard 0.25s easeInOut · slow 0.4s easeInOut. The spring easing is a
+   * CSS approximation of SwiftUI spring(response: 0.3, dampingFraction: 0.8).
+   * Use these instead of ad-hoc durations so the two clients stay in sync. */
+  --anim-snappy: 120ms;
+  --anim-fast: 150ms;
+  --anim-standard: 250ms;
+  --anim-slow: 400ms;
+  --anim-ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --anim-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --anim-spring: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ===== Light mode (default) — Figma node 2674:20625 ===== */
+:root,
+[data-theme="light"] {
+  /* Native controls (number spinners, scrollbars, pickers) follow the theme
+     rather than the UA default, which otherwise renders them light on our
+     dark surfaces. */
+  color-scheme: light;
+
+  /* Surface */
+  --surface-base: #F6F5F4;
+  --surface-overlay: #FDFDFC;
+  --surface-active: #F2F0EE;
+  --surface-lift: #FFFFFF;
+  --surface-hover: rgba(185, 180, 172, 0.08);
+
+  /* Primary */
+  --primary-base: #17191C;
+  --primary-hover: #24292E;
+  --primary-active: #2D3339;
+  --primary-disabled: #F6F5F4;
+  --primary-second-hover: #B9B4AC;
+
+  /* Border */
+  --border-base: #F2F0EE;
+  --border-disabled: #E9E6E2;
+  --border-element: #CFCCC9;
+  --border-hover: #F6F5F4;
+  --border-active: #2D3339;
+
+  /* Content. The 5-step intensity ramp (emphasised > default > secondary >
+   * tertiary > disabled) covers most text. `quiet`, `faint`, and `strong`
+   * are platform-de-facto pairs — they exist because component code uses
+   * specific shades the ramp doesn't name. See dark-mode block for full
+   * pair semantics. */
+  --content-default: #24292E;
+  --content-emphasised: #161616;
+  --content-secondary: #5A6672;
+  --content-tertiary: #71808E;
+  --content-quiet: #8D99A5;     /* between tertiary and disabled */
+  --content-strong: #24292E;    /* = default in light, slightly muted in dark */
+  --content-faint: #A9B2BB;     /* lighter than disabled */
+  --content-disabled: #CFCCC9;
+  --content-inset: #FDFDFC;
+
+  /* Surface (extras beyond the base/overlay/active/lift/hover ramp) */
+  --surface-sunken: #F6F5F4;    /* = surface-base in light; recessed in dark */
+
+  /* Border (extras beyond base/disabled/element/hover/active/overlay) */
+  --border-subtle: #E9E6E2;     /* = border-disabled in light; soft in dark */
+
+  /* System */
+  --system-positive-strong: #277E41;
+  --system-positive-weak: #E9F2EC;
+  --system-negative-strong: #DA491A;
+  --system-negative-hover: #E86B40;
+  --system-negative-weak: #F7DAC9;
+  /* Strong tone to use when the glyph sits on its own weak fill. Tracks
+     *-strong except in dark, where negative-strong drops under 3:1 on
+     negative-weak. */
+  --system-positive-on-weak: #277E41;
+  --system-negative-on-weak: #DA491A;
+  --system-mid-strong: #F1B21E;
+  --system-mid-weak: #FCF3DD;
+  --system-info-strong: #467CC8;
+  --system-info-weak: #CEDAEC;
+  --notification-attention: #E5484D;
+
+  /* Feed identifier */
+  --feed-nudge-strong: #DB4B77;
+  --feed-nudge-weak: #F0D9E0;
+  --feed-digest-strong: #0E9B8B;
+  --feed-digest-weak: #C8E5E2;
+  /* credits/coins accent (teal) */
+  --credits-accent: #0E9B8B;
+  --feed-thread-strong: #E9C91A;
+  --feed-thread-weak: #EFE8C4;
+
+  /* Decorative accent: two hues the avatar palette carries that no semantic
+     role above already names. Same strong-on-weak shape as the feed
+     identifiers, for the same job of tinting a glyph against its own disc. */
+  --accent-orange-strong: #E9642F;
+  --accent-orange-weak: #FBE3D8;
+  --accent-purple-strong: #A665C9;
+  --accent-purple-weak: #EDE0F5;
+
+  /* Aux */
+  --aux-white: #FFFFFF;
+
+  /* Shadow */
+  --shadow-popover: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 3px 15px 0 rgba(0, 0, 0, 0.07);
+
+  /* Derived */
+  --ring: color-mix(in srgb, var(--system-positive-strong) 30%, transparent);
+  /* Link ink. Tracks the theme's positive-strong, the colour markdown and
+     external links already wear, so a link reads the same wherever it is
+     drawn. Restated per theme block for the same reason as --ring: a var()
+     alias resolves where it is declared. */
+  --content-link: var(--system-positive-strong);
+  --content-link-hover: color-mix(in srgb, var(--system-positive-strong) 80%, transparent);
+  --border-overlay: var(--border-disabled);
+  --ghost-hover: var(--surface-active);
+  --ghost-pressed: var(--border-disabled);
+  --field-bg: var(--surface-lift);
+  --field-border: var(--border-element);
+  --tag-bg-neutral: var(--surface-base);
+  --segment-track: var(--surface-active);
+
+  /* Background / Foreground */
+  --background: #F6F5F4;
+  --foreground: #24292E;
+
+}
+
+/* ===== Dark mode — Figma node 2674:20730 ===== */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Surface */
+  --surface-base: #17191C;
+  --surface-overlay: #1C2024;
+  --surface-active: #444D56;
+  --surface-lift: #24292E;
+  --surface-hover: rgba(233, 230, 226, 0.06);
+
+  /* Primary */
+  --primary-base: #FDFDFC;
+  --primary-hover: #F2F0EE;
+  --primary-active: #E9E6E2;
+  --primary-disabled: #2D3339;
+  --primary-second-hover: #E9E6E2;
+
+  /* Border */
+  --border-base: #24292E;
+  --border-disabled: #1C2024;
+  --border-element: #5A6672;
+  --border-hover: #2D3339;
+  --border-active: #F6F5F4;
+
+  /* Content. See light-mode block for the rationale on quiet/faint/strong. */
+  --content-default: #F6F5F4;
+  --content-emphasised: #FDFDFC;
+  --content-secondary: #A9B2BB;
+  --content-tertiary: #8D99A5;
+  --content-quiet: #A9B2BB;     /* = secondary in dark, lighter than tertiary in light */
+  --content-strong: #E9E6E2;
+  --content-faint: #8D99A5;
+  --content-disabled: #5A6672;
+  --content-inset: #17191C;
+
+  /* Surface (extras) */
+  --surface-sunken: #1C2024;
+
+  /* Border (extras) */
+  --border-subtle: #2D3339;
+
+  /* System */
+  --system-positive-strong: #309C50;
+  --system-positive-weak: #2C3A31;
+  --system-negative-strong: #DA491A;
+  --system-negative-hover: #AB3F1C;
+  --system-negative-weak: #4F2D24;
+  --system-positive-on-weak: #309C50;
+  /* Not negative-strong: #DA491A measures 2.86:1 on #4F2D24. #E86B40 is
+     3.81:1, clearing the 3:1 WCAG 1.4.11 asks of non-text indicators. */
+  --system-negative-on-weak: #E86B40;
+  --system-mid-strong: #F1B21E;
+  --system-mid-weak: #4B3D1E;
+  --system-info-strong: #467CC8;
+  --system-info-weak: #2A3A50;
+  --notification-attention: #E5484D;
+
+  /* Feed identifier */
+  --feed-nudge-strong: #DB4B77;
+  --feed-nudge-weak: #432B33;
+  --feed-digest-strong: #0E9B8B;
+  --feed-digest-weak: #293D3B;
+  /* credits/coins accent (teal) */
+  --credits-accent: #0E9B8B;
+  --feed-thread-strong: #E9C91A;
+  --feed-thread-weak: #464125;
+
+  /* Decorative accent. Strong holds; weak drops to the same band the feed
+     identifiers drop to on a dark ground. */
+  --accent-orange-strong: #E9642F;
+  --accent-orange-weak: #4E3226;
+  --accent-purple-strong: #A665C9;
+  --accent-purple-weak: #3B2C4A;
+
+  /* Aux */
+  --aux-white: #FFFFFF;
+
+  /* Shadow */
+  --shadow-popover: 0 1px 3px 0 rgba(0, 0, 0, 0.25), 0 4px 12px 0 rgba(0, 0, 0, 0.25);
+
+  /* Derived. Re-declared (rather than inherited from the light block) so
+   * --ring tracks the dark --system-positive-strong even when data-theme is
+   * applied to a non-root ancestor. */
+  --ring: color-mix(in srgb, var(--system-positive-strong) 30%, transparent);
+  --content-link: var(--system-positive-strong);
+  --content-link-hover: color-mix(in srgb, var(--system-positive-strong) 80%, transparent);
+  --border-overlay: var(--border-hover);
+  --ghost-hover: var(--border-base);
+  --ghost-pressed: var(--primary-active);
+  --field-bg: #2D3339;
+  --field-border: transparent;
+  --tag-bg-neutral: var(--primary-disabled);
+  --segment-track: #2D3339;
+
+  /* Background / Foreground */
+  --background: #17191C;
+  --foreground: #F6F5F4;
+}
+
+/* ===== Velvet mode — dark with red/pink accents ===== */
+[data-theme="velvet"] {
+  color-scheme: dark;
+
+  /* Surface */
+  --surface-base: #121214;
+  --surface-overlay: #1A171B;
+  --surface-active: #30252B;
+  --surface-lift: #211D22;
+  --surface-hover: rgba(244, 63, 94, 0.08);
+
+  /* Primary */
+  --primary-base: #E83F5B;
+  --primary-hover: #F45A73;
+  --primary-active: #C92E48;
+  --primary-disabled: #30252B;
+  --primary-second-hover: #F43F5E;
+
+  /* Border */
+  --border-base: #24292E;
+  --border-disabled: #1C2024;
+  --border-element: #735261;
+  --border-hover: #30252B;
+  --border-active: #FFB3C7;
+
+  /* Content. Velvet inherits the dark values for quiet/faint/strong since
+   * velvet's accent applies at the chrome level (primary/surface), not the
+   * text ramp. Design may refine these per Velvet's own palette later. */
+  --content-default: #F6F5F4;
+  --content-emphasised: #FFF7FA;
+  --content-secondary: #C8B6BE;
+  --content-tertiary: #A98695;
+  --content-quiet: #A9B2BB;
+  --content-strong: #E9E6E2;
+  --content-faint: #8D99A5;
+  --content-disabled: #6B5962;
+  --content-inset: #FFF7FA;
+
+  /* Surface (extras). Sunken inherits dark — design to refine if velvet
+   * wants its own subdued surface. */
+  --surface-sunken: #1C2024;
+
+  /* Border (extras) */
+  --border-subtle: #2D3339;
+
+  /* System */
+  --system-positive-strong: #E83F5B;
+  --system-positive-weak: #382027;
+  --system-negative-strong: #EF4444;
+  --system-negative-hover: #F87171;
+  --system-negative-weak: #3A2024;
+  --system-positive-on-weak: #E83F5B;
+  --system-negative-on-weak: #EF4444;
+  --system-mid-strong: #F1B21E;
+  --system-mid-weak: #42321C;
+  --system-info-strong: #467CC8;
+  --system-info-weak: #2A3A50;
+  --notification-attention: #E5484D;
+
+  /* Feed identifier — reuses the dark palette; velvet's accent colors
+   * apply at the chrome level (primary, surface) rather than swapping
+   * the feed glyph colors. */
+  --feed-nudge-strong: #DB4B77;
+  --feed-nudge-weak: #432B33;
+  --feed-digest-strong: #0E9B8B;
+  --feed-digest-weak: #293D3B;
+  /* credits/coins accent (teal) */
+  --credits-accent: #0E9B8B;
+  --feed-thread-strong: #E9C91A;
+  --feed-thread-weak: #464125;
+
+  /* Decorative accent. Strong holds; weak drops to the same band the feed
+     identifiers drop to on a dark ground. */
+  --accent-orange-strong: #E9642F;
+  --accent-orange-weak: #4E3226;
+  --accent-purple-strong: #A665C9;
+  --accent-purple-weak: #3B2C4A;
+
+  /* Aux */
+  --aux-white: #FFFFFF;
+
+  /* Shadow */
+  --shadow-popover: 0 1px 3px 0 rgba(0, 0, 0, 0.25), 0 4px 12px 0 rgba(0, 0, 0, 0.25);
+
+  /* Derived. --ring re-declared so it tracks velvet's positive accent. */
+  --ring: color-mix(in srgb, var(--system-positive-strong) 30%, transparent);
+  --content-link: var(--system-positive-strong);
+  --content-link-hover: color-mix(in srgb, var(--system-positive-strong) 80%, transparent);
+  --border-overlay: var(--border-hover);
+  --ghost-hover: var(--border-base);
+  --ghost-pressed: var(--primary-active);
+  --field-bg: #242026;
+  --field-border: transparent;
+  --tag-bg-neutral: var(--primary-disabled);
+  --segment-track: var(--surface-active);
+
+  /* Background / Foreground */
+  --background: #121214;
+  --foreground: #F6F5F4;
+}
+
+/* ---------------------------------------------------------------------------
+ * Typography tokens — Figma node 2193:4447.
+ * --------------------------------------------------------------------------- */
+
+:root {
+  --text-title-large-size: 24px;
+  --text-title-large-weight: 500;
+  --text-title-large-line-height: 1;
+
+  --text-title-medium-size: 20px;
+  --text-title-medium-weight: 500;
+  --text-title-medium-line-height: 1;
+
+  --text-title-small-size: 16px;
+  --text-title-small-weight: 500;
+  --text-title-small-line-height: 1;
+
+  --text-body-large-lighter-size: 16px;
+  --text-body-large-lighter-weight: 400;
+  --text-body-large-lighter-line-height: 20px;
+
+  --text-body-large-default-size: 16px;
+  --text-body-large-default-weight: 500;
+  --text-body-large-default-line-height: 20px;
+
+  --text-body-medium-lighter-size: 14px;
+  --text-body-medium-lighter-weight: 400;
+  --text-body-medium-lighter-line-height: 18px;
+
+  --text-body-medium-default-size: 14px;
+  --text-body-medium-default-weight: 500;
+  --text-body-medium-default-line-height: 18px;
+
+  --text-body-small-lighter-size: 12px;
+  --text-body-small-lighter-weight: 400;
+  --text-body-small-lighter-line-height: 18px;
+
+  --text-body-small-default-size: 12px;
+  --text-body-small-default-weight: 500;
+  --text-body-small-default-line-height: 1;
+
+  --text-body-small-emphasised-size: 12px;
+  --text-body-small-emphasised-weight: 600;
+  --text-body-small-emphasised-line-height: 1;
+
+  --text-label-medium-default-size: 11px;
+  --text-label-medium-default-weight: 500;
+  --text-label-medium-default-line-height: 1;
+
+  --text-label-small-default-size: 10px;
+  --text-label-small-default-weight: 500;
+  --text-label-small-default-line-height: 1;
+
+  --text-chat-size: 16px;
+  --text-chat-weight: 400;
+  --text-chat-line-height: 24px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Typography utility classes — Tailwind v4 @utility registration.
+ * --------------------------------------------------------------------------- */
+
+@utility text-title-large {
+  font-family: var(--font-sans);
+  font-size: var(--text-title-large-size);
+  font-weight: var(--text-title-large-weight);
+  line-height: var(--text-title-large-line-height);
+}
+@utility text-title-medium {
+  font-family: var(--font-sans);
+  font-size: var(--text-title-medium-size);
+  font-weight: var(--text-title-medium-weight);
+  line-height: var(--text-title-medium-line-height);
+}
+@utility text-title-small {
+  font-family: var(--font-sans);
+  font-size: var(--text-title-small-size);
+  font-weight: var(--text-title-small-weight);
+  line-height: var(--text-title-small-line-height);
+}
+@utility text-body-large-default {
+  font-family: var(--font-sans);
+  font-size: var(--text-body-large-default-size);
+  font-weight: var(--text-body-large-default-weight);
+  line-height: var(--text-body-large-default-line-height);
+}
+@utility text-body-large-lighter {
+  font-family: var(--font-sans);
+  font-size: var(--text-body-large-lighter-size);
+  font-weight: var(--text-body-large-lighter-weight);
+  line-height: var(--text-body-large-lighter-line-height);
+}
+@utility text-body-medium-default {
+  font-family: var(--font-sans);
+  font-size: var(--text-body-medium-default-size);
+  font-weight: var(--text-body-medium-default-weight);
+  line-height: var(--text-body-medium-default-line-height);
+}
+@utility text-body-medium-lighter {
+  font-family: var(--font-sans);
+  font-size: var(--text-body-medium-lighter-size);
+  font-weight: var(--text-body-medium-lighter-weight);
+  line-height: var(--text-body-medium-lighter-line-height);
+}
+@utility text-body-small-lighter {
+  font-family: var(--font-sans);
+  font-size: var(--text-body-small-lighter-size);
+  font-weight: var(--text-body-small-lighter-weight);
+  line-height: var(--text-body-small-lighter-line-height);
+}
+@utility text-body-small-default {
+  font-family: var(--font-sans);
+  font-size: var(--text-body-small-default-size);
+  font-weight: var(--text-body-small-default-weight);
+  line-height: var(--text-body-small-default-line-height);
+}
+@utility text-body-small-emphasised {
+  font-family: var(--font-sans);
+  font-size: var(--text-body-small-emphasised-size);
+  font-weight: var(--text-body-small-emphasised-weight);
+  line-height: var(--text-body-small-emphasised-line-height);
+}
+@utility text-label-medium-default {
+  font-family: var(--font-sans);
+  font-size: var(--text-label-medium-default-size);
+  font-weight: var(--text-label-medium-default-weight);
+  line-height: var(--text-label-medium-default-line-height);
+}
+@utility text-label-small-default {
+  font-family: var(--font-sans);
+  font-size: var(--text-label-small-default-size);
+  font-weight: var(--text-label-small-default-weight);
+  line-height: var(--text-label-small-default-line-height);
+}
+@utility text-chat {
+  font-family: var(--font-sans);
+  font-size: var(--text-chat-size);
+  font-weight: var(--text-chat-weight);
+  line-height: var(--text-chat-line-height);
+}
+
+/*
+ * Optically center a single-line text label inside a flex-centered row.
+ *
+ * Centering the label's line box does not center the visible glyphs: the
+ * line box reserves descender space below the baseline, and engines round
+ * font ascent/descent when placing the baseline. With DM Sans this leaves
+ * cap-height text riding visibly high next to box-centered siblings such
+ * as icons (worst where the line height is below the font's natural
+ * content height, e.g. `text-body-large-default` at 16px/20px).
+ *
+ * `text-box: trim-both cap alphabetic` trims the box to the cap-height
+ * and baseline, so flex centering aligns the ink itself — self-correcting
+ * for any font metrics or engine rounding. The symmetric padding keeps
+ * ascender/descender ink (which paints outside the trimmed content box)
+ * inside the padding box, so `overflow: hidden` truncation cannot clip
+ * it: DM Sans descenders reach 0.31em below the baseline and diacritics
+ * reach 0.292em above the caps, both within the 0.35em pad. Engines
+ * without `text-box` support keep the existing rendering unchanged.
+ */
+@utility text-optical-center {
+  @supports (text-box: trim-both cap alphabetic) {
+    text-box: trim-both cap alphabetic;
+    padding-block: 0.35em;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Overlay animation keyframes.
+ * --------------------------------------------------------------------------- */
+
+@keyframes popoverIn {
+  0% { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes bottomSheetIn {
+  0% { opacity: 0; transform: translateY(100%); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes detailSheetIn {
+  from { transform: translateY(var(--bottom-sheet-origin-y, 100%)); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes detailSheetOut {
+  from { transform: translateY(var(--bottom-sheet-drag-offset, 0px)); opacity: 1; }
+  to { transform: translateY(100%); opacity: 0; }
+}
+
+@keyframes detailSheetScrimIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes detailSheetScrimOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+[data-slot="bottom-sheet-content"][data-variant="detail"] {
+  animation: detailSheetIn 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+[data-slot="bottom-sheet-content"][data-variant="detail"][data-state="closed"] {
+  animation: detailSheetOut 200ms ease-in both;
+}
+
+[data-slot="bottom-sheet-content"][data-variant="detail"][data-state="open"]:is([data-dragging], [data-snapping]) {
+  animation: none;
+  transform: translateY(var(--bottom-sheet-drag-offset, 0px));
+}
+
+[data-slot="bottom-sheet-content"][data-snapping] {
+  transition: transform 180ms ease-out;
+}
+
+[data-slot="bottom-sheet-overlay"][data-variant="detail"] {
+  animation: detailSheetScrimIn 240ms ease-out both;
+}
+
+[data-slot="bottom-sheet-overlay"][data-variant="detail"][data-state="closed"] {
+  animation: detailSheetScrimOut 200ms ease-in both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="bottom-sheet-content"][data-variant="detail"][data-state],
+  [data-slot="bottom-sheet-overlay"][data-variant="detail"][data-state] {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * PanelItem marquee — scrolls overflowing single-line labels horizontally
+ * when the parent row (`.group`) is hovered. Driven by `MarqueeText`
+ * (colocated with PanelItem). The component sets:
+ *   --panelitem-marquee-distance: <overflow>px
+ *   --panelitem-marquee-duration: <total>ms
+ * The keyframe spends 80% of its time scrolling (40% out, 40% back) and
+ * 20% paused (10% at the end, 10% at the start). Both starts and ends
+ * at translateX(0) so dropping the animation on hover-out is jump-free.
+ * --------------------------------------------------------------------------- */
+
+@utility animate-panelitem-marquee {
+  animation: panelitem-marquee var(--panelitem-marquee-duration, 4s) linear infinite;
+}
+
+@keyframes panelitem-marquee {
+  0%   { transform: translateX(0); }
+  10%  { transform: translateX(0); }
+  50%  { transform: translateX(calc(-1 * var(--panelitem-marquee-distance, 0px))); }
+  60%  { transform: translateX(calc(-1 * var(--panelitem-marquee-distance, 0px))); }
+  100% { transform: translateX(0); }
+}
+
+/* ---------------------------------------------------------------------------
+ * Collapsible — Radix Accordion content animation.
+ * Uses Radix's `--radix-accordion-content-height` variable so the animation
+ * always targets the actual content height (no JS measuring needed).
+ * --------------------------------------------------------------------------- */
+@keyframes collapsible-slide-down {
+  from { height: 0; }
+  to { height: var(--radix-accordion-content-height); }
+}
+@keyframes collapsible-slide-up {
+  from { height: var(--radix-accordion-content-height); }
+  to { height: 0; }
+}
+.collapsible-content[data-state="open"] {
+  animation: collapsible-slide-down var(--anim-fast) var(--anim-spring);
+}
+.collapsible-content[data-state="closed"] {
+  animation: collapsible-slide-up var(--anim-fast) var(--anim-spring);
+}
+
+/* ---------------------------------------------------------------------------
+ * Sidebar section resize, scoped via the extra `.sidebar-section-list`
+ * marker class layered onto the shared `.collapsible-content` so only the
+ * sidebar's own section row lists use this timing; every other
+ * `Collapsible` in the app keeps the plain default above.
+ *
+ * Expanding still eases the row list open with the height keyframe (a
+ * gradual reveal reads fine growing into empty space). Collapsing sets
+ * `animation: none` explicitly, on purpose: height and opacity both jump
+ * straight to their closed values in the same instant. A more specific
+ * selector only wins property-by-property, not rule-by-rule - simply
+ * *not* declaring `animation` here still let the shared, less specific
+ * `.collapsible-content[data-state="closed"]` rule's own
+ * `collapsible-slide-up` keyframe apply, since nothing here was competing
+ * with it for that property. Radix's `Presence` only defers actually
+ * unmounting the content for as long as it detects a running
+ * transition/animation on the node, so a real animation here (however
+ * short) held the whole collapse up behind it. */
+.sidebar-section-list.collapsible-content[data-state="open"] {
+  opacity: 1;
+  animation: collapsible-slide-down var(--anim-slow) var(--anim-ease-out);
+}
+.sidebar-section-list.collapsible-content[data-state="closed"] {
+  opacity: 0;
+  animation: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Streaming-dot pulse — the three animated dots in `GoToNewest`, signalling
+ * that content is still arriving out of view. Each dot offsets its
+ * `animation-delay` so they read as a travelling wave. Applied through the
+ * `animate-go-to-newest-dot` utility behind a `motion-safe` variant so it
+ * honours `prefers-reduced-motion`.
+ * --------------------------------------------------------------------------- */
+@keyframes typing-dot-pulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.6); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@utility animate-go-to-newest-dot {
+  animation: typing-dot-pulse 1s ease-in-out infinite;
+}
+
+/* ---------------------------------------------------------------------------
+ * Indeterminate progress: the `ProgressBar` fill band (40% of the track)
+ * sweeping left→right while the extent of the work is unknown. Applied
+ * behind a `motion-safe` variant; reduced motion gets a static, dimmed
+ * full-width fill instead.
+ * --------------------------------------------------------------------------- */
+@keyframes progress-indeterminate {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+
+@utility animate-progress-indeterminate {
+  animation: progress-indeterminate 1.4s ease-in-out infinite;
+}
+
+/* ---------------------------------------------------------------------------
+ * Skeleton shimmer: a soft gradient band sweeping left→right over a
+ * placeholder block while content loads. Consumed by the `Skeleton`
+ * component. The highlight mixes the surface toward `--foreground` so it
+ * reads in every theme: lighter band in dark/velvet, darker in light.
+ * --------------------------------------------------------------------------- */
+@keyframes skeleton-shimmer {
+  from { background-position: 150% 0; }
+  to { background-position: -50% 0; }
+}
+
+.skeleton-shimmer {
+  background-color: var(--surface-active);
+  /* Fallback band for engines without color-mix() (WKWebView before
+   * iOS 16.2, per the iOS 15.0 deployment target): a neutral translucent
+   * highlight over the surface color (no token expresses this without
+   * color-mix, hence the raw rgba). Engines that parse color-mix() take the
+   * declaration below instead. */
+  background-image: linear-gradient(
+    90deg,
+    transparent 35%,
+    rgba(128, 128, 128, 0.12) 50%,
+    transparent 65%
+  );
+  background-image: linear-gradient(
+    90deg,
+    var(--surface-active) 35%,
+    color-mix(in srgb, var(--surface-active), var(--foreground) 12%) 50%,
+    var(--surface-active) 65%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-shimmer {
+    animation: none;
+    background-image: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Hover reveal: an affordance a row keeps out of the way until it is wanted
+ * (an inline "..." trigger, a remove button, a download button over artwork).
+ *
+ * A row marks itself `data-reveal-row`; the affordance marks itself
+ * `data-reveal`; an element sharing the affordance's slot and having to give it
+ * up marks itself `data-reveal-yield`; a row that wants its affordance held
+ * open regardless of hover (the row a nav marks as the current page, a row
+ * mid-operation) marks itself `data-reveal-hold`. Callers declare the part an
+ * element plays, the conditions live here.
+ *
+ * Hiding sits inside `@media (hover: hover)`, so a device that cannot hover
+ * shows the affordance outright. `hover` and `pointer` are independent media
+ * features and neither follows from viewport width: an iPad in landscape
+ * reports `hover: none` at 1024px, so a control behind hover there is
+ * unreachable rather than tucked away.
+ *
+ * One cell holding both an affordance and the element that yields to it
+ * (`data-reveal-slot`, which `CrossfadeStack` sets) has no hover to trade them
+ * with, so there it seats them side by side: choosing between them would cost
+ * either information the row exists to carry (a count, a timestamp, a status
+ * dot) or the only way to reach a command. A row that would rather keep the
+ * space narrow omits the affordance itself where the device cannot hover, and
+ * gives the command a path of its own (swipe, long press).
+ *
+ * Hover is read off the row, and every reason to reveal is one selector list on
+ * that row, so the affordance being shown and the occupant standing down are the
+ * same condition rather than two lists to keep inverse. Elsewhere in the row,
+ * focus is matched as `:focus-visible`, because ordinary `:focus-within` would
+ * leave a row whose whole surface is a button revealed after a click with the
+ * pointer elsewhere; inside the affordance it is `:focus-within`, since a
+ * control holding focus has to stay painted however it got it. `aria-expanded`
+ * holds the affordance up while a menu it owns is open, where focus alone sits
+ * in portalled content the row does not contain.
+ *
+ * Opacity and `pointer-events` move together, on the affordance and on the
+ * element yielding to it alike: an unpainted control that still answers a click
+ * is a trap, and a faded occupant left in the hit path swallows the clicks meant
+ * for the affordance painted over it. `pointer-events` does not gate keyboard
+ * activation, so the tab path is unaffected.
+ *
+ * The conditions beyond `:hover` sit inside `:is()`, whose list is forgiving:
+ * an engine without `:has()` drops those conditions and keeps the rest of the
+ * rule, so the row still trades its occupants on hover and only loses the focus
+ * and open-menu exceptions. Left in a bare `:not()` list, which is not
+ * forgiving, one unsupported selector would invalidate the whole rule and leave
+ * a yielding occupant hidden at every moment.
+ *
+ * @see https://developer.mozilla.org/en-US/docs/Web/CSS/@media/hover
+ * @see https://developer.mozilla.org/en-US/docs/Web/CSS/@media/pointer
+ * @see https://www.w3.org/WAI/WCAG22/Understanding/content-on-hover-or-focus
+ * --------------------------------------------------------------------------- */
+
+[data-reveal],
+[data-reveal-yield] {
+  transition: opacity var(--anim-fast) var(--anim-ease-out);
+}
+
+/* Explicit rather than inherited, so an affordance laid inside a click-through
+ * overlay is reachable once it is painted. */
+[data-reveal] {
+  pointer-events: auto;
+}
+
+/* Every occupant of a shared slot takes the same cell, so a pair trades places
+ * in one spot and the slot sizes itself from the wider of the two. */
+[data-reveal-slot] > * {
+  grid-area: 1 / 1;
+}
+
+/* Hidden wherever the affordance it shares a slot with is shown, and out of the
+ * hit path while hidden: the two occupy one cell, so a faded occupant left
+ * clickable takes the affordance's clicks. */
+[data-reveal-yield] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (hover: hover) {
+  [data-reveal-row]:not(
+      :hover,
+      [data-reveal-hold],
+      :focus-visible,
+      :is(
+          :has(:focus-visible),
+          :has([data-reveal]:focus-within),
+          :has([data-reveal][aria-expanded="true"]),
+          :has([data-reveal] [aria-expanded="true"])
+        )
+    ) {
+    & [data-reveal] {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    & [data-reveal-yield] {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+}
+
+@media (hover: none) {
+  /* Nothing trades the occupants here, so the slot seats them side by side in
+     source order rather than picking one: the count stays readable and the
+     command stays tappable, at the cost of the width a hover row saves. A slot
+     holding one occupant lays out identically either way, which is why this asks
+     nothing about the contents: the same restoration then reaches every engine,
+     including one with no `:has()` to ask with. */
+  [data-reveal-slot] {
+    grid-auto-flow: column;
+    gap: var(--app-spacing-xs);
+  }
+
+  [data-reveal-slot] > * {
+    grid-area: auto;
+  }
+
+  [data-reveal-yield] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal],
+  [data-reveal-yield] {
+    transition: none;
+  }
+}

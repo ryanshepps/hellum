@@ -1,0 +1,45 @@
+{
+  "name": "@vellumai/service-contracts",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./channels": "./src/channels.ts",
+    "./conversation-handle": "./src/conversation-handle.ts",
+    "./client-metadata": "./src/client-metadata.ts",
+    "./credential-rpc": "./src/credential-rpc.ts",
+    "./desktop-presence": "./src/desktop-presence.ts",
+    "./ingress": "./src/ingress.ts",
+    "./no-response": "./src/no-response.ts",
+    "./remote-web-pairing": "./src/remote-web-pairing.ts",
+    "./twilio-ingress": "./src/twilio-ingress.ts",
+    "./trust-rules": "./src/trust-rules.ts",
+    "./url-normalization": "./src/url-normalization.ts",
+    "./handles": "./src/handles.ts",
+    "./rpc": "./src/rpc.ts",
+    "./attachment-naming": "./src/attachment-naming.ts",
+    "./redacted-credential": "./src/redacted-credential.ts",
+    "./secret-detection": "./src/secret-detection.ts",
+    "./stripe-currency": "./src/stripe-currency.ts",
+    "./error": "./src/error.ts",
+    "./reactions": "./src/reactions.ts",
+    "./guardian-requests": "./src/guardian-requests.ts",
+    "./platform-credential": "./src/platform-credential.ts",
+    "./plan-credit": "./src/plan-credit.ts",
+    "./integration-categories": "./src/integration-categories.ts",
+    "./mcp-oauth": "./src/mcp-oauth.ts"
+  },
+  "scripts": {
+    "typecheck": "bunx tsc --noEmit",
+    "test": "bun test src/"
+  },
+  "dependencies": {
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/bun": "1.2.4",
+    "typescript": "5.7.3"
+  }
+}

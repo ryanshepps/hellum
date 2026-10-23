@@ -1,0 +1,950 @@
+/**
+ * Browser live-voice channel client (WebSocket transport).
+ *
+ * One instance drives
+ * one live-voice session: it resolves the transport URL (cloud velay token or
+ * self-hosted gateway + actor token, via {@link resolveLiveVoiceWsUrl}), opens
+ * the WebSocket, sends the `start` frame on open, streams microphone PCM as
+ * binary frames, and dispatches parsed server frames as typed events.
+ *
+ * Wire contract (see `protocol.ts`, ported from
+ * `assistant/src/live-voice/protocol.ts`):
+ * - `start` / `ptt_release` / `interrupt` / `end` go out as JSON **text** frames.
+ * - Audio chunks go out as raw **binary** frames (PCM bytes) — there is no
+ *   `audio` client frame on the web side.
+ * - Every inbound server frame is JSON text and is parsed via
+ *   {@link parseServerFrame}.
+ *
+ * Connection handshake mirrors the macOS client: a ~10s connect timeout fails
+ * the session if no `ready` frame arrives, and a server `busy` frame is handled
+ * distinctly from `error`.
+ */
+
+import { resolveLiveVoiceWsUrl } from "@/domains/chat/voice/live-voice/connection";
+import {
+  type LiveVoiceArchivedServerFrame,
+  type LiveVoiceAssistantTextDeltaServerFrame,
+  type LiveVoiceBusyServerFrame,
+  type LiveVoiceClientStartFrame,
+  LIVE_VOICE_AUDIO_FORMAT,
+  type LiveVoiceMetricsServerFrame,
+  type LiveVoiceMinimizeRoomServerFrame,
+  type LiveVoiceSessionControl,
+  type LiveVoiceSessionConfig,
+  type LiveVoiceSessionControlServerFrame,
+  type LiveVoiceReadyServerFrame,
+  type LiveVoiceSpeechStartedServerFrame,
+  type LiveVoiceSttFinalServerFrame,
+  type LiveVoiceSttPartialServerFrame,
+  type LiveVoiceActivityServerFrame,
+  type LiveVoiceEntry,
+  type LiveVoiceSightSource,
+  type LiveVoiceThinkingServerFrame,
+  type LiveVoiceTtsAudioServerFrame,
+  type LiveVoiceTtsDoneServerFrame,
+  type LiveVoiceTurnCancelledServerFrame,
+  type LiveVoiceTurnDetectionMode,
+  type LiveVoiceUtteranceDiscardedServerFrame,
+  type LiveVoiceUtteranceEndServerFrame,
+  parseServerFrame,
+} from "@/domains/chat/voice/live-voice/protocol";
+import { supportsSightSessions } from "@/lib/backwards-compat/sight-sessions";
+import { detectClientOs } from "@/runtime/platform-detection";
+
+/** Fail the session if no `ready` frame arrives within this window. */
+const CONNECT_TIMEOUT_MS = 10_000;
+
+/**
+ * WebSocket close codes that are transient and retryable rather than terminal.
+ * `1013` ("Try Again Later") is what velay sends when its tunnel to the
+ * assistant drops ("assistant tunnel disconnected"); `1012` ("Service Restart")
+ * is treated the same. The controller reconnects a hands-free session through
+ * these; the transport also uses them to distinguish a retryable close that
+ * lands *before* `ready` (which must reach the controller with its code) from a
+ * genuine pre-ready connection failure. A locally-initiated close (`code: null`)
+ * is never retryable.
+ */
+export const RETRYABLE_LIVE_VOICE_CLOSE_CODES: ReadonlySet<number> = new Set([
+  1012, 1013,
+  // Older relays use a private code for tunnel backpressure.
+  4013,
+]);
+
+/** Reason a live-voice session failed, surfaced via the `error` event. */
+export type LiveVoiceClientErrorReason =
+  "connection-failed" | "protocol-error" | "timeout";
+
+export interface LiveVoiceClientError {
+  readonly reason: LiveVoiceClientErrorReason;
+  /** Protocol error code from the server `error` frame, when applicable. */
+  readonly code?: string;
+  readonly message: string;
+  /**
+   * True when the server marked the error recoverable and the transport was
+   * kept open — the session is still live. Absent means the client tore down.
+   */
+  readonly recoverable?: boolean;
+}
+
+/**
+ * Payload of the `closed` event. `code` is the WebSocket close code from the
+ * far side (velay/gateway/runtime) when the socket was closed remotely, or
+ * `null` when this client initiated the close (`close()`/`end()`/`fail()`).
+ *
+ * The distinction matters for reconnect: velay closes a proxied session with
+ * code 1013 ("Try Again Later") when its tunnel to the assistant drops — a
+ * transient, retryable condition the session controller should reconnect
+ * through rather than tear down. A local `null` close is deliberate and never
+ * reconnects.
+ */
+export interface LiveVoiceClientClosed {
+  readonly code: number | null;
+  readonly reason: string;
+}
+
+/**
+ * Why a photo the transport accepted never reached the conversation.
+ *
+ * - `unsupported`: the assistant predates the frame entirely.
+ * - `failed`: the assistant knows the frame but could not store the photo.
+ */
+export interface LiveVoiceAttachImageRejected {
+  readonly reason: "unsupported" | "failed";
+  readonly message: string;
+}
+
+/**
+ * A typed turn reached the assistant and was refused, so it will never produce
+ * a reply. Distinct from `sendText` returning false, which is the socket
+ * declining to send at all: this arrives after the caller was told the frame
+ * went out.
+ *
+ * `busy` means the assistant was mid-reply and the same text can simply be
+ * sent again; `unsupported` means this assistant does not take typed turns,
+ * which `sendText`'s gate should already have prevented. A composer must
+ * surface either rather than clearing its input, because nothing else tells
+ * the user their message went nowhere.
+ */
+export interface LiveVoiceTextTurnRejected {
+  readonly reason: "busy" | "unsupported";
+  readonly message: string;
+}
+
+/**
+ * A kept camera frame reached the assistant and was refused.
+ *
+ * `unsupported` is the load-bearing half. It means the assistant answered
+ * `unknown_type`, which is what an assistant with no `sight_frame` handler
+ * returns for any frame type it does not know (`assistant/src/live-voice/
+ * protocol.ts`, the `isLiveVoiceClientFrameType` check ahead of the validation
+ * switch). Such an assistant persists nothing and reclaims nothing, so every
+ * further keep would leave an orphaned attachment behind, and the caller has
+ * to stop sending rather than keep trying.
+ *
+ * Anything else is a routine drop from an assistant that does understand the
+ * frame: it could not persist this one, and it has already reclaimed the
+ * attachment itself.
+ */
+/**
+ * The client leg of one kept frame, sent with the `sight_frame` for the
+ * daemon's log. Durations rather than timestamps: the daemon's clock is not
+ * this one, and only this side can say how long its encode and upload took.
+ * Whole milliseconds, never negative. Mirrors `LiveVoiceSightFrameTiming` in
+ * the daemon's `live-voice/protocol.ts`.
+ */
+export interface LiveVoiceSightFrameTiming {
+  /** Why the frame was kept: a gate reason, or a source's own word for it. */
+  readonly reason: string;
+  /** From the arm that asked for this keep to the keep. Forced keeps only. */
+  readonly armToKeepMs?: number;
+  /** From the keep to a JPEG sized for upload. */
+  readonly keepToEncodedMs: number;
+  /** From the JPEG to an attachment id, which is the HTTP upload. */
+  readonly encodedToUploadedMs: number;
+  /** From the id to the send, which is the wait for older keeps to go first. */
+  readonly uploadedToSentMs: number;
+  /** The JPEG that was uploaded, in bytes. */
+  readonly bytes: number;
+}
+
+export interface LiveVoiceSightFrameRejected {
+  readonly unsupported: boolean;
+  /**
+   * The attachment the error named, when the assistant echoes one.
+   *
+   * Optional on the wire and absent from every assistant at the current
+   * version floor, so a consumer has to work without it. With it, a refusal
+   * can be matched to the keep it belongs to; without it, only the shape of
+   * what is outstanding can be reasoned about.
+   */
+  readonly attachmentId: string | null;
+}
+
+/**
+ * Typed event payloads. Names map 1:1 to the server frame types (camelCased),
+ * plus `closed` for transport teardown. Frame `seq` is preserved so consumers
+ * can order or dedupe.
+ */
+export interface LiveVoiceClientEventMap {
+  ready: LiveVoiceReadyServerFrame;
+  /** Server VAD detected user speech — stop local TTS playback immediately. */
+  speechStarted: LiveVoiceSpeechStartedServerFrame;
+  /** Server VAD closed the utterance; transcription begins. */
+  utteranceEnd: LiveVoiceUtteranceEndServerFrame;
+  /** The closed utterance had no usable speech — return to listening. */
+  utteranceDiscarded: LiveVoiceUtteranceDiscardedServerFrame;
+  sttPartial: LiveVoiceSttPartialServerFrame;
+  sttFinal: LiveVoiceSttFinalServerFrame;
+  thinking: LiveVoiceThinkingServerFrame;
+  /** What the turn is doing right now, or `""` when nothing nameable is. */
+  activity: LiveVoiceActivityServerFrame;
+  assistantTextDelta: LiveVoiceAssistantTextDeltaServerFrame;
+  ttsAudio: LiveVoiceTtsAudioServerFrame;
+  ttsDone: LiveVoiceTtsDoneServerFrame;
+  /** Barge-in aborted the turn — drop buffered tts_audio; no tts_done follows. */
+  turnCancelled: LiveVoiceTurnCancelledServerFrame;
+  /** The completed turn asked the client to dismiss the full-screen room. */
+  minimizeRoom: LiveVoiceMinimizeRoomServerFrame;
+  /** The user asked out loud to end the call or mute (see session-control.ts). */
+  sessionControl: LiveVoiceSessionControlServerFrame;
+  metrics: LiveVoiceMetricsServerFrame;
+  archived: LiveVoiceArchivedServerFrame;
+  /**
+   * A photo was accepted by the transport but refused by the assistant, so it
+   * will never reach a turn. Distinct from `attachImage` returning false,
+   * which is the socket declining to send at all: this one fails after the
+   * client believed it had succeeded, and is the only signal the room gets.
+   */
+  attachImageRejected: LiveVoiceAttachImageRejected;
+  /**
+   * A kept camera frame was accepted by the transport and refused by the
+   * assistant. Carries whether the refusal means this assistant cannot take
+   * the frame at all, which the session has to latch on.
+   */
+  sightFrameRejected: LiveVoiceSightFrameRejected;
+  /**
+   * A typed turn was accepted by the transport and refused by the assistant.
+   * The only signal a caller gets that the turn it believed it sent will
+   * never be answered.
+   */
+  textTurnRejected: LiveVoiceTextTurnRejected;
+  busy: LiveVoiceBusyServerFrame;
+  error: LiveVoiceClientError;
+  /** Fired exactly once when the transport closes (clean or otherwise). */
+  closed: LiveVoiceClientClosed;
+}
+
+export type LiveVoiceClientEventName = keyof LiveVoiceClientEventMap;
+
+export type LiveVoiceClientEventHandler<E extends LiveVoiceClientEventName> = (
+  payload: LiveVoiceClientEventMap[E],
+) => void;
+
+export interface LiveVoiceConnectArgs {
+  assistantId: string;
+  /** Optional conversation to attach the session to. */
+  conversationId?: string;
+  /**
+   * Turn-detection mode sent on the `start` frame. Omitted means "manual"
+   * (push-to-talk).
+   */
+  turnDetection?: LiveVoiceTurnDetectionMode;
+  /**
+   * Per-session "pause before reply" (ms) sent on the `start` frame. Omitted
+   * lets the daemon use its configured default.
+   */
+  silenceThresholdMs?: number;
+  /**
+   * Per-session "interrupt sensitivity" (ms of sustained speech to barge in)
+   * sent on the `start` frame. Omitted lets the daemon use its default.
+   */
+  bargeInMinSpeechMs?: number;
+  /**
+   * Which control asked for the session, sent on the `start` frame. Omitted
+   * means the daemon reports the session's entry point as unknown.
+   */
+  entry?: LiveVoiceEntry;
+  /**
+   * The session controls this client can carry out, sent on the `start`
+   * frame. Omitted means end and mute, which every surface can do; the looks
+   * depend on the device, so the caller works those out.
+   */
+  sessionControls?: readonly LiveVoiceSessionControl[];
+}
+
+/**
+ * What every surface this client runs on (web, the macOS app, iOS) can carry
+ * out: end and mute go through the same store controls everywhere.
+ */
+const DEFAULT_SESSION_CONTROLS: readonly LiveVoiceSessionControl[] = [
+  "end",
+  "mute",
+];
+
+/** Factory so tests can inject a mock WebSocket. Defaults to the global. */
+export type WebSocketFactory = (url: string) => WebSocket;
+
+export interface LiveVoiceChannelClientOptions {
+  /** Override the WebSocket constructor (tests). */
+  webSocketFactory?: WebSocketFactory;
+  /** Override the connect timeout (tests). */
+  connectTimeoutMs?: number;
+}
+
+type SessionState = "idle" | "connecting" | "active" | "closed";
+
+/**
+ * Browser live-voice WebSocket client. Create one instance per session; after
+ * `close()`/`end()`/failure the instance is terminal and must not be reused.
+ */
+export class LiveVoiceChannelClient {
+  private readonly webSocketFactory: WebSocketFactory;
+  private readonly connectTimeoutMs: number;
+
+  private state: SessionState = "idle";
+  private ws: WebSocket | null = null;
+  private connectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private conversationId: string | undefined;
+  private turnDetection: LiveVoiceTurnDetectionMode | undefined;
+  private silenceThresholdMs: number | undefined;
+  private bargeInMinSpeechMs: number | undefined;
+  private entry: LiveVoiceEntry | undefined;
+  private sessionControls: readonly LiveVoiceSessionControl[] =
+    DEFAULT_SESSION_CONTROLS;
+  // Set once an assistant running daemon code older than the `update_config`
+  // frame rejects it with `unknown_type`. We then stop sending config updates
+  // for this session so an older assistant is neither killed nor spammed by the
+  // voice-room settings (version-skew forward-compat).
+  private configUpdatesUnsupported = false;
+
+  // Set from the `ready` frame's `textInput` echo. Typed turns are refused
+  // locally until an assistant says it takes them, for the same reason the
+  // camera is gated: an assistant that predates the frame answers with
+  // `unknown_type`, which is indistinguishable from the `update_config`
+  // rejection and would latch in-session settings off for the whole session.
+  private textInputSupported = false;
+  private sightSessionsSupported = false;
+
+  private readonly listeners: {
+    [E in LiveVoiceClientEventName]: Set<LiveVoiceClientEventHandler<E>>;
+  } = {
+    ready: new Set(),
+    speechStarted: new Set(),
+    utteranceEnd: new Set(),
+    utteranceDiscarded: new Set(),
+    sttPartial: new Set(),
+    sttFinal: new Set(),
+    thinking: new Set(),
+    activity: new Set(),
+    assistantTextDelta: new Set(),
+    ttsAudio: new Set(),
+    ttsDone: new Set(),
+    turnCancelled: new Set(),
+    minimizeRoom: new Set(),
+    sessionControl: new Set(),
+    metrics: new Set(),
+    archived: new Set(),
+    attachImageRejected: new Set(),
+    sightFrameRejected: new Set(),
+    textTurnRejected: new Set(),
+    busy: new Set(),
+    error: new Set(),
+    closed: new Set(),
+  };
+
+  constructor(options: LiveVoiceChannelClientOptions = {}) {
+    this.webSocketFactory =
+      options.webSocketFactory ?? ((url) => new WebSocket(url));
+    this.connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
+  }
+
+  /**
+   * Subscribe to a typed event. Returns an unsubscribe function.
+   */
+  on<E extends LiveVoiceClientEventName>(
+    event: E,
+    handler: LiveVoiceClientEventHandler<E>,
+  ): () => void {
+    this.listeners[event].add(handler);
+    return () => {
+      this.listeners[event].delete(handler);
+    };
+  }
+
+  private emit<E extends LiveVoiceClientEventName>(
+    event: E,
+    payload: LiveVoiceClientEventMap[E],
+  ): void {
+    for (const handler of this.listeners[event]) {
+      handler(payload);
+    }
+  }
+
+  /**
+   * Resolve the transport URL (cloud velay token or self-hosted gateway +
+   * actor token), open the WebSocket, and send the `start` frame on open.
+   * Resolves once the socket is opening; session readiness is signalled via the
+   * `ready` event (or `error` / `busy` if it never arrives).
+   */
+  async connect({
+    assistantId,
+    conversationId,
+    turnDetection,
+    silenceThresholdMs,
+    bargeInMinSpeechMs,
+    entry,
+    sessionControls,
+  }: LiveVoiceConnectArgs): Promise<void> {
+    if (this.state !== "idle") {
+      return;
+    }
+    this.state = "connecting";
+    this.conversationId = conversationId;
+    this.turnDetection = turnDetection;
+    this.silenceThresholdMs = silenceThresholdMs;
+    this.bargeInMinSpeechMs = bargeInMinSpeechMs;
+    this.entry = entry;
+    this.sessionControls = sessionControls ?? DEFAULT_SESSION_CONTROLS;
+
+    let url: string;
+    try {
+      url = await resolveLiveVoiceWsUrl({ assistantId, conversationId });
+    } catch (err) {
+      this.fail(
+        "connection-failed",
+        messageOf(err, "Failed to start live-voice session"),
+      );
+      return;
+    }
+    // A late close()/end() during the await must abort the connect.
+    if (this.state !== "connecting") {
+      return;
+    }
+
+    let ws: WebSocket;
+    try {
+      ws = this.webSocketFactory(url);
+    } catch (err) {
+      this.fail(
+        "connection-failed",
+        messageOf(err, "Failed to open live-voice WebSocket"),
+      );
+      return;
+    }
+    this.ws = ws;
+    ws.binaryType = "arraybuffer";
+
+    ws.onopen = () => this.handleOpen();
+    ws.onmessage = (event) => this.handleMessage(event);
+    ws.onerror = () =>
+      this.fail("connection-failed", "Live-voice WebSocket error");
+    ws.onclose = (event) => this.handleClose(event);
+
+    this.connectTimeout = setTimeout(() => {
+      if (this.state === "connecting") {
+        this.fail(
+          "timeout",
+          `Live-voice connection timed out after ${this.connectTimeoutMs}ms`,
+        );
+      }
+    }, this.connectTimeoutMs);
+  }
+
+  /** Send a binary PCM audio frame. No-op unless the session is active. */
+  sendAudio(pcm: ArrayBuffer): void {
+    if (this.state !== "active") {
+      return;
+    }
+    this.trySend(pcm);
+  }
+
+  /** Mark the current push-to-talk segment as released. */
+  pttRelease(): void {
+    this.sendControlFrame("ptt_release");
+  }
+
+  /** Interrupt assistant speech for barge-in. */
+  interrupt(): void {
+    this.sendControlFrame("interrupt");
+  }
+
+  /**
+   * Update screen-sharing state or turn-detection tuning without reconnecting.
+   * No-op unless active; each field applies independently from the next turn.
+   */
+  updateConfig(config: LiveVoiceSessionConfig): void {
+    if (this.state !== "active" || this.configUpdatesUnsupported) {
+      return;
+    }
+    this.trySend(
+      JSON.stringify({
+        type: "update_config",
+        ...(config.screenSharing !== undefined
+          ? { screenSharing: config.screenSharing }
+          : {}),
+        ...(config.silenceThresholdMs !== undefined
+          ? { silenceThresholdMs: config.silenceThresholdMs }
+          : {}),
+        ...(config.bargeInMinSpeechMs !== undefined
+          ? { bargeInMinSpeechMs: config.bargeInMinSpeechMs }
+          : {}),
+        ...(config.shareTargets !== undefined
+          ? { shareTargets: config.shareTargets }
+          : {}),
+      }),
+    );
+  }
+
+  /**
+   * Tell the session about a photo the user just took, by the id its upload
+   * already returned. The daemon persists it into the conversation as its own
+   * user message and runs no turn.
+   *
+   * Returns whether the frame actually went out. A session that is connecting
+   * or reconnecting cannot take it, and the caller has to know: the photo was
+   * uploaded and the shutter has already animated, so a silent false start
+   * would leave the user believing the assistant can see something it cannot.
+   *
+   * Callers MUST gate this on `useSupportsVoiceCamera`. An assistant that
+   * predates the frame rejects it with `unknown_type`, which is
+   * indistinguishable on the wire from the `update_config` rejection handled
+   * below and would latch config updates off for the session. The gate hides
+   * the camera entirely on those assistants, so this is never reached.
+   */
+  attachImage(attachmentId: string): boolean {
+    if (this.state !== "active") {
+      return false;
+    }
+    return this.trySend(JSON.stringify({ type: "attach_image", attachmentId }));
+  }
+
+  /**
+   * Share a camera frame the client's gate kept, by the id its upload already
+   * returned. The daemon persists it into the conversation as its own user
+   * message, tagged as a camera frame, and runs no turn.
+   *
+   * Unlike `attachImage` the frame is the camera's pick rather than the
+   * user's, and unlike a photo it needs no receipt: nothing is staged, every
+   * keep lands, and the transcript's order is the order they landed in.
+   *
+   * Returns whether the frame went out, which is all a caller can act on. The
+   * frame is ambient context rather than something the user asked to send, so
+   * a false is not worth reporting: the next keep sends a newer one anyway.
+   *
+   * Callers MUST gate this on `useSupportsSightStream`. An assistant that
+   * predates the frame rejects it with `unknown_type`, and while the branch
+   * below keeps that out of the `update_config` bucket, an ungated sampler
+   * would still be sending a frame every few seconds into a void.
+   */
+  sightFrame(
+    attachmentId: string,
+    timing?: LiveVoiceSightFrameTiming,
+    lifecycle?: { cameraEpoch: number; source: LiveVoiceSightSource },
+  ): boolean {
+    if (this.state !== "active") {
+      return false;
+    }
+    return this.trySend(
+      JSON.stringify({
+        type: "sight_frame",
+        attachmentId,
+        ...(this.sightSessionsSupported && lifecycle ? lifecycle : {}),
+        ...(timing ? { timing } : {}),
+      }),
+    );
+  }
+
+  sightStart(cameraEpoch: number, source: LiveVoiceSightSource): boolean {
+    if (this.state !== "active" || !this.sightSessionsSupported) {
+      return false;
+    }
+    return this.trySend(
+      JSON.stringify({ type: "sight_start", cameraEpoch, source }),
+    );
+  }
+
+  sightEnd(cameraEpoch: number): boolean {
+    if (this.state !== "active" || !this.sightSessionsSupported) {
+      return false;
+    }
+    return this.trySend(JSON.stringify({ type: "sight_end", cameraEpoch }));
+  }
+
+  /**
+   * Take a turn by typing it instead of speaking it. The daemon answers on the
+   * same session, out loud.
+   *
+   * Returns whether the frame went out. False means the turn was not taken:
+   * the session is not active, or this assistant predates typed turns. Callers
+   * must surface that rather than clear their input, because nothing else will
+   * tell the user their message went nowhere.
+   *
+   * A turn the daemon refuses because it is mid-reply comes back as a
+   * `recoverable` error frame carrying `frameType: "text"`, not as a false
+   * here: the frame went out, and the answer arrived later.
+   *
+   * `hidden` marks the turn as an internal instruction rather than something
+   * the user typed: it still drives the turn and the model still sees it, but
+   * it never renders in the transcript. An assistant too old to know the field
+   * ignores it and persists the turn visibly, which no answer here reports, so
+   * text sent this way must still read acceptably to a human.
+   */
+  sendText(text: string, options?: { hidden?: boolean }): boolean {
+    if (this.state !== "active" || !this.textInputSupported) {
+      return false;
+    }
+    const trimmed = text.trim();
+    if (trimmed.length === 0) {
+      return false;
+    }
+    return this.trySend(
+      JSON.stringify({
+        type: "text",
+        text: trimmed,
+        ...(options?.hidden === true ? { hidden: true } : {}),
+      }),
+    );
+  }
+
+  /** Whether this session's assistant accepts typed turns. */
+  get supportsTextInput(): boolean {
+    return this.textInputSupported;
+  }
+
+  /**
+   * End the session gracefully: best-effort send `end`, then always close the
+   * socket. A quick-cancel while still CONNECTING simply skips the (impossible)
+   * `end` send and resolves as a clean close rather than a timeout failure.
+   */
+  end(): void {
+    if (this.state !== "connecting" && this.state !== "active") {
+      return;
+    }
+    // Only the `end` frame is meaningful here, and it's strictly best-effort:
+    // trySend() no-ops unless the socket is OPEN, so this never throws while the
+    // socket is still CONNECTING. close() is reached unconditionally below.
+    this.trySend(JSON.stringify({ type: "end" }));
+    this.close();
+  }
+
+  /** Close the WebSocket immediately. Idempotent. */
+  close(): void {
+    if (this.state === "closed") {
+      return;
+    }
+    this.teardown();
+    // Locally initiated: `code: null` tells the controller this was a
+    // deliberate close (never a reconnect trigger).
+    this.emit("closed", { code: null, reason: "client closed" });
+  }
+
+  private handleOpen(): void {
+    if (this.state !== "connecting" || !this.ws) {
+      return;
+    }
+    const startFrame: LiveVoiceClientStartFrame = {
+      type: "start",
+      audio: LIVE_VOICE_AUDIO_FORMAT,
+      client: detectClientOs(),
+      // Unconditional: this client can always take a turn without the
+      // microphone (see sendText), so a missing speech-to-text leg is
+      // degradation rather than failure. Without it the daemon refuses the
+      // session outright with `credentials_unavailable`, which is precisely
+      // the outcome the text-only path exists to avoid.
+      textInput: true,
+      sessionControls: this.sessionControls,
+      // Unconditional: every look this client carries out ends in a fresh
+      // frame (the screen share and the room's sight hooks both take one), so
+      // the assistant can answer a look without waiting for more speech.
+      lookFrames: true,
+      ...(this.entry ? { entry: this.entry } : {}),
+      ...(this.conversationId ? { conversationId: this.conversationId } : {}),
+      ...(this.turnDetection ? { turnDetection: this.turnDetection } : {}),
+      ...(this.silenceThresholdMs !== undefined
+        ? { silenceThresholdMs: this.silenceThresholdMs }
+        : {}),
+      ...(this.bargeInMinSpeechMs !== undefined
+        ? { bargeInMinSpeechMs: this.bargeInMinSpeechMs }
+        : {}),
+    };
+    this.trySend(JSON.stringify(startFrame));
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    if (this.state === "closed") {
+      return;
+    }
+    // Inbound audio (if any) arrives as binary; the wire protocol carries all
+    // server payloads as JSON text, so binary frames are not expected. Ignore
+    // them rather than mis-parsing bytes as JSON.
+    if (typeof event.data !== "string") {
+      return;
+    }
+
+    const frame = parseServerFrame(event.data);
+    switch (frame.type) {
+      case "ready":
+        if (this.state !== "connecting") {
+          return;
+        }
+        this.clearConnectTimeout();
+        this.state = "active";
+        this.textInputSupported = frame.textInput === true;
+        this.sightSessionsSupported = supportsSightSessions(frame);
+        this.emit("ready", frame);
+        return;
+      case "busy":
+        this.emit("busy", frame);
+        this.close();
+        return;
+      case "speech_started":
+        this.emit("speechStarted", frame);
+        return;
+      case "utterance_end":
+        this.emit("utteranceEnd", frame);
+        return;
+      case "utterance_discarded":
+        this.emit("utteranceDiscarded", frame);
+        return;
+      case "stt_partial":
+        this.emit("sttPartial", frame);
+        return;
+      case "stt_final":
+        this.emit("sttFinal", frame);
+        return;
+      case "thinking":
+        this.emit("thinking", frame);
+        return;
+      case "activity":
+        this.emit("activity", frame);
+        return;
+      case "assistant_text_delta":
+        this.emit("assistantTextDelta", frame);
+        return;
+      case "tts_audio":
+        this.emit("ttsAudio", frame);
+        return;
+      case "tts_done":
+        this.emit("ttsDone", frame);
+        return;
+      case "turn_cancelled":
+        this.emit("turnCancelled", frame);
+        return;
+      case "minimize_room":
+        this.emit("minimizeRoom", frame);
+        return;
+      case "session_control":
+        this.emit("sessionControl", frame);
+        return;
+      case "metrics":
+        this.emit("metrics", frame);
+        return;
+      case "archived":
+        this.emit("archived", frame);
+        return;
+      case "error": {
+        // `frameType` names what the error is about, which is what keeps a
+        // failed photo out of the buckets it would otherwise land in.
+        //
+        // Two cases reach here for a photo. An assistant too old to know the
+        // frame rejects it with `unknown_type`, which is byte-identical to the
+        // `update_config` rejection this client has always sent
+        // optimistically; and a current assistant that could not store the
+        // photo answers with a `recoverable` error, which would otherwise be
+        // filed with the transient transcriber and TTS blips that share that
+        // flag. Both leave the user believing the assistant can see something
+        // it never received, so both are reported.
+        const about =
+          "frameType" in frame && typeof frame.frameType === "string"
+            ? frame.frameType
+            : null;
+        if (about === "attach_image") {
+          console.warn(`live-voice: photo not attached: ${frame.message}`);
+          this.emit("attachImageRejected", {
+            reason: frame.code === "unknown_type" ? "unsupported" : "failed",
+            message: frame.message,
+          });
+          return;
+        }
+        if (about === "sight_start") {
+          console.warn(
+            `live-voice: camera tracking unavailable: ${frame.message}`,
+          );
+          this.sightSessionsSupported = false;
+          return;
+        }
+        if (about === "sight_frame") {
+          // Kept out of the two buckets below, which is what the attribution
+          // buys. An `unknown_type` here must not reach the `update_config`
+          // latch and turn the room's settings off for the session, and a
+          // `recoverable` refusal must not reach the recoverable-error
+          // handler, which returns a hands-free session from `transcribing` to
+          // `listening` and would disturb a turn over a frame nobody asked to
+          // send.
+          //
+          // The two shapes mean opposite things, so the session is told which
+          // one arrived. `unknown_type` is an assistant that does not know the
+          // frame: it persists nothing and reclaims nothing, so the session
+          // must stop sending. Anything else is one keep an assistant that
+          // does know the frame could not persist, and it has already
+          // reclaimed that attachment itself.
+          console.warn(`live-voice: camera frame not shared: ${frame.message}`);
+          this.emit("sightFrameRejected", {
+            unsupported: frame.code === "unknown_type",
+            // Read defensively: the field is optional, and absent from every
+            // assistant at the version floor this frame is gated on.
+            attachmentId:
+              "attachmentId" in frame &&
+              typeof frame.attachmentId === "string" &&
+              frame.attachmentId.length > 0
+                ? frame.attachmentId
+                : null,
+          });
+          return;
+        }
+        if (about === "text") {
+          // Both shapes land here and neither is a session problem: a refusal
+          // because the assistant is mid-reply (recoverable), and an
+          // `unknown_type` from an assistant too old to know the frame, which
+          // `sendText`'s gate should already have prevented. Emitted rather
+          // than falling through, where the first would be filed with the
+          // transient transcriber blips and the second would wrongly latch
+          // in-session settings off.
+          console.warn(`live-voice: typed turn not taken: ${frame.message}`);
+          this.emit("textTurnRejected", {
+            reason: frame.code === "unknown_type" ? "unsupported" : "busy",
+            message: frame.message,
+          });
+          return;
+        }
+        // Daemons predating `frameType` omit it, so an unattributed
+        // `unknown_type` falls back to the settings frame. That is the safe
+        // guess: it is the only frame this client sends without a version
+        // gate, and the camera frames are gated (`useSupportsVoiceCamera`,
+        // `useSupportsSightStream`) so neither should be in flight against an
+        // assistant that old. Anything new sent from here needs a gate or a
+        // `frameType`, or its rejection lands in the wrong bucket.
+        if (frame.code === "unknown_type") {
+          this.configUpdatesUnsupported = true;
+          console.warn(
+            "live-voice: assistant rejected update_config (unknown_type); " +
+              "in-session settings changes won't apply until it is upgraded",
+          );
+          return;
+        }
+        // A recoverable mid-session error leaves the transport open; the
+        // session controller decides whether the session survives. (`in`
+        // narrows past LiveVoiceInvalidJsonFrame, which is never recoverable.)
+        if (
+          "recoverable" in frame &&
+          frame.recoverable === true &&
+          this.state === "active"
+        ) {
+          this.emit("error", {
+            reason: "protocol-error",
+            code: frame.code,
+            message: frame.message,
+            recoverable: true,
+          });
+          return;
+        }
+        this.fail("protocol-error", frame.message, frame.code);
+        return;
+      }
+      case "unknown_frame":
+        // Frame types from a newer server than this client. Ignore so
+        // protocol additions never kill older clients.
+        console.warn(
+          `live-voice: ignoring unknown server frame type "${frame.frameType}"`,
+        );
+        return;
+    }
+  }
+
+  private handleClose(event: CloseEvent): void {
+    if (this.state === "closed") {
+      return;
+    }
+    // An unexpected close before `ready` is normally a connection failure — but
+    // a *retryable* close (velay's 1012/1013) can land pre-`ready` when a
+    // reconnect races the tunnel's re-registration. Forward those as a normal
+    // close carrying the code so the controller can spend its remaining
+    // reconnect budget instead of failing the session on the first blip;
+    // genuine pre-ready closes still fail.
+    if (
+      this.state === "connecting" &&
+      !RETRYABLE_LIVE_VOICE_CLOSE_CODES.has(event.code)
+    ) {
+      this.fail(
+        "connection-failed",
+        "Live-voice WebSocket closed before ready",
+      );
+      return;
+    }
+    this.teardown();
+    // Forward the far-side close code so the controller can reconnect through a
+    // retryable tunnel drop (velay 1013).
+    this.emit("closed", { code: event.code, reason: event.reason });
+  }
+
+  private sendControlFrame(type: "ptt_release" | "interrupt"): void {
+    if (this.state !== "active") {
+      return;
+    }
+    this.trySend(JSON.stringify({ type }));
+  }
+
+  /**
+   * Best-effort send: only writes to the socket when it is actually OPEN.
+   * Calling `send()` on a CONNECTING (or CLOSING/CLOSED) WebSocket throws
+   * `InvalidStateError` in browsers, so guarding on `readyState` keeps a
+   * quick-cancel during connect (and any late send) from throwing.
+   */
+  private trySend(data: string | ArrayBuffer): boolean {
+    const ws = this.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(data);
+      return true;
+    }
+    return false;
+  }
+
+  private fail(
+    reason: LiveVoiceClientErrorReason,
+    message: string,
+    code?: string,
+  ): void {
+    if (this.state === "closed") {
+      return;
+    }
+    this.teardown();
+    this.emit("error", { reason, message, ...(code ? { code } : {}) });
+    // Locally initiated after surfacing the failure; never a reconnect trigger.
+    this.emit("closed", { code: null, reason: message });
+  }
+
+  private teardown(): void {
+    this.state = "closed";
+    this.clearConnectTimeout();
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      ws.close();
+    }
+  }
+
+  private clearConnectTimeout(): void {
+    if (this.connectTimeout !== null) {
+      clearTimeout(this.connectTimeout);
+      this.connectTimeout = null;
+    }
+  }
+}
+
+function messageOf(err: unknown, fallback: string): string {
+  return err instanceof Error ? err.message : fallback;
+}

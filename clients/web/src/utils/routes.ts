@@ -1,0 +1,612 @@
+/**
+ * Centralized URL registry for app-internal navigation.
+ *
+ * All paths are absolute app paths — pass them directly to `<Link to>`,
+ * `navigate()`, `window.location.href`, and pathname comparisons. Normal app
+ * modes run the router at `/`; remote-gateway mode may add a public ingress
+ * prefix as the React Router basename while keeping these app paths unchanged.
+ *
+ * Captured paths (e.g. inputs to `sanitizeReturnTo`, query-string round-trips)
+ * are values, not constants — do NOT rewrite those through this module.
+ */
+
+import { isElectron } from "@/runtime/is-electron";
+import { WWW_DOMAIN } from "@/utils/domains";
+
+const r = <const T extends string>(path: T): T => path;
+
+const dyn = (parent: string, id: string): string => `${parent}/${id}`;
+const LOCAL_ADMIN_ORIGIN = "http://localhost:3000";
+const SETTINGS_USAGE_PATH = r("/assistant/settings/usage");
+const PLANS_PATH = r("/assistant/plans");
+
+/**
+ * Search param the chat transcript reads on load to scroll to and highlight a
+ * specific message (e.g. the "Open" button on a saved bookmark). Shared by the
+ * link producer (settings) and the consumer (chat).
+ */
+export const SCROLL_TO_MESSAGE_PARAM = "message";
+
+/**
+ * Path segment introducing the app a conversation URL keeps on screen
+ * (`/assistant/conversations/:conversationId/app/:appId`). Shared by the route
+ * tree in `routes.tsx`, the URL producers ({@link routes.conversation} and
+ * friends), and the parser ({@link appIdForPath}) so the spelling can't drift.
+ */
+export const CONVERSATION_APP_SEGMENT = "app";
+
+/**
+ * Search param naming a Pro package. Carried by the checkout deep link
+ * (`/assistant/checkout?package=<slug>`) that the marketing pricing CTAs
+ * target, and by the plans takeover's one-shot switch deep link
+ * ({@link routes.plansForPackage}). Shared by every producer and reader so the
+ * spelling can't drift.
+ */
+export const PACKAGE_PARAM = "package";
+
+/**
+ * Search params that fire once on the entry carrying them: an auto-send
+ * prompt, its relay token, and the document a conversation URL opens with.
+ * An entry holding one is not a destination to pop back to, since the pop
+ * would re-fire it, so the app and document entry recorders both refuse it.
+ */
+const ONE_SHOT_ENTRY_PARAMS = ["prompt", "relay", "document"] as const;
+
+/** Whether `search` carries a param that would re-fire on a pop back to it. */
+export function hasOneShotEntryParam(search: string): boolean {
+  const params = new URLSearchParams(search);
+  return ONE_SHOT_ENTRY_PARAMS.some((key) => params.has(key));
+}
+
+/**
+ * Search params the All chats page reads to preselect a chip: a channel, a
+ * custom group, or one of the two named views. Declared here beside the URL
+ * producer so the page and its links cannot spell them differently.
+ */
+export const ALL_CHATS_CHANNEL_PARAM = "channel";
+export const ALL_CHATS_GROUP_PARAM = "group";
+export const ALL_CHATS_FILTER_PARAM = "filter";
+
+export const routes = {
+  assistant: r("/assistant"),
+  /**
+   * Standalone About page. Lives under `/assistant/*` so it falls inside
+   * `clients/web/vite.config.ts`'s `base: "/assistant/"` and Vite's SPA
+   * fallback serves it in dev. Declared as a sibling of `/assistant`
+   * in `routes.tsx` rather than a child, so it bypasses the app's auth
+   * middleware and `RootLayout` — it's metadata, not the app.
+   *
+   * Mounted from the Electron host (`clients/macos/src/main/about.ts`)
+   * into a frameless BrowserWindow; the route is also reachable from
+   * the web build, where the runtime wrapper degrades to a "—" fallback.
+   */
+  about: r("/assistant/about"),
+  /**
+   * Bundle confirmation page. Standalone like About — sits under
+   * `/assistant/*` for Vite SPA fallback but outside the auth tree so
+   * bundles can be confirmed before sign-in. Mounted by the Electron
+   * host (`clients/macos/src/main/bundle-confirmation.ts`) into a
+   * dedicated BrowserWindow.
+   */
+  bundleConfirm: r("/assistant/bundle/confirm"),
+  remotePair: r("/assistant/pair"),
+  /**
+   * Public one-time credential entry page, opened from a single-use
+   * credential-request link (`?token=` carries the secret-request token).
+   * Same standalone pattern as `remotePair`: lives under `/assistant/*` for
+   * the Vite SPA fallback but is declared OUTSIDE the auth-protected tree in
+   * `routes.tsx` — the person opening the link may have no Vellum session.
+   */
+  credentialEntry: r("/assistant/credentials/enter"),
+  quickInput: r("/assistant/quick-input"),
+  /**
+   * All chats: the whole conversation history as one page, banded by date and
+   * narrowed with a chip row. Behind the `sidebar-done` flag; the route sends
+   * the user to chat when the flag is off.
+   *
+   * A link that preselects a chip appends the search string
+   * `allChatsSearchFor` builds (`domains/chat/utils/all-chats-filters.ts`),
+   * so the producer and the page read one spelling of the params.
+   */
+  allChats: r("/assistant/chats"),
+  conversations: r("/assistant/conversations"),
+  /** Conversation URL, optionally naming the app the viewer keeps on screen.
+   *  `appId` is passed through unencoded, like {@link routes.library.app};
+   *  `useParams` and {@link appIdForPath} both decode the segment on the way
+   *  back. */
+  conversation: (key: string, appId?: string | null) => {
+    const base = dyn(r("/assistant/conversations"), key);
+    return appId ? `${base}/${CONVERSATION_APP_SEGMENT}/${appId}` : base;
+  },
+  /** Conversation URL that asks the transcript to scroll to + highlight a
+   *  specific message on load. */
+  conversationAtMessage: (
+    conversationId: string,
+    messageId: string,
+    appId?: string | null,
+  ) =>
+    `${routes.conversation(conversationId, appId)}?${SCROLL_TO_MESSAGE_PARAM}=${encodeURIComponent(messageId)}`,
+  /** Conversation URL carrying `prompt` via the `?prompt=` pathway (see
+   *  `use-auto-send-effects.ts`). Lets another surface (app viewer, document
+   *  feedback) relay a message into a conversation. The prompt is only sent
+   *  on the user's behalf when the navigation also carries
+   *  `autoSendPromptState` (`utils/auto-send-prompt.ts`); a bare URL pre-fills
+   *  the composer instead. An optional `relayToken` makes the URL unique so
+   *  identical prompts relayed back-to-back still re-fire the auto-send (the
+   *  dedupe keys on the token). */
+  conversationWithPrompt: (
+    conversationId: string,
+    prompt: string,
+    relayToken?: string,
+    appId?: string | null,
+  ) => {
+    const base = `${routes.conversation(conversationId, appId)}?prompt=${encodeURIComponent(prompt)}`;
+    return relayToken
+      ? `${base}&relay=${encodeURIComponent(relayToken)}`
+      : base;
+  },
+  /**
+   * LLM-context inspector for a single conversation. The conversation id
+   * lives in the URL path so the link is sharable and the page can route
+   * directly to its data without leaning on captured search params.
+   */
+  inspect: (conversationId: string) =>
+    `${dyn(r("/assistant/conversations"), conversationId)}/inspect`,
+  logs: {
+    root: r("/assistant/logs"),
+    emails: r("/assistant/logs/emails"),
+    systemEvents: r("/assistant/logs/system-events"),
+  },
+  account: {
+    root: r("/account"),
+    login: r("/account/login"),
+    signup: r("/account/signup"),
+    providerSignup: r("/account/provider/signup"),
+    providerCallback: r("/account/provider/callback"),
+    oauth: {
+      popupComplete: r("/account/oauth/popup-complete"),
+      complete: r("/account/oauth/complete"),
+      desktopComplete: r("/account/oauth/desktop-complete"),
+    },
+  },
+
+  welcome: r("/assistant/welcome"),
+  selectAssistant: r("/assistant/select-assistant"),
+  reviewTerms: r("/assistant/review-terms"),
+
+  onboarding: {
+    // Platform onboarding welcome/front door. Not the funnel entrypoint
+    // (privacy still is) — it's the in-SPA landing spot for "Back" out of the
+    // privacy screen in platform mode, with a single CTA back into the flow.
+    start: r("/assistant/onboarding/start"),
+    hosting: r("/assistant/onboarding/hosting"),
+    apiKey: r("/assistant/onboarding/api-key"),
+    privacy: r("/assistant/onboarding/privacy"),
+    hatching: r("/assistant/onboarding/hatching"),
+    // SPIKE — research-onboarding front door. Reachable on demand behind auth
+    // alone (no flag; see routes.tsx).
+    research: r("/assistant/onboarding/research"),
+  },
+
+  /**
+   * Schedules surface — a drill-down section under the assistant overview
+   * (`identity`), sharing the About Assistant chrome with Skills, Plugins,
+   * etc. `detail` deep-links a single schedule's drawer. Path-based (not
+   * `?tab=`) so the focused schedule is bookmarkable and shareable; both
+   * paths render `SchedulesPage`, which derives the selection from the URL.
+   */
+  schedules: {
+    root: r("/assistant/schedules"),
+    detail: (scheduleId: string) => dyn(r("/assistant/schedules"), scheduleId),
+  },
+  identity: r("/assistant/identity"),
+  /**
+   * Slider-based personality editor, drilled into from the assistant
+   * overview (`identity`). Lives alongside the other About Assistant
+   * sections so it inherits the shared drill-down chrome.
+   */
+  personality: r("/assistant/personality"),
+  memory: r("/assistant/memory"),
+  /**
+   * The Inspiration List: every activation task of the active persona list,
+   * reached from the Preferences menu and from the checklist's celebration
+   * modal. A standalone page rather than an About Assistant section, so it
+   * carries no `ABOUT_ASSISTANT_SECTIONS` entry, inherits none of that
+   * drill-down chrome and takes no sidebar highlight.
+   */
+  activationList: r("/assistant/suggestions"),
+  /**
+   * The My Superpowers surface — skills and plugins combined into one
+   * list. The legacy `/assistant/skills` and `/assistant/plugins` list
+   * URLs redirect here (query params preserved) so old bookmarks and
+   * deep links keep working.
+   */
+  superpowers: r("/assistant/superpowers"),
+  /** Legacy Plugins list URL — redirects to `superpowers`. Per-plugin
+   *  deep links (`/assistant/plugins/:name`) still resolve through it. */
+  plugins: r("/assistant/plugins"),
+  /**
+   * Skill deep links. The list at `root` redirects to `superpowers`;
+   * `detail` deep-links a single skill (`/assistant/skills/:skillId`).
+   *
+   * Callers pass raw skill ids. skills.sh catalog ids are namespaced with
+   * slashes (`org/repo/skill`), so `detail` percent-encodes the id to keep it
+   * a single path segment — otherwise it would never match the
+   * `skills/:skillId` route. React Router decodes route params, so
+   * `useParams()` in the detail page yields the original id unchanged.
+   */
+  skills: {
+    root: r("/assistant/skills"),
+    detail: (skillId: string) =>
+      dyn(r("/assistant/skills"), encodeURIComponent(skillId)),
+  },
+  workspace: r("/assistant/workspace"),
+  library: {
+    root: r("/assistant/library"),
+    app: (slug: string) => dyn(r("/assistant/library"), slug),
+  },
+
+  document: (surfaceId: string) => dyn(r("/assistant/documents"), surfaceId),
+
+  connect: r("/assistant/connect"),
+
+  channels: r("/assistant/channels"),
+  /**
+   * The Assistant Inbox: the mail the assistant has received and sent at
+   * its managed address, or the setup and upgrade cards that stand in for
+   * it. Off the platform the route redirects to chat.
+   */
+  assistantInbox: r("/assistant/inbox"),
+  /** The inbox open on one message: the folder it is in, and its id. */
+  assistantInboxMessage: (id: string, folder: "received" | "sent") =>
+    `${r("/assistant/inbox")}?folder=${folder}&message=${encodeURIComponent(id)}` as const,
+
+  /**
+   * Contacts surface, a drill-down section under the assistant overview
+   * (`identity`). `detail` deep-links one contact. Path-based (not `?tab=`)
+   * so the open contact is bookmarkable and shareable; both paths render
+   * `ContactsPage`, which derives the selection from the URL.
+   *
+   * Contact ids are caller-supplied, so `detail` percent-encodes the id to
+   * keep it a single path segment: one carrying a slash would never match
+   * the `contacts/:contactId` route. React Router decodes route params, so
+   * `useParams()` in the page yields the original id unchanged.
+   */
+  contacts: {
+    root: r("/assistant/contacts"),
+    detail: (contactId: string) =>
+      dyn(r("/assistant/contacts"), encodeURIComponent(contactId)),
+  },
+
+  /** Full-screen pricing takeover ("View Plans") — renders outside ChatLayout
+   *  chrome, a sibling of the settings/logs full-screen shells. */
+  plans: PLANS_PATH,
+  /**
+   * Plans takeover URL that opens the in-place package-switch flow for `key`
+   * on load. A one-shot deep link: the page consumes the param, strips it, and
+   * routes the key through the same guards a card click gets.
+   */
+  plansForPackage: (key: string) =>
+    `${PLANS_PATH}?${PACKAGE_PARAM}=${encodeURIComponent(key)}`,
+
+  /**
+   * Deep-link checkout entrypoint. The marketing pricing CTAs route here (via
+   * auth `returnTo`) with `?package=<slug>` to start Stripe checkout for a
+   * chosen Pro package. Sits behind auth but OUTSIDE `ActiveAssistantGate` so a
+   * brand-new user with no assistant can reach it; the resolver exempts it from
+   * the no-assistant funnel redirect.
+   */
+  checkout: r("/assistant/checkout"),
+
+  settings: {
+    root: r("/assistant/settings"),
+    general: r("/assistant/settings/general"),
+    // Keyboard Shortcuts lives in the Preferences modal on General, not on a
+    // page of its own, so "go to the shortcuts" is General plus the param that
+    // opens it. `/assistant/settings/keyboard-shortcuts` still resolves and
+    // redirects here for older links.
+    keyboardShortcuts: "/assistant/settings/general?preferences=open",
+    ai: r("/assistant/settings/ai"),
+    integrations: r("/assistant/settings/integrations"),
+    credentials: r("/assistant/settings/credentials"),
+    notifications: r("/assistant/settings/notifications"),
+    voice: r("/assistant/settings/voice"),
+    sounds: r("/assistant/settings/sounds"),
+    privacy: r("/assistant/settings/privacy"),
+    bookmarks: r("/assistant/settings/bookmarks"),
+    usage: SETTINGS_USAGE_PATH,
+    // Deep-link straight to the Billing sub-tab (only shown when signed in to
+    // the Vellum platform).
+    usageBilling: `${SETTINGS_USAGE_PATH}?tab=billing`,
+    // Lands on the daily credit limit card inside the Billing tab. The hash
+    // must match `DAILY_CREDIT_LIMIT_ANCHOR_ID` in `daily-credit-limit-card.tsx`
+    // (guarded by that card's test); the platform's daily-limit email links
+    // here via the `/assistant/settings/billing` redirect.
+    usageBillingDailyLimit: `${SETTINGS_USAGE_PATH}?tab=billing#daily-credit-limit`,
+    usageBillingConfigureTopUps: `${SETTINGS_USAGE_PATH}?tab=billing&configure_top_up=1`,
+    // Post-Stripe-Checkout return. The Billing tab opens the Pro onboarding
+    // wizard while `session_id` is in the URL — the same param the platform's
+    // web `success_url` lands on `/assistant/settings/billing` with.
+    usageBillingCheckout: (sessionId: string) => {
+      const params = new URLSearchParams({
+        tab: "billing",
+        session_id: sessionId,
+      });
+      return `${SETTINGS_USAGE_PATH}?${params.toString()}`;
+    },
+    usageForSchedule: (scheduleId: string) => {
+      // Billing is the default tab when available, so force the Usage tab.
+      const params = new URLSearchParams({
+        tab: "usage",
+        range: "7d",
+        groupBy: "schedule",
+        scheduleId,
+      });
+      return `${SETTINGS_USAGE_PATH}?${params.toString()}`;
+    },
+    community: r("/assistant/settings/community"),
+    developer: r("/assistant/settings/developer"),
+    personality: r("/assistant/settings/personality"),
+    mcp: r("/assistant/settings/mcp"),
+    debug: r("/assistant/settings/debug"),
+    dangerZone: r("/assistant/settings/danger-zone"),
+    systemEvents: r("/assistant/settings/system-events"),
+    upgradeCancel: r("/assistant/settings/billing/upgrade/cancel"),
+    upgradeSuccess: r("/assistant/settings/billing/upgrade/success"),
+  },
+
+  admin: {
+    root: r("/admin"),
+  },
+
+  docs: {
+    hostingOptions: r("/docs/hosting-options"),
+    pairADevice: r("/docs/hosting-options/pair-a-device"),
+    localHosting: r("/docs/hosting-options/local-hosting"),
+    legal: {
+      privacyPolicy: r("/docs/privacy-policy"),
+      termsOfUse: r("/docs/vellum-terms-of-use"),
+      dataSharing: r("/docs/data-sharing"),
+      prohibitedUse: r("/docs/prohibited-use"),
+      privacyAndData: r("/docs/trust-security/privacy-and-data"),
+    },
+  },
+} as const;
+
+export interface AboutAssistantSection {
+  readonly key: string;
+  readonly label: string;
+  readonly to: string;
+}
+
+/**
+ * Single source of truth for the About Assistant drill-down sections —
+ * the pages that wear `IntelligenceLayout`'s shared back-button chrome.
+ * Drives the layout chrome (label lookup via
+ * {@link aboutAssistantSectionForPath}), the sidebar's active-section
+ * highlight ({@link isAboutAssistantPath}), and the overview strip's
+ * labels/links (`buildIdentitySections`), so a section added here gets
+ * all three behaviors at once.
+ *
+ * Sub-paths count as inside a section: the legacy plugins/skills paths
+ * still carry the per-item detail routes (so they wear the My
+ * Superpowers chrome), and `/assistant/library/:appId` — the app viewer,
+ * which renders full-bleed *outside* `IntelligenceLayout` — still counts
+ * as Library territory for the sidebar highlight.
+ */
+export const ABOUT_ASSISTANT_SECTIONS = [
+  { key: "schedules", label: "Schedules", to: routes.schedules.root },
+  { key: "superpowers", label: "My Superpowers", to: routes.superpowers },
+  { key: "plugins", label: "My Superpowers", to: routes.plugins },
+  { key: "skills", label: "My Superpowers", to: routes.skills.root },
+  { key: "memory", label: "Memory", to: routes.memory },
+  { key: "library", label: "Library", to: routes.library.root },
+  { key: "workspace", label: "Workspace", to: routes.workspace },
+  { key: "contacts", label: "Contacts", to: routes.contacts.root },
+  { key: "channels", label: "Channels", to: routes.channels },
+] as const satisfies readonly AboutAssistantSection[];
+
+export type AboutAssistantSectionKey =
+  (typeof ABOUT_ASSISTANT_SECTIONS)[number]["key"];
+
+/**
+ * About Assistant pages that render bare — the overview and personality
+ * own their full-bleed stage chrome, so they are not chrome sections.
+ */
+const BARE_ABOUT_ASSISTANT_PATHS: readonly string[] = [
+  routes.identity,
+  routes.personality,
+];
+
+/**
+ * Whether `pathname` names `path` itself, a single trailing slash tolerated:
+ * the router matches `/assistant/contacts/` to the same route as
+ * `/assistant/contacts`, so callers deciding "is this the route, or something
+ * under it" must treat both spellings alike. Sibling of {@link isPathWithin},
+ * which already tolerates the slash through its `${path}/` prefix.
+ */
+export function isPathExactly(pathname: string, path: string): boolean {
+  return pathname === path || pathname === `${path}/`;
+}
+
+const isPathWithin = (pathname: string, path: string): boolean =>
+  pathname === path || pathname.startsWith(`${path}/`);
+
+/**
+ * The chrome section `pathname` falls inside, if any. Typed as the registry
+ * entry itself, so a caller comparing `key` against a literal is checked
+ * against the keys that exist.
+ */
+export function aboutAssistantSectionForPath(
+  pathname: string,
+): (typeof ABOUT_ASSISTANT_SECTIONS)[number] | null {
+  return (
+    ABOUT_ASSISTANT_SECTIONS.find(({ to }) => isPathWithin(pathname, to)) ??
+    null
+  );
+}
+
+/** The registry entry for `key` — label/path lookups for the overview strip. */
+export function aboutAssistantSection(
+  key: AboutAssistantSectionKey,
+): AboutAssistantSection {
+  // The key type is proven against the registry, so find() cannot miss.
+  return ABOUT_ASSISTANT_SECTIONS.find((section) => section.key === key)!;
+}
+
+/** Whether `pathname` falls inside the About Assistant section. */
+export function isAboutAssistantPath(pathname: string): boolean {
+  return (
+    BARE_ABOUT_ASSISTANT_PATHS.some((path) => isPathWithin(pathname, path)) ||
+    aboutAssistantSectionForPath(pathname) !== null
+  );
+}
+
+/** Whether `pathname` is the `/assistant` index, trailing slash tolerated. */
+function isAssistantIndexPath(pathname: string): boolean {
+  return isPathExactly(pathname, routes.assistant);
+}
+
+/**
+ * Whether `pathname` falls inside the conversation *area* — the `/assistant`
+ * index (draft conversation) or anything under `/assistant/conversations/`,
+ * including subroutes like the inspector
+ * (`/assistant/conversations/:id/inspect`). Use for "is the user working in
+ * the context of a conversation" semantics (e.g. the sidebar's active-row
+ * highlight). For "is the chat composer on screen" semantics use
+ * {@link isConversationChatPath} — the inspector has no composer.
+ */
+export function isConversationPath(pathname: string): boolean {
+  return (
+    isAssistantIndexPath(pathname) ||
+    decodePath(pathname).startsWith(`${routes.conversations}/`)
+  );
+}
+
+/**
+ * The pathname the router matches on: one decode over the whole path, so a
+ * malformed escape anywhere keeps every segment raw, exactly as React Router's
+ * own `decodePath` does. A decoded `/` is escaped back to `%2F` so it cannot
+ * split a segment; {@link restoreEncodedSlashes} puts it back inside an id.
+ */
+function decodePath(pathname: string): string {
+  try {
+    return pathname
+      .split("/")
+      .map((segment) => decodeURIComponent(segment).replace(/\//g, "%2F"))
+      .join("/");
+  } catch {
+    return pathname;
+  }
+}
+
+/**
+ * The `/` an id carries, back from the `%2F` that keeps it one segment. React
+ * Router's `matchPath` does this to every param it hands `useParams`, whether
+ * the path decoded or a malformed escape left it raw.
+ */
+function restoreEncodedSlashes(segment: string): string {
+  return segment.replace(/%2F/g, "/");
+}
+
+/**
+ * Sole owner of the conversation URL shape: `/assistant/conversations/:id`,
+ * optionally followed by the app viewer segment (`/app/:appId`), tolerating a
+ * trailing slash. The whole path is decoded first, the way the router decodes
+ * a location before matching it, so an escaped spelling of the prefix names
+ * the route too and the ids are the ones `useParams` yields. Anything else
+ * (the conversations list, a subroute such as the inspector, a deeper path) is
+ * `null`.
+ */
+function parseConversationPath(
+  pathname: string,
+): { conversationId: string; appId: string | null } | null {
+  const decoded = decodePath(pathname);
+  const prefix = `${routes.conversations}/`;
+  if (!decoded.startsWith(prefix)) {
+    return null;
+  }
+  const rest = decoded.slice(prefix.length).replace(/\/+$/, "");
+  if (rest.length === 0) {
+    return null;
+  }
+  const segments = rest.split("/");
+  const conversationId = restoreEncodedSlashes(segments[0]);
+  // An empty id means a doubled slash (`/conversations//app/a1`), never a route.
+  if (conversationId.length === 0) {
+    return null;
+  }
+  if (segments.length === 1) {
+    return { conversationId, appId: null };
+  }
+  if (segments.length === 3 && segments[1] === CONVERSATION_APP_SEGMENT) {
+    const appId = restoreEncodedSlashes(segments[2]);
+    return appId.length > 0 ? { conversationId, appId } : null;
+  }
+  return null;
+}
+
+/**
+ * The conversation id `pathname` names, or `null` when it names none. The
+ * `/assistant` index, which mounts a chat surface without naming a
+ * conversation, yields `null`, and so does a subroute such as the inspector
+ * (`/assistant/conversations/:id/inspect`). The app viewer sub-route
+ * (`/app/:appId`) is accepted because it keeps `ChatPage` mounted, unlike
+ * `InspectPage`, which replaces it.
+ *
+ * {@link isConversationChatPath} and {@link appIdForPath} read the same parse,
+ * so the three cannot drift apart.
+ */
+export function conversationIdForPath(pathname: string): string | null {
+  return parseConversationPath(pathname)?.conversationId ?? null;
+}
+
+/**
+ * The app id `pathname` keeps on screen, or `null` when it names none. The URL
+ * is the source of truth for which app the viewer shows, so the id comes back
+ * decoded and compares equal to the one the viewer holds.
+ */
+export function appIdForPath(pathname: string): string | null {
+  return parseConversationPath(pathname)?.appId ?? null;
+}
+
+/**
+ * Whether `pathname` mounts the conversation chat surface — the `/assistant`
+ * index (draft conversation, via `ConversationRedirect`) or
+ * `/assistant/conversations/:id`, with or without the app viewer sub-route
+ * (`/app/:appId`), which `ChatPage` stays mounted under. Stricter than
+ * {@link isConversationPath}: conversation subroutes such as the inspector
+ * (`/assistant/conversations/:id/inspect`) are excluded because `InspectPage`
+ * replaces `ChatPage` and has no composer.
+ */
+export function isConversationChatPath(pathname: string): boolean {
+  return (
+    isAssistantIndexPath(pathname) || conversationIdForPath(pathname) !== null
+  );
+}
+
+/** Full external URL for a legal/docs page hosted on the marketing site. */
+export function legalUrl(
+  path: (typeof routes.docs.legal)[keyof typeof routes.docs.legal],
+): string {
+  return docsUrl(path);
+}
+
+/** Full external URL for a docs page hosted on the marketing site. */
+export function docsUrl(path: string): string {
+  return `https://${WWW_DOMAIN}${path}`;
+}
+
+/** URL for the platform-hosted admin UI. */
+export function adminUrl(): string {
+  if (isElectron()) {
+    const config = (
+      window as unknown as { __VELLUM_CONFIG__?: { webUrl?: string } }
+    ).__VELLUM_CONFIG__;
+    return `${config?.webUrl ?? window.location.origin}${routes.admin.root}`;
+  }
+  if (import.meta.env.DEV) {
+    return `${LOCAL_ADMIN_ORIGIN}${routes.admin.root}`;
+  }
+  return routes.admin.root;
+}

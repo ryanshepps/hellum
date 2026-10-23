@@ -1,0 +1,957 @@
+import { describe, expect, test } from "bun:test";
+
+import {
+  applyEvent,
+  applyEventsToHistory,
+  emptyHistory,
+  resolveSeed,
+  resolveSnapshot,
+} from "@/domains/chat/transcript/rolling-snapshot";
+import type { PaginatedHistoryResult } from "@/domains/chat/transcript/types";
+import { selectTranscriptMessages } from "@/domains/chat/transcript/select-transcript-messages";
+import type { DisplayMessage } from "@/domains/chat/types/types";
+import { textBody } from "@/domains/chat/utils/message-test-helpers";
+import type { AssistantEvent } from "@/types/event-types";
+import type {
+  AnsweredQuestion,
+  AssistantEventEnvelope,
+} from "@vellumai/assistant-api";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const SEED: PaginatedHistoryResult = {
+  messages: [],
+  hasMore: false,
+  oldestTimestamp: null,
+  oldestMessageId: null,
+  seq: 0,
+};
+
+const queuedSnapshot = (): PaginatedHistoryResult => ({
+  ...SEED,
+  messages: [
+    {
+      id: "req-1",
+      role: "user",
+      queueStatus: "queued",
+      queuePosition: 1,
+    },
+  ],
+  seq: 1,
+});
+
+// `emittedAt` is derived from `seq` so the deterministic creation stamp is
+// `1000 + seq` — the reducer parses it back to that epoch ms.
+function env(seq: number, message: AssistantEvent): AssistantEventEnvelope {
+  return {
+    id: `e${seq}`,
+    seq,
+    emittedAt: new Date(1000 + seq).toISOString(),
+    message,
+  } as AssistantEventEnvelope;
+}
+const stampOf = (seq: number) => 1000 + seq;
+
+const userEcho = (seq: number, id: string, text: string) =>
+  env(seq, {
+    type: "user_message_echo",
+    messageId: id,
+    text,
+  } as AssistantEvent);
+const textDelta = (seq: number, id: string, text: string) =>
+  env(seq, {
+    type: "assistant_text_delta",
+    messageId: id,
+    text,
+  } as AssistantEvent);
+const thinkingDelta = (seq: number, id: string, thinking: string) =>
+  env(seq, {
+    type: "assistant_thinking_delta",
+    messageId: id,
+    thinking,
+  } as AssistantEvent);
+const complete = (seq: number, id: string) =>
+  env(seq, { type: "message_complete", messageId: id } as AssistantEvent);
+const handoff = (seq: number, id: string) =>
+  env(seq, {
+    type: "generation_handoff",
+    messageId: id,
+    queuedCount: 1,
+    attachments: [
+      {
+        id: "screenshot-1",
+        filename: "computer-use-click.png",
+        mimeType: "image/png",
+        data: "c2NyZWVuc2hvdA==",
+        computerUseScreenshot: true,
+      },
+    ],
+  } as AssistantEvent);
+const toolUseStart = (
+  seq: number,
+  id: string,
+  toolUseId: string,
+  name: string,
+) =>
+  env(seq, {
+    type: "tool_use_start",
+    messageId: id,
+    toolUseId,
+    toolName: name,
+    input: {},
+  } as AssistantEvent);
+const toolUsePreviewStart = (
+  seq: number,
+  id: string,
+  toolUseId: string,
+  name: string,
+) =>
+  env(seq, {
+    type: "tool_use_preview_start",
+    messageId: id,
+    toolUseId,
+    toolName: name,
+  } as AssistantEvent);
+const surfacePending = (seq: number, id: string, toolUseId: string) =>
+  env(seq, {
+    type: "ui_surface_pending",
+    surfaceType: "visual",
+    messageId: id,
+    toolUseId,
+  } as AssistantEvent);
+const visualShow = (
+  seq: number,
+  id: string,
+  surfaceId: string,
+  toolCallId?: string,
+) =>
+  env(seq, {
+    type: "ui_surface_show",
+    messageId: id,
+    surfaceId,
+    surfaceType: "visual",
+    data: {},
+    ...(toolCallId ? { toolCallId } : {}),
+  } as AssistantEvent);
+const toolResult = (seq: number, toolUseId: string, isError = false) =>
+  env(seq, {
+    type: "tool_result",
+    toolUseId,
+    result: isError ? "boom" : "Surface displayed",
+    isError,
+  } as AssistantEvent);
+const idle = (seq: number) =>
+  env(seq, {
+    type: "assistant_activity_state",
+    phase: "idle",
+  } as AssistantEvent);
+const surfaceShow = (seq: number, id: string, surfaceId: string) =>
+  env(seq, {
+    type: "ui_surface_show",
+    messageId: id,
+    surfaceId,
+    surfaceType: "form",
+    data: {},
+  } as AssistantEvent);
+
+// A representative turn: user echo → reasoning → answer → finalize.
+const cleanTurn = (): AssistantEventEnvelope[] => [
+  userEcho(1, "u1", "build me a dashboard"),
+  thinkingDelta(2, "a1", "let me consider the layout"),
+  thinkingDelta(3, "a1", " and the data model"),
+  textDelta(4, "a1", "Here is"),
+  textDelta(5, "a1", " your dashboard."),
+  complete(6, "a1"),
+];
+
+// Deterministic PRNG (mulberry32) so the randomized cases are reproducible.
+function rng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Inject replays of already-emitted events at random positions — every injected
+// event has seq <= an earlier one, modelling reconnect replay / resync overlap.
+function withReplays(
+  events: AssistantEventEnvelope[],
+  random: () => number,
+): AssistantEventEnvelope[] {
+  const out: AssistantEventEnvelope[] = [];
+  for (let i = 0; i < events.length; i++) {
+    out.push(events[i]!);
+    if (i > 0 && random() < 0.6) {
+      out.push(events[Math.floor(random() * (i + 1))]!);
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("rolling-snapshot reducer", () => {
+  test("stamps only canonical boundary events and preserves ownership through deltas", () => {
+    const modeSession = { mode: "browser" as const, id: "session-1" };
+    const snapshot = applyEventsToHistory(SEED, [
+      env(1, {
+        type: "user_message_echo",
+        messageId: "u1",
+        text: "Open the page",
+        modeSession,
+      } as AssistantEvent),
+      env(2, {
+        type: "assistant_turn_start",
+        messageId: "a1",
+        modeSession,
+      } as AssistantEvent),
+      textDelta(3, "a1", "Done"),
+      env(4, {
+        type: "message_complete",
+        messageId: "a1",
+        modeSession,
+      } as AssistantEvent),
+    ]);
+
+    expect(snapshot.messages.map((message) => message.modeSession)).toEqual([
+      modeSession,
+      modeSession,
+    ]);
+  });
+
+  test("rebuild is deterministic — no clock/uuid leak in the fold", () => {
+    const events = cleanTurn();
+    expect(applyEventsToHistory(SEED, events)).toEqual(
+      applyEventsToHistory(SEED, events),
+    );
+  });
+
+  test("terminal tool-call finalize is deterministic (Codex P2)", () => {
+    // A running tool call finalized by `message_complete` must stamp
+    // `completedAt` from the event, not `Date.now()`, or rebuild diverges.
+    const events = [toolUseStart(1, "a1", "t1", "bash"), complete(2, "a1")];
+    const a = applyEventsToHistory(SEED, events);
+    const b = applyEventsToHistory(SEED, events);
+    expect(a).toEqual(b);
+    const tool = a.messages[0]?.toolCalls?.[0];
+    expect(tool?.completedAt).toBe(stampOf(2));
+  });
+
+  test("the invariant: a noisy (replayed) stream equals the clean stream", () => {
+    const clean = cleanTurn();
+    const cleanHistory = applyEventsToHistory(SEED, clean);
+    for (let seed = 1; seed <= 200; seed++) {
+      const noisy = withReplays(clean, rng(seed));
+      expect(applyEventsToHistory(SEED, noisy)).toEqual(cleanHistory);
+    }
+  });
+
+  test("idempotent: re-applying a folded event is a no-op (same reference)", () => {
+    const once = applyEvent(SEED, textDelta(1, "a1", "hello"));
+    const twice = applyEvent(once, textDelta(1, "a1", "hello"));
+    expect(twice).toBe(once);
+  });
+
+  test("drops any event at or below the history version", () => {
+    const base = applyEventsToHistory(SEED, cleanTurn()); // seq advances to 6
+    expect(applyEvent(base, textDelta(4, "a1", " (replayed)"))).toBe(base);
+  });
+
+  test("advances the version to the highest seq folded in", () => {
+    expect(applyEventsToHistory(SEED, cleanTurn()).seq).toBe(6);
+  });
+
+  test("total: an unfolded event type leaves message content unchanged", () => {
+    const base = applyEventsToHistory(SEED, cleanTurn());
+    const after = applyEvent(
+      base,
+      env(7, { type: "sync_changed" } as AssistantEvent),
+    );
+    expect(after.messages).toBe(base.messages); // content untouched...
+    expect(after.seq).toBe(7); // ...only the version cursor advances
+  });
+
+  test("opens a row stamped deterministically from the event, then appends", () => {
+    const base = applyEventsToHistory(SEED, [
+      thinkingDelta(2, "a1", "reasoning"),
+      textDelta(3, "a1", "answer"),
+    ]);
+    const assistant = base.messages.find((m) => m.id === "a1");
+    expect(assistant?.timestamp).toBe(stampOf(2)); // the opening event's stamp
+    expect(assistant?.thinkingSegments).toEqual(["reasoning"]);
+    expect(assistant?.textSegments).toEqual(["answer"]);
+  });
+
+  test("folds tool-call and surface events into the turn", () => {
+    const base = applyEventsToHistory(SEED, [
+      toolUseStart(1, "a1", "t1", "bash"),
+      surfaceShow(2, "a1", "s1"),
+    ]);
+    const assistant = base.messages.find((m) => m.id === "a1");
+    expect(assistant?.toolCalls?.map((t) => t.id)).toEqual(["t1"]);
+    expect(assistant?.surfaces?.map((s) => s.surfaceId)).toEqual(["s1"]);
+  });
+
+  test("preserves the snapshot page fields (it IS the /messages shape)", () => {
+    const seeded: PaginatedHistoryResult = {
+      messages: [],
+      hasMore: true,
+      oldestTimestamp: 123,
+      oldestMessageId: "old",
+      seq: 0,
+    };
+    const after = applyEventsToHistory(seeded, [textDelta(1, "a1", "hi")]);
+    expect(after.hasMore).toBe(true);
+    expect(after.oldestTimestamp).toBe(123);
+    expect(after.oldestMessageId).toBe("old");
+  });
+
+  describe("resolveSnapshot (seed / resync)", () => {
+    test("a null tail (gap / no anchor) leaves the snapshot standing alone", () => {
+      const snapshot = applyEventsToHistory(SEED, [
+        textDelta(1, "a1", "persisted"),
+      ]);
+      expect(resolveSnapshot(snapshot, null)).toBe(snapshot);
+    });
+
+    test("replays the buffered tail onto the snapshot", () => {
+      const snapshot = applyEventsToHistory(SEED, [
+        userEcho(1, "u1", "hi"),
+        textDelta(2, "a1", "persisted"),
+      ]);
+      const resolved = resolveSnapshot(snapshot, [
+        textDelta(3, "a1", " + live"),
+      ]);
+      expect(
+        resolved.messages.find((m) => m.id === "a1")?.textSegments,
+      ).toEqual(["persisted + live"]);
+      expect(resolved.seq).toBe(3);
+    });
+
+    test("preserves handoff screenshot provenance through tail replay", () => {
+      const snapshot = applyEventsToHistory(SEED, [
+        textDelta(1, "a1", "persisted"),
+      ]);
+      const event = handoff(2, "a1");
+
+      const resolved = resolveSnapshot(snapshot, [event, event]);
+
+      expect(resolved.messages[0]?.attachments).toMatchObject([
+        {
+          id: "screenshot-1",
+          computerUseScreenshot: true,
+        },
+      ]);
+      expect(resolved.seq).toBe(2);
+    });
+
+    test("idempotent: tail events already in the snapshot are dropped", () => {
+      const snapshot = applyEventsToHistory(SEED, [textDelta(5, "a1", "x")]); // seq 5
+      // A stale tail (<= snapshot.seq) folds to nothing.
+      const resolved = resolveSnapshot(snapshot, [
+        textDelta(4, "a1", " stale"),
+      ]);
+      expect(
+        resolved.messages.find((m) => m.id === "a1")?.textSegments,
+      ).toEqual(["x"]);
+    });
+
+    test("reconciles a nonce-less placeholder after an optimistic steer", () => {
+      const dequeued = env(2, {
+        type: "message_dequeued",
+        conversationId: "conv-1",
+        requestId: "req-1",
+      } as AssistantEvent);
+      const snapshot = queuedSnapshot();
+      snapshot.messages[0] = {
+        ...snapshot.messages[0]!,
+        attachments: [
+          {
+            id: "attachment-1",
+            filename: "report.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 1,
+            previewUrl: null,
+          },
+        ],
+        queueStatus: undefined,
+        queuePosition: undefined,
+      };
+      snapshot.messages.push({
+        id: "nonce-2",
+        clientMessageId: "nonce-2",
+        role: "user",
+        isOptimistic: true,
+        queueStatus: "queued",
+        queuePosition: 2,
+      });
+      const resolved = resolveSnapshot(snapshot, [
+        dequeued,
+        userEcho(3, "persisted-1", "queued message"),
+      ]);
+
+      expect(resolved.messages).toHaveLength(2);
+      expect(resolved.messages[0]?.id).toBe("persisted-1");
+      expect(resolved.messages[0]?.isOptimistic).toBe(false);
+      expect(resolved.messages[0]?.attachments?.[0]?.id).toBe("attachment-1");
+      expect(resolved.messages[1]?.id).toBe("nonce-2");
+    });
+
+    test("retains a correlated queued row when replaying a dequeue", () => {
+      const snapshot = queuedSnapshot();
+      snapshot.messages[0]!.clientMessageId = "nonce-1";
+      const resolved = resolveSnapshot(snapshot, [
+        env(2, {
+          type: "message_dequeued",
+          conversationId: "conv-1",
+          requestId: "req-1",
+        } as AssistantEvent),
+      ]);
+
+      expect(resolved.messages[0]?.queueStatus).toBeUndefined();
+      expect(resolved.messages[0]?.queuePosition).toBeUndefined();
+    });
+
+    test("replays a corrective requeue back onto a dequeued row", () => {
+      const snapshot = queuedSnapshot();
+      const resolved = resolveSnapshot(snapshot, [
+        env(2, {
+          type: "message_dequeued",
+          conversationId: "conv-1",
+          requestId: "req-1",
+        } as AssistantEvent),
+        env(3, {
+          type: "message_requeued",
+          conversationId: "conv-1",
+          requestId: "req-1",
+          position: 1,
+        } as AssistantEvent),
+      ]);
+
+      // The drain gave the message back to the queue, so the row it cleared
+      // has to come back rather than vanish until the next drain.
+      expect(resolved.messages[0]?.queueStatus).toBe("queued");
+      expect(resolved.messages[0]?.queuePosition).toBe(1);
+    });
+
+    test("replays a queued deletion onto a queued snapshot row", () => {
+      const resolved = resolveSnapshot(queuedSnapshot(), [
+        env(2, {
+          type: "message_queued_deleted",
+          conversationId: "conv-1",
+          requestId: "req-1",
+        } as AssistantEvent),
+      ]);
+
+      expect(resolved.messages).toEqual([]);
+    });
+  });
+
+  describe("tool-call preview + inline confirmation", () => {
+    const previewStart = (seq: number, id: string, toolUseId: string) =>
+      env(seq, {
+        type: "tool_use_preview_start",
+        messageId: id,
+        toolUseId,
+        toolName: "bash",
+      } as AssistantEvent);
+    const confirmationRequest = (
+      seq: number,
+      requestId: string,
+      toolUseId: string,
+    ) =>
+      env(seq, {
+        type: "confirmation_request",
+        requestId,
+        toolName: "bash",
+        toolUseId,
+        riskLevel: "low",
+        input: {},
+      } as AssistantEvent);
+    const interactionResolved = (
+      seq: number,
+      requestId: string,
+      kind: string,
+    ) =>
+      env(seq, {
+        type: "interaction_resolved",
+        requestId,
+        kind,
+        state: "cancelled",
+      } as AssistantEvent);
+
+    test("preview-start opens a running tool card the later tool_use_start fills in", () => {
+      const afterPreview = applyEvent(SEED, previewStart(1, "a1", "t1"));
+      const previewCard = afterPreview.messages
+        .find((m) => m.id === "a1")
+        ?.toolCalls?.find((tc) => tc.id === "t1");
+      expect(previewCard).toBeDefined();
+
+      const afterStart = applyEvent(
+        afterPreview,
+        toolUseStart(2, "a1", "t1", "bash"),
+      );
+      // Same card (merged, not duplicated).
+      expect(
+        afterStart.messages.find((m) => m.id === "a1")?.toolCalls,
+      ).toHaveLength(1);
+    });
+
+    test("confirmation_request attaches, interaction_resolved clears the marker", () => {
+      const withTool = applyEventsToHistory(SEED, [
+        toolUseStart(1, "a1", "t1", "bash"),
+      ]);
+      const attached = applyEvent(
+        withTool,
+        confirmationRequest(2, "cr-1", "t1"),
+      );
+      const tc = attached.messages.find((m) => m.id === "a1")?.toolCalls?.[0];
+      expect(tc?.pendingConfirmation?.requestId).toBe("cr-1");
+
+      const cleared = applyEvent(
+        attached,
+        interactionResolved(3, "cr-1", "confirmation"),
+      );
+      expect(
+        cleared.messages.find((m) => m.id === "a1")?.toolCalls?.[0]
+          ?.pendingConfirmation,
+      ).toBeUndefined();
+    });
+
+    test("interaction_resolved for a non-confirmation kind leaves content untouched", () => {
+      const attached = applyEventsToHistory(SEED, [
+        toolUseStart(1, "a1", "t1", "bash"),
+        confirmationRequest(2, "cr-1", "t1"),
+      ]);
+      const after = applyEvent(
+        attached,
+        interactionResolved(3, "cr-1", "host_bash"),
+      );
+      expect(
+        after.messages.find((m) => m.id === "a1")?.toolCalls?.[0]
+          ?.pendingConfirmation?.requestId,
+      ).toBe("cr-1");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Authoritative `processing` flag fold.
+  // -------------------------------------------------------------------------
+  describe("processing flag", () => {
+    const turnStart = (seq: number, id: string) =>
+      env(seq, {
+        type: "assistant_turn_start",
+        messageId: id,
+      } as AssistantEvent);
+    const activityIdle = (seq: number) =>
+      env(seq, {
+        type: "assistant_activity_state",
+        phase: "idle",
+      } as AssistantEvent);
+    const activityThinking = (seq: number) =>
+      env(seq, {
+        type: "assistant_activity_state",
+        phase: "thinking",
+      } as AssistantEvent);
+    // A defined seed = a 0.8.8+ daemon that reported `processing` on /messages.
+    const idleSeed: PaginatedHistoryResult = { ...SEED, processing: false };
+    const busySeed: PaginatedHistoryResult = { ...SEED, processing: true };
+
+    test("turn-start folds processing → true", () => {
+      expect(applyEvent(idleSeed, turnStart(1, "a1")).processing).toBe(true);
+    });
+
+    test("assistant content folds processing → true (turn-start fallback)", () => {
+      expect(applyEvent(idleSeed, textDelta(1, "a1", "hi")).processing).toBe(
+        true,
+      );
+      expect(
+        applyEvent(idleSeed, thinkingDelta(1, "a1", "hmm")).processing,
+      ).toBe(true);
+    });
+
+    test("a non-idle activity phase keeps processing true", () => {
+      expect(applyEvent(busySeed, activityThinking(1)).processing).toBe(true);
+    });
+
+    test("activity_state(idle) folds processing → false", () => {
+      expect(applyEvent(busySeed, activityIdle(1)).processing).toBe(false);
+    });
+
+    test("message_complete folds processing → false", () => {
+      expect(applyEvent(busySeed, complete(1, "a1")).processing).toBe(false);
+    });
+
+    test("undefined seed stays undefined — the pre-0.8.8 version sentinel", () => {
+      // SEED omits `processing`; the fold must never manufacture a value, so
+      // phase-only behavior is preserved for daemons that don't report it.
+      const after = applyEvent(SEED, turnStart(1, "a1"));
+      expect(after.processing).toBeUndefined();
+    });
+
+    test("a replayed lower-seq turn-start cannot resurrect a closed turn", () => {
+      // idle at seq 5 closes the turn; a late/duplicated turn-start at seq 2 is
+      // below the watermark and dropped, so processing stays false.
+      const closed = applyEvent(busySeed, activityIdle(5));
+      expect(closed.processing).toBe(false);
+      expect(applyEvent(closed, turnStart(2, "a1")).processing).toBe(false);
+    });
+
+    test("converges under a noisy, out-of-order lifecycle stream", () => {
+      // The scalar-fold analogue of the message invariant: the highest-seq
+      // lifecycle event wins regardless of arrival order.
+      const clean = [
+        turnStart(1, "a1"),
+        textDelta(2, "a1", "hi"),
+        activityIdle(3),
+      ];
+      const cleanProcessing = applyEventsToHistory(idleSeed, clean).processing;
+      expect(cleanProcessing).toBe(false);
+      for (let seed = 1; seed <= 50; seed++) {
+        const noisy = withReplays(clean, rng(seed));
+        expect(applyEventsToHistory(idleSeed, noisy).processing).toBe(
+          cleanProcessing,
+        );
+      }
+    });
+  });
+});
+
+describe("answered ask_question", () => {
+  const ANSWERED: AnsweredQuestion = {
+    requestId: "req-1",
+    questions: [
+      {
+        id: "q1",
+        question: "Which Alice?",
+        options: [
+          { id: "alice_work", label: "Alice (work)" },
+          { id: "alice_personal", label: "Alice (personal)" },
+        ],
+      },
+    ],
+    responses: [
+      { questionId: "q1", decision: "option", optionId: "alice_work" },
+    ],
+    overall: "completed",
+  };
+
+  const answeredResult = (seq: number, toolUseId: string) =>
+    env(seq, {
+      type: "tool_result",
+      toolUseId,
+      result: "answered",
+      isError: false,
+      answeredQuestion: ANSWERED,
+    } as AssistantEvent);
+
+  test("folds the answered record onto the ask_question tool call", () => {
+    const history = applyEventsToHistory(SEED, [
+      toolUseStart(1, "a1", "t1", "ask_question"),
+      answeredResult(2, "t1"),
+    ]);
+
+    expect(history.messages[0]?.toolCalls?.[0]?.answeredQuestion).toEqual(
+      ANSWERED,
+    );
+  });
+
+  test("a replayed result does not duplicate the answered card", () => {
+    // The card renders one per tool call, so a re-folded event must leave the
+    // tool call count and its record untouched.
+    const events = [
+      toolUseStart(1, "a1", "t1", "ask_question"),
+      answeredResult(2, "t1"),
+    ];
+    const once = applyEventsToHistory(SEED, events);
+    const twice = applyEventsToHistory(SEED, [
+      ...events,
+      answeredResult(2, "t1"),
+    ]);
+
+    expect(twice).toEqual(once);
+    expect(twice.messages[0]?.toolCalls).toHaveLength(1);
+  });
+
+  test("leaves the tool call untouched when the result carries no answer", () => {
+    const history = applyEventsToHistory(SEED, [
+      toolUseStart(1, "a1", "t1", "bash"),
+      toolResult(2, "t1"),
+    ]);
+
+    expect(
+      history.messages[0]?.toolCalls?.[0]?.answeredQuestion,
+    ).toBeUndefined();
+  });
+});
+
+describe("visual placeholder markers", () => {
+  const turnWithPending = (): AssistantEventEnvelope[] => [
+    userEcho(1, "u1", "show me how the internet works"),
+    textDelta(2, "a1", "Here is the path a request takes."),
+    surfacePending(3, "a1", "toolu_viz"),
+  ];
+
+  const pendingOn = (history: PaginatedHistoryResult) =>
+    history.messages.find((m) => m.id === "a1")?.pendingVisualToolUseIds;
+
+  test("records the announced call on the row that is streaming", () => {
+    expect(pendingOn(applyEventsToHistory(SEED, turnWithPending()))).toEqual([
+      "toolu_viz",
+    ]);
+  });
+
+  test("is structurally idempotent: a re-announced call is recorded once", () => {
+    const base = applyEventsToHistory(SEED, [
+      ...turnWithPending(),
+      surfacePending(4, "a1", "toolu_viz"),
+    ]);
+    expect(pendingOn(base)).toEqual(["toolu_viz"]);
+  });
+
+  test("never opens a row of its own when the turn has none", () => {
+    const base = applyEventsToHistory(SEED, [
+      userEcho(1, "u1", "draw it"),
+      surfacePending(2, "a1", "toolu_viz"),
+    ]);
+    expect(base.messages).toHaveLength(1);
+    expect(base.messages[0]?.role).toBe("user");
+  });
+
+  test("the arriving visual retires its own placeholder", () => {
+    const base = applyEventsToHistory(SEED, [
+      ...turnWithPending(),
+      visualShow(4, "a1", "s1", "toolu_viz"),
+    ]);
+    expect(pendingOn(base)).toBeUndefined();
+    expect(base.messages.find((m) => m.id === "a1")?.surfaces).toHaveLength(1);
+  });
+
+  test("a visual with no producing call id retires the row's placeholders", () => {
+    const base = applyEventsToHistory(SEED, [
+      ...turnWithPending(),
+      visualShow(4, "a1", "s1"),
+    ]);
+    expect(pendingOn(base)).toBeUndefined();
+  });
+
+  test("a non-visual surface leaves the placeholder standing", () => {
+    const base = applyEventsToHistory(SEED, [
+      ...turnWithPending(),
+      surfaceShow(4, "a1", "s1"),
+    ]);
+    expect(pendingOn(base)).toEqual(["toolu_viz"]);
+  });
+
+  test("the producing call resolving retires it, success or failure", () => {
+    for (const isError of [false, true]) {
+      const base = applyEventsToHistory(SEED, [
+        ...turnWithPending(),
+        toolResult(4, "toolu_viz", isError),
+      ]);
+      expect(pendingOn(base)).toBeUndefined();
+    }
+  });
+
+  test("another call resolving leaves it standing", () => {
+    const base = applyEventsToHistory(SEED, [
+      ...turnWithPending(),
+      toolResult(4, "toolu_other"),
+    ]);
+    expect(pendingOn(base)).toEqual(["toolu_viz"]);
+  });
+
+  test("the end of the turn retires whatever is left", () => {
+    for (const terminal of [complete(4, "a1"), idle(4)]) {
+      const base = applyEventsToHistory(SEED, [...turnWithPending(), terminal]);
+      expect(pendingOn(base)).toBeUndefined();
+    }
+  });
+
+  test("a replayed stream converges on the clean one", () => {
+    const clean = [
+      ...turnWithPending(),
+      visualShow(4, "a1", "s1", "toolu_viz"),
+    ];
+    const cleanHistory = applyEventsToHistory(SEED, clean);
+    for (let seed = 1; seed <= 50; seed++) {
+      expect(applyEventsToHistory(SEED, withReplays(clean, rng(seed)))).toEqual(
+        cleanHistory,
+      );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A turn that speaks through send_user_message more than once
+// ---------------------------------------------------------------------------
+
+describe("a turn that sends more than one reply", () => {
+  /**
+   * The daemon announces a tool call while its input is still streaming, so
+   * `tool_use_preview_start` for `send_user_message` reaches the client before
+   * the reply text it carries and before the `message_complete` that stamps
+   * the authoritative marker. The row has to know it is private by then: an
+   * unmarked row whose first reply is followed by more work would fold that
+   * reply into "Earlier activity" the moment a later text group appears.
+   */
+  const firstReply = [
+    thinkingDelta(1, "a1", "planning"),
+    toolUseStart(2, "a1", "t-fetch", "web_fetch"),
+    toolUsePreviewStart(3, "a1", "t-send-1", "send_user_message"),
+  ];
+
+  test("marks the row private before the first reply text lands", () => {
+    const history = applyEventsToHistory(SEED, firstReply);
+
+    expect(history.messages[0]?.assistantTextVisibility).toBe("private");
+  });
+
+  test("stays private across both replies and the work between them", () => {
+    const history = applyEventsToHistory(SEED, [
+      ...firstReply,
+      textDelta(4, "a1", "Found it."),
+      complete(5, "a1"),
+      toolUseStart(6, "a1", "t-send-1", "send_user_message"),
+      // The turn keeps working after its first reply.
+      toolUseStart(7, "a1", "t-bash", "bash"),
+      toolUsePreviewStart(8, "a1", "t-send-2", "send_user_message"),
+      textDelta(9, "a1", "All done."),
+    ]);
+
+    const row = history.messages[0];
+    expect(row?.assistantTextVisibility).toBe("private");
+    // Both replies are on the one row, with the work between them, which is
+    // the shape that would otherwise fold the first reply out of sight.
+    expect(
+      row?.contentBlocks?.filter((block) => block.type === "text"),
+    ).toEqual([
+      { type: "text", text: "Found it." },
+      { type: "text", text: "All done." },
+    ]);
+  });
+});
+
+describe("camera-frame echoes", () => {
+  test("keeps a camera frame visible beside a typed send sharing the echo nonce", () => {
+    const optimistic: DisplayMessage = Object.freeze({
+      id: "optimistic-1",
+      role: "user",
+      clientMessageId: "client-1",
+      isOptimistic: true,
+      queueStatus: "queued",
+      queuePosition: 1,
+      ...textBody("What is on the table?"),
+    });
+    const snapshot = applyEventsToHistory(SEED, [
+      env(1, {
+        type: "user_message_echo",
+        messageId: "frame-1",
+        text: "(camera frame)",
+        cameraFrame: true,
+        clientMessageId: "client-1",
+      }),
+    ]);
+
+    const visible = selectTranscriptMessages(snapshot.messages, [optimistic]);
+
+    expect(visible.map((message) => message.id)).toEqual([
+      "frame-1",
+      "optimistic-1",
+    ]);
+    expect(visible[0]).toBe(snapshot.messages[0]);
+    expect(visible[0]).toMatchObject({
+      isCameraFrame: true,
+      ...textBody("(camera frame)"),
+    });
+    expect(visible[0]).not.toHaveProperty("clientMessageId");
+    expect(visible[1]).toBe(optimistic);
+    expect(optimistic).toMatchObject({
+      clientMessageId: "client-1",
+      isOptimistic: true,
+      queueStatus: "queued",
+      queuePosition: 1,
+    });
+
+    const confirmed = applyEventsToHistory(snapshot, [
+      env(2, {
+        type: "user_message_echo",
+        messageId: "user-1",
+        text: "What is on the table?",
+        clientMessageId: "client-1",
+      }),
+    ]);
+    expect(confirmed.messages[1]?.clientMessageId).toBe("client-1");
+    expect(selectTranscriptMessages(confirmed.messages, [optimistic])).toEqual(
+      visible,
+    );
+  });
+
+  test("preserves the marker and deterministic saved-time estimate through replay", () => {
+    const frame = env(1, {
+      type: "user_message_echo",
+      messageId: "frame-1",
+      text: "(camera frame)",
+      cameraFrame: true,
+    });
+    const events = [frame, userEcho(2, "user-1", "What is this?")];
+    const replay = applyEventsToHistory(SEED, events);
+    const incremental = events.reduce(
+      (snapshot, event) => applyEventsToHistory(snapshot, [event]),
+      SEED,
+    );
+
+    expect(replay).toEqual(incremental);
+    expect(replay.messages[0]).toMatchObject({
+      id: "frame-1",
+      isCameraFrame: true,
+      timestamp: stampOf(1),
+    });
+    expect(replay.messages[1]?.isCameraFrame).toBeUndefined();
+    expect(applyEventsToHistory(replay, events)).toEqual(replay);
+    expect(SEED.messages).toEqual([]);
+  });
+});
+
+describe("resolveSeed", () => {
+  const liveAt = (seq: number): PaginatedHistoryResult => ({ ...SEED, seq });
+
+  test("seeds when there is no live view to protect", () => {
+    const snapshot = { ...queuedSnapshot(), seq: null };
+    expect(resolveSeed(null, snapshot, null)).toEqual({
+      kind: "seed",
+      history: resolveSnapshot(snapshot, null),
+    });
+    expect(resolveSeed(emptyHistory(), snapshot, null).kind).toBe("seed");
+  });
+
+  test("drops an anchor-less snapshot over a live view that folded events", () => {
+    expect(
+      resolveSeed(liveAt(7), { ...queuedSnapshot(), seq: null }, null),
+    ).toEqual({ kind: "skip_anchorless", liveSeq: 7 });
+  });
+
+  test("drops a stale-anchored snapshot the buffer cannot bridge", () => {
+    expect(resolveSeed(liveAt(7), queuedSnapshot(), null)).toEqual({
+      kind: "skip_stale_anchor",
+      liveSeq: 7,
+      fetchedSeq: 1,
+    });
+  });
+
+  test("seeds a stale-anchored snapshot when the buffered tail bridges it", () => {
+    const tail = [userEcho(2, "u-2", "hello")];
+    expect(resolveSeed(liveAt(7), queuedSnapshot(), tail)).toEqual({
+      kind: "seed",
+      history: resolveSnapshot(queuedSnapshot(), tail),
+    });
+  });
+});

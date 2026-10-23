@@ -1,0 +1,351 @@
+import {
+  AlertCircle,
+  CheckCircle2,
+  KeyRound,
+  LoaderCircle,
+} from "lucide-react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+
+import { Button } from "@vellumai/design-library/components/button";
+import { Card } from "@vellumai/design-library/components/card";
+import { Input } from "@vellumai/design-library/components/input";
+
+import {
+  credentialExpiryToEpochMs,
+  peekCredentialRequest,
+  submitCredentialRequest,
+  type CredentialRequestDetails,
+} from "./credential-entry-api";
+
+import { useTranslation } from "@/i18n";
+
+/**
+ * Public one-time credential entry page (`/assistant/credentials/enter`).
+ *
+ * Opened from a single-use credential-request link. The person opening it
+ * may have no Vellum session at all, so — like the remote-web pairing page —
+ * this page must not import anything that assumes auth state (no assistant
+ * stores, no gateway session helpers beyond the path-prefix util). The
+ * single-use token travels in the URL FRAGMENT (`#token=`) so the browser
+ * never sends it over HTTP (no access logs, no Referer); it is held in
+ * memory, stripped from the URL immediately, and sent only in POST bodies.
+ * A `?token=` query param is accepted as a fallback for hand-assembled URLs.
+ */
+
+type Phase =
+  | { kind: "loading" }
+  | { kind: "form"; request: CredentialRequestDetails }
+  | { kind: "success" }
+  | { kind: "invalid" }
+  | { kind: "expired" }
+  | { kind: "used" }
+  | { kind: "store-failed" }
+  | { kind: "error" };
+
+/** Re-renders every `intervalMs` so the expiry countdown ticks. */
+function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
+function formatRemaining(remainingMs: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
+function StatusCard({
+  icon,
+  title,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      <div className="flex items-center gap-3">
+        {icon}
+        <h1 className="text-xl font-semibold">{title}</h1>
+      </div>
+      <p className="text-sm leading-6 text-[var(--content-secondary)]">
+        {children}
+      </p>
+    </>
+  );
+}
+
+export function CredentialEntryPage() {
+  const { t } = useTranslation("credential-requests");
+  // The token is captured once, before it is stripped from the URL below.
+  // Minted links carry it in the fragment (never sent over HTTP); the query
+  // param remains as a fallback.
+  const [token] = useState<string | null>(() => {
+    const hashParams = new URLSearchParams(
+      window.location.hash.replace(/^#/, ""),
+    );
+    const fromHash = hashParams.get("token")?.trim();
+    if (fromHash) {
+      return fromHash;
+    }
+    const params = new URLSearchParams(window.location.search);
+    return params.get("token")?.trim() || null;
+  });
+  const [phase, setPhase] = useState<Phase>({ kind: "loading" });
+  const [value, setValue] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const now = useNow(1000);
+
+  // Strip the token from the address bar and history entry immediately so it
+  // can't leak via a copied URL, browser history sync, or a screenshot.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
+    const hasHashToken = hashParams.has("token");
+    if (!hasHashToken && !url.searchParams.has("token")) {
+      return;
+    }
+    url.searchParams.delete("token");
+    hashParams.delete("token");
+    const hash = hashParams.toString();
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}${hash ? `#${hash}` : ""}`,
+    );
+  }, []);
+
+  // Peek the request on mount to learn what secret is being asked for.
+  useEffect(() => {
+    if (!token) {
+      setPhase({ kind: "invalid" });
+      return;
+    }
+
+    const controller = new AbortController();
+
+    const peek = async () => {
+      const result = await peekCredentialRequest(
+        token,
+        controller.signal,
+      ).catch(() => ({ status: "error" }) as const);
+      if (controller.signal.aborted) {
+        return;
+      }
+      if (result.status === "ok") {
+        setPhase({ kind: "form", request: result.request });
+      } else {
+        setPhase({ kind: result.status });
+      }
+    };
+
+    void peek();
+
+    return () => {
+      controller.abort();
+    };
+  }, [token]);
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    // The value is submitted verbatim — some secrets legitimately carry
+    // leading/trailing whitespace; trimming only rejects empty input.
+    if (!token || phase.kind !== "form" || !value.trim() || submitting) {
+      return;
+    }
+    setSubmitting(true);
+    setSubmitError(null);
+    const result = await submitCredentialRequest(token, value).catch(
+      () => ({ status: "error" }) as const,
+    );
+    setSubmitting(false);
+    switch (result.status) {
+      case "ok":
+        setValue("");
+        setPhase({ kind: "success" });
+        break;
+      case "invalid":
+      case "expired":
+      case "used":
+        setPhase({ kind: result.status });
+        break;
+      case "store-failed":
+        // The gateway burns the link on a failed store (the daemon may have
+        // partially written before the error, so the single-use claim never
+        // reopens). Retrying the same token would only return USED — this is
+        // a terminal state, not a retryable form error.
+        setValue("");
+        setPhase({ kind: "store-failed" });
+        break;
+      case "error":
+        setSubmitError(
+          "Something went wrong while submitting. Check your connection and try again.",
+        );
+        break;
+    }
+  };
+
+  const expiresAtMs =
+    phase.kind === "form"
+      ? credentialExpiryToEpochMs(phase.request.expiresAt)
+      : null;
+  const hasLiveForm =
+    phase.kind === "form" && expiresAtMs !== null && expiresAtMs > now;
+
+  let content: ReactNode;
+  if (phase.kind === "loading") {
+    content = (
+      <StatusCard
+        icon={
+          <LoaderCircle
+            className="h-5 w-5 animate-spin text-blue-600"
+            aria-hidden
+          />
+        }
+        title={t("credentialEntry.checkingTitle")}
+      >
+        {t("credentialEntry.checkingBody")}
+      </StatusCard>
+    );
+  } else if (phase.kind === "success") {
+    content = (
+      <StatusCard
+        icon={<CheckCircle2 className="h-5 w-5 text-green-600" aria-hidden />}
+        title={t("credentialEntry.savedTitle")}
+      >
+        {t("credentialEntry.savedBody")}
+      </StatusCard>
+    );
+  } else if (phase.kind === "invalid") {
+    content = (
+      <StatusCard
+        icon={<AlertCircle className="h-5 w-5 text-red-600" aria-hidden />}
+        title={t("credentialEntry.invalidTitle")}
+      >
+        {t("credentialEntry.invalidBody")}
+      </StatusCard>
+    );
+  } else if (
+    phase.kind === "expired" ||
+    (phase.kind === "form" && !hasLiveForm)
+  ) {
+    content = (
+      <StatusCard
+        icon={<AlertCircle className="h-5 w-5 text-red-600" aria-hidden />}
+        title={t("credentialEntry.expiredTitle")}
+      >
+        {t("credentialEntry.expiredBody")}
+      </StatusCard>
+    );
+  } else if (phase.kind === "used") {
+    content = (
+      <StatusCard
+        icon={<AlertCircle className="h-5 w-5 text-red-600" aria-hidden />}
+        title={t("credentialEntry.usedTitle")}
+      >
+        {t("credentialEntry.usedBody")}
+      </StatusCard>
+    );
+  } else if (phase.kind === "store-failed") {
+    content = (
+      <StatusCard
+        icon={<AlertCircle className="h-5 w-5 text-red-600" aria-hidden />}
+        title={t("credentialEntry.storeFailedTitle")}
+      >
+        {t("credentialEntry.storeFailedBody")}
+      </StatusCard>
+    );
+  } else if (phase.kind === "error") {
+    content = (
+      <StatusCard
+        icon={<AlertCircle className="h-5 w-5 text-red-600" aria-hidden />}
+        title={t("credentialEntry.errorTitle")}
+      >
+        {t("credentialEntry.errorBody")}
+      </StatusCard>
+    );
+  } else {
+    const { request } = phase;
+    const name = `${request.service}:${request.field}`;
+    const remainingMs = (expiresAtMs ?? 0) - now;
+    content = (
+      <>
+        <div className="flex items-center gap-3">
+          <KeyRound className="h-5 w-5 text-blue-600" aria-hidden />
+          <h1 className="text-xl font-semibold">
+            {t("credentialEntry.heading")}
+          </h1>
+        </div>
+
+        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-4">
+          <p className="text-body-medium-default text-[var(--content-default)]">
+            {request.label || name}
+          </p>
+          <p className="mt-1 font-mono text-body-small-default text-[var(--content-tertiary)]">
+            {request.label ? `${name} · ` : ""}
+            {t("credentialEntry.oneTimeEntry")}
+          </p>
+        </div>
+
+        <p className="text-sm leading-6 text-[var(--content-secondary)]">
+          {t("credentialEntry.instructions")}
+        </p>
+
+        <form
+          className="flex flex-col gap-3"
+          onSubmit={(event) => void handleSubmit(event)}
+        >
+          <Input
+            label={t("credentialEntry.valueLabel")}
+            type="password"
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            placeholder={t("credentialEntry.valuePlaceholder")}
+            autoComplete="off"
+            autoFocus
+            fullWidth
+            errorText={submitError ?? undefined}
+          />
+          <Button
+            type="submit"
+            disabled={submitting || !value.trim()}
+            loading={submitting}
+          >
+            {t("credentialEntry.submit")}
+          </Button>
+        </form>
+
+        <p className="text-xs text-[var(--content-tertiary)]">
+          {t("credentialEntry.expiresIn", {
+            remaining: formatRemaining(remainingMs),
+            time: new Date(expiresAtMs ?? 0).toLocaleTimeString(),
+          })}
+        </p>
+      </>
+    );
+  }
+
+  return (
+    <main className="flex min-h-svh items-center justify-center bg-[var(--background)] px-6 py-10 text-[var(--content-default)]">
+      <div className="w-full max-w-md">
+        <Card.Root bordered elevated padding="lg">
+          <div className="flex flex-col gap-4">{content}</div>
+        </Card.Root>
+      </div>
+    </main>
+  );
+}

@@ -1,0 +1,162 @@
+import { cva, type VariantProps } from "class-variance-authority";
+import { X } from "lucide-react";
+import {
+  type ComponentProps,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
+
+import { cn } from "../utils/cn";
+
+/**
+ * Compact label / chip primitive. Figma node 816:4530.
+ *
+ * Renders a 24px pill with a soft tone-matched background, a colored leading
+ * icon, and `--content-default` text. One style per tone — no strong/weak
+ * variants. Pass `leftIcon` / `rightIcon` to decorate, or `onRemove` to turn
+ * it into a dismissible chip (appends a trailing X button).
+ */
+const tagVariants = cva(
+  [
+    "inline-flex items-center gap-1 h-6 px-2 py-1 rounded-[6px] whitespace-nowrap select-none",
+    "text-body-small-emphasised leading-none",
+    "text-[color:var(--content-default)]",
+  ].join(" "),
+  {
+    variants: {
+      tone: {
+        positive: "bg-[var(--system-positive-weak)]",
+        negative: "bg-[var(--system-negative-weak)]",
+        warning: "bg-[var(--system-mid-weak)]",
+        info: "bg-[var(--system-info-weak)]",
+        neutral: "bg-[var(--tag-bg-neutral)]",
+      },
+    },
+    defaultVariants: {
+      tone: "neutral",
+    },
+  },
+);
+
+type TagVariantProps = VariantProps<typeof tagVariants>;
+
+export type TagTone = NonNullable<TagVariantProps["tone"]>;
+
+/**
+ * Accent color per tone — used by the leading icon so the chip reads
+ * quickly even when the background is desaturated. Pass a lucide icon via
+ * `leftIcon`; we render it inline and color it via this token.
+ */
+const TONE_ICON_COLOR: Record<TagTone, string> = {
+  positive: "var(--system-positive-strong)",
+  negative: "var(--system-negative-strong)",
+  warning: "var(--system-mid-strong)",
+  info: "var(--system-info-strong)",
+  neutral: "var(--content-secondary)",
+};
+
+export interface TagProps extends Omit<ComponentProps<"span">, "children"> {
+  tone?: TagTone;
+  leftIcon?: ReactNode;
+  rightIcon?: ReactNode;
+  /**
+   * When provided, the tag renders a trailing X button whose click invokes
+   * this handler. The button exposes an `aria-label` (customizable via
+   * `removeLabel`) so assistive tech can announce it.
+   */
+  onRemove?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  /** Accessible label for the remove button. Defaults to "Remove". */
+  removeLabel?: string;
+  children?: ReactNode;
+}
+
+const iconStyle = {
+  width: 12,
+  height: 12,
+  flexShrink: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+} as const;
+
+/**
+ * Inline style for a tag-sized (12px) icon slot. Pass the tone for a leading
+ * icon, which takes the tone's accent; omit it for a trailing icon, which is
+ * always `--content-secondary`. Exported so `Chip`, the interactive sibling,
+ * colours its icons by the same rule instead of restating it.
+ */
+export function tagIconStyle(tone?: TagTone): CSSProperties {
+  return {
+    ...iconStyle,
+    color: tone != null ? TONE_ICON_COLOR[tone] : "var(--content-secondary)",
+  };
+}
+
+export function Tag({
+  tone = "neutral",
+  leftIcon,
+  rightIcon,
+  onRemove,
+  removeLabel = "Remove",
+  className,
+  children,
+  ref,
+  ...rest
+}: TagProps) {
+  return (
+    <span
+      {...rest}
+      ref={ref}
+      data-slot="tag"
+      className={cn(tagVariants({ tone }), className)}
+    >
+      {leftIcon != null ? (
+        <span aria-hidden="true" style={tagIconStyle(tone)}>
+          {leftIcon}
+        </span>
+      ) : null}
+      {/*
+        The label carries its own truncation. The root is `inline-flex` and
+        `whitespace-nowrap`, so a bare text node here cannot ellipsize: it has
+        no width to overflow and pushes the tag past its container instead,
+        leaving the parent to clip it mid-word. Its own slot can shrink
+        (`min-w-0`) and ellipsize, and consumers can target it by slot.
+      */}
+      <span data-slot="tag-label" className="min-w-0 truncate">
+        {children}
+      </span>
+      {rightIcon != null && onRemove == null ? (
+        <span aria-hidden="true" style={tagIconStyle()}>
+          {rightIcon}
+        </span>
+      ) : null}
+      {onRemove != null ? (
+        <button
+          type="button"
+          aria-label={removeLabel}
+          onClick={(event) => {
+            event.stopPropagation();
+            onRemove(event);
+          }}
+          className={cn(
+            "inline-flex items-center justify-center rounded-full",
+            "h-3.5 w-3.5 -mr-0.5 cursor-pointer",
+            "text-[color:var(--content-secondary)]",
+            "transition-colors duration-150",
+            "hover:bg-[color-mix(in_srgb,currentColor_15%,transparent)]",
+            // Same keyboard focus affordance as Notice's dismiss button:
+            // suppress the default outline but replace it with the ring, so
+            // keyboard users never lose the focus indicator.
+            "keyboard-focus:outline-none keyboard-focus:ring-2",
+            "keyboard-focus:ring-[var(--ring)]",
+          )}
+        >
+          <X style={iconStyle} aria-hidden="true" />
+        </button>
+      ) : null}
+    </span>
+  );
+}
+
+export { tagVariants };

@@ -1,0 +1,134 @@
+import { AlertTriangle, type LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
+
+import { Button } from "./button";
+import { Modal } from "./modal";
+import { Notice } from "./notice";
+
+/**
+ * Pre-composed confirmation dialog built on `Modal`.
+ *
+ * Renders a small modal with a title, message, and Cancel / Confirm
+ * buttons. Supports a `destructive` variant that styles the confirm
+ * button as danger and shows a warning icon. `icon` puts a caller-chosen
+ * glyph in the header instead.
+ *
+ * The `error` slot lets a caller keep the dialog open after a failed
+ * confirm, so the user reads why it failed next to the button they can
+ * press again.
+ *
+ * Focus is auto-directed to the confirm button on open so pressing
+ * Enter confirms without requiring Tab, unless confirm is disabled.
+ * Escape closes only this dialog, not any parent modal it may be
+ * stacked inside.
+ */
+
+interface ConfirmDialogProps {
+  open: boolean;
+  title: string;
+  message: ReactNode;
+  /** Extra body content after the message (acknowledgment, extra detail). */
+  children?: ReactNode;
+  /** Inline failure message shown under the message while the dialog stays open. */
+  error?: ReactNode;
+  /** Header glyph. Takes precedence over the `destructive` warning icon. */
+  icon?: LucideIcon;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  destructive?: boolean;
+  isPending?: boolean;
+  /** Keeps confirm visible but inert until a caller-owned gate is satisfied. */
+  confirmDisabled?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+const CONFIRM_BUTTON_ATTR = "data-confirm-dialog-confirm";
+
+function ConfirmDialog({
+  open,
+  title,
+  message,
+  children,
+  error,
+  icon,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  destructive = false,
+  isPending = false,
+  confirmDisabled = false,
+  onConfirm,
+  onCancel,
+}: ConfirmDialogProps) {
+  const confirmInert = isPending || confirmDisabled;
+  return (
+    <Modal.Root
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && !isPending) {
+          onCancel();
+        }
+      }}
+    >
+      <Modal.Content
+        size="sm"
+        hideCloseButton
+        onOpenAutoFocus={(event) => {
+          if (confirmDisabled) {
+            return;
+          }
+          const content = event.currentTarget as HTMLElement | null;
+          const confirmButton = content?.querySelector<HTMLButtonElement>(
+            `[${CONFIRM_BUTTON_ATTR}]`,
+          );
+          if (confirmButton) {
+            event.preventDefault();
+            confirmButton.focus();
+          }
+        }}
+        onEscapeKeyDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!isPending) {
+            onCancel();
+          }
+        }}
+      >
+        <Modal.Header icon={icon ?? (destructive ? AlertTriangle : undefined)}>
+          <Modal.Title>{title}</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Modal.Description>{message}</Modal.Description>
+          {children}
+          {error != null ? (
+            <div className="mt-3">
+              <Notice tone="error">{error}</Notice>
+            </div>
+          ) : null}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outlined" onClick={onCancel} disabled={isPending}>
+            {cancelLabel}
+          </Button>
+          <Button
+            variant={destructive ? "danger" : "primary"}
+            onClick={() => {
+              if (confirmInert) {
+                return;
+              }
+              onConfirm();
+            }}
+            disabled={confirmInert}
+            loading={isPending}
+            {...{ [CONFIRM_BUTTON_ATTR]: "" }}
+          >
+            {confirmLabel}
+          </Button>
+        </Modal.Footer>
+      </Modal.Content>
+    </Modal.Root>
+  );
+}
+
+export { ConfirmDialog };
+export type { ConfirmDialogProps };

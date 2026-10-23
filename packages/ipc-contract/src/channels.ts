@@ -1,0 +1,256 @@
+/**
+ * IPC channel name constants.
+ *
+ * Using string constants (rather than inline literals) catches typos at
+ * compile time and makes the full channel surface grep-able from a single
+ * location. Channels are grouped by the bridge surface they belong to.
+ */
+
+// App
+export const APP_VERSION_INFO = "vellum:app:versionInfo";
+export const APP_OPEN_WEBSITE = "vellum:app:openWebsite";
+
+// Config
+export const CONFIG_GET = "vellum:config:get";
+
+// Text insertion
+export const TEXT_INSERT = "vellum:text:insertIntoFrontApp";
+export const TEXT_UNDO = "vellum:text:undoInFrontApp";
+export const TEXT_OPEN_SETTINGS = "vellum:text:openAutomationSettings";
+
+// System permissions
+export const PERMISSION_GUIDE_CANCEL = "vellum:permissions:guide:cancel";
+export const PERMISSION_SETUP_BEGIN = "vellum:permissions:setup:begin";
+export const PERMISSION_GUIDE_GET = "vellum:permissions:guide:get";
+export const PERMISSION_GUIDE_STATE = "vellum:permissions:guide:state";
+export const PERMISSION_GUIDE_READY = "vellum:permissions:guide:ready";
+export const PERMISSION_GUIDE_DISMISS = "vellum:permissions:guide:dismiss";
+export const PERMISSION_GUIDE_DRAG = "vellum:permissions:guide:drag";
+export const PERMISSION_GUIDE_REVEAL = "vellum:permissions:guide:reveal";
+
+export const PERMISSIONS_GET_STATE = "vellum:permissions:getState";
+export const PERMISSIONS_REQUEST = "vellum:permissions:request";
+export const PERMISSIONS_OPEN_SETTINGS = "vellum:permissions:openSettings";
+export const PERMISSIONS_QUIT_AND_REOPEN = "vellum:permissions:quitAndReopen";
+export const PERMISSIONS_STATE_EVENT = "vellum:permissions:state";
+
+// Auth
+export const AUTH_START_OAUTH = "vellum:auth:startOAuth";
+export const AUTH_CANCEL_OAUTH = "vellum:auth:cancelOAuth";
+export const AUTH_GET_SESSION_TOKEN = "vellum:auth:getSessionToken";
+export const AUTH_SIGN_OUT = "vellum:auth:signOut";
+
+// Hotkeys
+export const HOTKEYS_GET = "vellum:hotkeys:get";
+export const HOTKEYS_SET = "vellum:hotkeys:set";
+export const HOTKEYS_CHANGED = "vellum:hotkeys:changed";
+
+// Launch at login
+export const LAUNCH_AT_LOGIN_GET = "vellum:launchAtLogin:get";
+export const LAUNCH_AT_LOGIN_SET = "vellum:launchAtLogin:set";
+
+// Feature flags
+export const FEATURE_FLAGS_SET = "vellum:featureFlags:set";
+
+// Diagnostics
+export const DIAGNOSTICS_SET_SHARE = "vellum:diagnostics:setShareDiagnostics";
+
+// Helper (native sidecar)
+export const HELPER_PING = "vellum:helper:ping";
+export const HELPER_GET_STATE = "vellum:helper:state:get";
+export const HELPER_RESTART = "vellum:helper:restart";
+export const HELPER_STATE_EVENT = "vellum:helper:state";
+export const HELPER_HOTKEY_SET_VOICE_MODE_CHORD =
+  "vellum:helper:hotkey:setVoiceModeChord";
+export const HELPER_HOTKEY_SET_MODIFIER_HOLD =
+  "vellum:helper:hotkey:setModifierHold";
+export const HELPER_HOTKEY_SET_CHORDS = "vellum:helper:hotkey:setChords";
+export const HELPER_HOTKEY_READ_FRONT_SELECTION =
+  "vellum:helper:hotkey:readFrontSelection";
+export const HELPER_APPS_RUNNING = "vellum:helper:apps:running";
+export const HELPER_APPS_QUIT = "vellum:helper:apps:quit";
+export const HELPER_APPS_FRONTMOST = "vellum:helper:apps:frontmost";
+export const HELPER_INPUT_SET_ACTIVITY_WATCH =
+  "vellum:helper:input:setActivityWatch";
+export const HELPER_INPUT_ACTIVITY_EVENT = "vellum:helper:input:activity";
+export const HELPER_HOTKEY_EVENT = "vellum:helper:hotkey:event";
+export const HELPER_HOTKEY_REGISTRATION_EVENT =
+  "vellum:helper:hotkey:registration";
+export const HELPER_DICTATION_SET_PARTIALS =
+  "vellum:helper:dictation:setPartials";
+export const HELPER_DICTATION_PARTIAL_EVENT = "vellum:helper:dictation:partial";
+export const HELPER_DICTATION_FINALIZED_EVENT =
+  "vellum:helper:dictation:finalized";
+export const HELPER_DICTATION_TRANSCRIBE = "vellum:helper:dictation:transcribe";
+export const HELPER_DICTATION_TRANSCRIBED_EVENT =
+  "vellum:helper:dictation:transcribed";
+
+// Commands
+export const COMMAND_EVENT = "vellum:command";
+
+// Status
+export const STATUS_CONNECTION = "vellum:status:connection";
+
+// Identity
+export const IDENTITY_NAME = "vellum:identity:name";
+
+// Icon / avatar
+export const ICON_SET_AVATAR = "vellum:icon:setAvatar";
+export const ICON_SET_CHARACTER = "vellum:icon:setCharacter";
+
+// Dock
+export const DOCK_SET_BADGE = "vellum:dock:setBadge";
+
+// Downloads
+export const DOWNLOADS_DONE_EVENT = "vellum:downloads:done";
+export const DOWNLOADS_REVEAL = "vellum:downloads:reveal";
+
+// Local mode
+export const LOCAL_MODE_HATCH = "vellum:localMode:hatch";
+export const LOCAL_MODE_READ_LOCKFILE = "vellum:localMode:readLockfile";
+export const LOCAL_MODE_SAVE_ASSISTANT =
+  "vellum:localMode:saveLockfileAssistant";
+export const LOCAL_MODE_REPLACE_PLATFORM =
+  "vellum:localMode:replacePlatformAssistants";
+export const LOCAL_MODE_RETIRE = "vellum:localMode:retire";
+export const LOCAL_MODE_UNPAIR = "vellum:localMode:unpair";
+export const LOCAL_MODE_SLEEP = "vellum:localMode:sleep";
+export const LOCAL_MODE_WAKE = "vellum:localMode:wake";
+export const LOCAL_MODE_UPGRADE = "vellum:localMode:upgrade";
+export const LOCAL_MODE_STATUS = "vellum:localMode:status";
+export const LOCAL_MODE_GUARDIAN_TOKEN = "vellum:localMode:guardianToken";
+export const LOCAL_MODE_READ_ASSISTANT_AVATAR =
+  "vellum:localMode:readAssistantAvatar";
+
+// Menu
+export const MENU_SET_PLATFORM_SESSION = "vellum:menu:setPlatformSession";
+export const MENU_TITLES = "vellum:menu:titles";
+export const MENU_POPUP = "vellum:menu:popup";
+
+// Main window
+export const MAIN_WINDOW_ENSURE_VISIBLE = "vellum:mainWindow:ensureVisible";
+export const MAIN_WINDOW_SET_ONBOARDING = "vellum:mainWindow:setOnboarding";
+export const MAIN_WINDOW_SET_TITLE_BAR_OVERLAY =
+  "vellum:mainWindow:setTitleBarOverlay";
+
+// Power events
+export const POWER_EVENT = "vellum:power:event";
+
+// Deep links
+export const DEEP_LINKS_DRAIN = "vellum:deepLinks:drain";
+export const DEEP_LINKS_SUBSCRIBE = "vellum:deepLinks:subscribe";
+export const DEEP_LINKS_UNSUBSCRIBE = "vellum:deepLinks:unsubscribe";
+export const DEEP_LINKS_EVENT = "vellum:deepLinks:event";
+
+// File open
+export const FILE_OPEN_DRAIN = "vellum:fileOpen:drain";
+export const FILE_OPEN_SUBSCRIBE = "vellum:fileOpen:subscribe";
+export const FILE_OPEN_UNSUBSCRIBE = "vellum:fileOpen:unsubscribe";
+export const FILE_OPEN_EVENT = "vellum:fileOpen:event";
+
+// Feedback
+export const FEEDBACK_DIAGNOSTICS = "vellum:feedback:diagnostics";
+export const FEEDBACK_LOGS = "vellum:feedback:logs";
+
+// Connectivity
+export const CONNECTIVITY_GET = "vellum:connectivity:get";
+export const CONNECTIVITY_STATE = "vellum:connectivity:state";
+export const CONNECTIVITY_SET_DEVICE = "vellum:connectivity:device";
+export const CONNECTIVITY_RETRY = "vellum:connectivity:retry";
+
+// Notifications
+export const NOTIFICATIONS_SHOW = "vellum:notifications:show";
+export const NOTIFICATIONS_ACTION = "vellum:notifications:action";
+export const NOTIFICATIONS_REGISTER_IDENTITY_PUBLISHER =
+  "vellum:notifications:registerIdentityPublisher";
+export const NOTIFICATIONS_PREPARE_IDENTITY =
+  "vellum:notifications:prepareIdentity";
+export const NOTIFICATIONS_RESET_IDENTITIES =
+  "vellum:notifications:resetIdentities";
+
+// Window attention
+export const WINDOW_ATTENTION = "vellum:window:attention";
+
+// Bundle confirm
+export const BUNDLE_CONFIRM_GET_DATA = "vellum:bundleConfirm:getData";
+export const BUNDLE_CONFIRM_RESPOND = "vellum:bundleConfirm:respond";
+
+// Quick input
+export const QUICK_INPUT_SUBMIT = "vellum:quickInput:submit";
+export const QUICK_INPUT_DISMISS = "vellum:quickInput:dismiss";
+
+// Command palette
+export const COMMAND_PALETTE_OPEN = "vellum:commandPalette:open";
+export const COMMAND_PALETTE_DISMISS = "vellum:commandPalette:dismiss";
+export const COMMAND_PALETTE_SELECT = "vellum:commandPalette:select";
+
+// Dictation overlay
+export const DICTATION_OVERLAY_SET_STATE = "vellum:dictationOverlay:setState";
+export const DICTATION_OVERLAY_STATE_EVENT = "vellum:dictationOverlay:state";
+export const DICTATION_OVERLAY_GET_STATE = "vellum:dictationOverlay:getState";
+export const DICTATION_OVERLAY_REQUEST_STOP =
+  "vellum:dictationOverlay:requestStop";
+export const DICTATION_OVERLAY_STOP_REQUESTED =
+  "vellum:dictationOverlay:stopRequested";
+export const DICTATION_OVERLAY_SET_INTERACTIVE =
+  "vellum:dictationOverlay:setInteractive";
+export const DICTATION_OVERLAY_SET_HIT_REGION =
+  "vellum:dictationOverlay:setHitRegion";
+
+// Voice activity: the running live-voice session, as the companion surface
+// renders it. The session's window publishes; the surface's window presses.
+export const VOICE_ACTIVITY_START = "vellum:voiceActivity:start";
+export const VOICE_ACTIVITY_UPDATE = "vellum:voiceActivity:update";
+export const VOICE_ACTIVITY_END = "vellum:voiceActivity:end";
+export const VOICE_ACTIVITY_CONTROL = "vellum:voiceActivity:control";
+export const VOICE_ACTIVITY_CONTROL_EVENT = "vellum:voiceActivity:controlEvent";
+
+// Companion surface: the always-present floating avatar
+export const COMPANION_GET_STATE = "vellum:companion:getState";
+export const COMPANION_STATE_EVENT = "vellum:companion:state";
+export const COMPANION_SET_INTERACTIVE = "vellum:companion:setInteractive";
+export const COMPANION_MOVE_BY = "vellum:companion:moveBy";
+export const COMPANION_RELEASE = "vellum:companion:release";
+export const COMPANION_START_VOICE = "vellum:companion:startVoice";
+export const COMPANION_TOGGLE_WATCH = "vellum:companion:toggleWatch";
+export const COMPANION_LIST_CAPTURE_SOURCES =
+  "vellum:companion:listCaptureSources";
+export const COMPANION_SET_SCREEN_SHARE = "vellum:companion:setScreenShare";
+export const COMPANION_SET_ANNOTATING = "vellum:companion:setAnnotating";
+export const COMPANION_TOGGLE_ANNOTATING = "vellum:companion:toggleAnnotating";
+export const COMPANION_CLEAR_MARKS = "vellum:companion:clearMarks";
+export const COMPANION_SET_ANNOTATION_TOOL =
+  "vellum:companion:setAnnotationTool";
+export const COMPANION_ANNOTATE_SHARE = "vellum:companion:annotateShare";
+export const COMPANION_SET_FRAME_SCROLLING =
+  "vellum:companion:setFrameScrolling";
+export const COMPANION_FRAME_DRAWN = "vellum:companion:frameDrawn";
+export const COMPANION_CAPTURE_SCREEN = "vellum:companion:captureScreen";
+export const COMPANION_SHARED_FRAME = "vellum:companion:sharedFrame";
+export const COMPANION_SHARE_TARGETS = "vellum:companion:shareTargets";
+export const COMPANION_ANSWER_WATCH_RETRO = "vellum:companion:answerWatchRetro";
+export const COMPANION_ANSWER_DICTATION_OFFER =
+  "vellum:companion:answerDictationOffer";
+export const COMPANION_SET_UNPLACED_DICTATION_OFFER =
+  "vellum:companion:setUnplacedDictationOffer";
+export const COMPANION_ANSWER_POPOVER = "vellum:companion:answerPopover";
+export const COMPANION_SET_POPOVER_SIZE = "vellum:companion:setPopoverSize";
+export const COMPANION_SET_POPOVER_VIEW = "vellum:companion:setPopoverView";
+export const COMPANION_SET_ATTACHED_POPOVER_HEIGHT =
+  "vellum:companion:setAttachedPopoverHeight";
+export const COMPANION_TOGGLE_PICKER = "vellum:companion:togglePicker";
+export const COMPANION_OPEN_LINK = "vellum:companion:openLink";
+export const COMPANION_TAKES_PROMPTS = "vellum:companion:takesPrompts";
+export const COMPANION_ACTIVATE = "vellum:companion:activate";
+export const COMPANION_SET_CONTEXT = "vellum:companion:setContext";
+export const COMPANION_ADVANCE_INTRO = "vellum:companion:advanceIntro";
+export const COMPANION_CONTEXT_MENU = "vellum:companion:contextMenu";
+
+// Popout
+export const POPOUT_OPEN = "vellum:popout:open";
+
+// Auto-update
+export const UPDATE_GET_STATE = "vellum:update:getState";
+export const UPDATE_CHECK = "vellum:update:check";
+export const UPDATE_INSTALL = "vellum:update:install";
+export const UPDATE_STATE_EVENT = "vellum:update:state";

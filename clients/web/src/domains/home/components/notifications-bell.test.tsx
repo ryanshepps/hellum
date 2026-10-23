@@ -1,0 +1,2478 @@
+/**
+ * Tests for `NotificationsBell`.
+ *
+ * The trigger tests use `renderToStaticMarkup` (SSR) like
+ * `preferences-menu.test.tsx`: the unread dot lives on the trigger, which is
+ * all Radix renders while the popover is closed. The panel tests render into
+ * happy-dom and click the trigger open, since the rows only mount with it.
+ *
+ * Assertions target text and test ids, never class strings: those drift with
+ * styling and turn behaviour tests into styling tests.
+ */
+
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import type { Conversation } from "@/types/conversation-types";
+import { ApiError } from "@/utils/api-errors";
+import { conversationNavigationMock } from "@/utils/conversation-navigation.test-helper";
+import { formatCompactLocalDate } from "@/utils/format-date";
+import type {
+  FeedItem,
+  FeedItemStatus,
+  FeedItemUpdate,
+} from "@vellumai/assistant-api";
+
+import {
+  feedItem,
+  FIXTURE_CONVERSATION_ID,
+  FIXTURE_SECOND_CONVERSATION_ID,
+  FIXTURE_SKILL_UPDATES,
+  skillUpdateReceipt,
+} from "../feed-test-fixtures";
+import type * as UpdateLinksModule from "../hooks/use-feed-item-update-links";
+
+const isTouchMobileRef = { value: false };
+const originalMatchMedia = window.matchMedia;
+
+function setTouchSurface(matches: boolean): void {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => true,
+    }),
+  });
+}
+
+mock.module("@/hooks/use-touch-mobile", () => ({
+  useTouchMobile: () => isTouchMobileRef.value,
+  TOUCH_MOBILE_MEDIA_QUERY: "(width < 48rem) and (pointer: coarse)",
+}));
+
+const feedRef: { items: FeedItem[]; isError: boolean } = {
+  items: [],
+  isError: false,
+};
+
+interface UpdateStatusVars {
+  itemId: string;
+  status: FeedItemStatus;
+}
+
+interface TriggerActionVars {
+  itemId: string;
+  actionId: string;
+}
+
+interface MarkAllVars {
+  from: FeedItemStatus[];
+  to: FeedItemStatus;
+  ids: string[];
+}
+
+interface TriggerActionCallbacks {
+  onSuccess?: (data: { conversationId: string }) => void;
+  onError?: (error: Error) => void;
+  onSettled?: () => void;
+}
+
+const updateStatusCalls: UpdateStatusVars[] = [];
+const triggerActionCalls: TriggerActionVars[] = [];
+const markAllCalls: MarkAllVars[] = [];
+const markAllPendingRef = { value: false };
+
+/**
+ * How the mocked `triggerAction` settles. "pending" leaves it in flight, which
+ * is the state the double-click guard has to hold under: the real mutation's
+ * `isPending` only reaches the button on the next render, so a guard that
+ * relies on it would let a second click through and open a second
+ * conversation.
+ */
+const triggerActionRef: {
+  outcome: "pending" | "success" | "error";
+  conversationId: string;
+} = { outcome: "pending", conversationId: "action-conversation-1" };
+
+mock.module("@/domains/home/hooks/use-home-feed-query", () => ({
+  useHomeFeedQuery: () => ({
+    data: { items: feedRef.items },
+    isLoading: false,
+    isError: feedRef.isError,
+    updateStatus: {
+      mutate: (vars: UpdateStatusVars) => {
+        updateStatusCalls.push(vars);
+      },
+      isPending: false,
+    },
+    triggerAction: {
+      mutate: (vars: TriggerActionVars, callbacks?: TriggerActionCallbacks) => {
+        triggerActionCalls.push(vars);
+        if (triggerActionRef.outcome === "success") {
+          callbacks?.onSuccess?.({
+            conversationId: triggerActionRef.conversationId,
+          });
+          callbacks?.onSettled?.();
+        } else if (triggerActionRef.outcome === "error") {
+          callbacks?.onError?.(new Error("action failed"));
+          callbacks?.onSettled?.();
+        }
+      },
+      isPending: false,
+    },
+    markAll: {
+      mutate: (vars: MarkAllVars) => {
+        markAllCalls.push(vars);
+      },
+      isPending: markAllPendingRef.value,
+    },
+  }),
+  useInvalidateHomeFeed: () => () => {
+    feedInvalidateCalls.push(feedInvalidateCalls.length + 1);
+  },
+}));
+
+mock.module("@vellumai/design-library/components/toast", () => ({
+  toast: {
+    error: (message: string) => {
+      toastCalls.push(["error", message]);
+    },
+    info: (message: string) => {
+      toastCalls.push(["info", message]);
+    },
+    success: (message: string) => {
+      toastCalls.push(["success", message]);
+    },
+  },
+}));
+
+const supportsBulkFeedStatusRef = { value: true };
+
+mock.module("@/lib/backwards-compat/bulk-feed-status", () => ({
+  useSupportsBulkFeedStatus: () => supportsBulkFeedStatusRef.value,
+}));
+
+const navigateMock = mock((..._args: unknown[]) => {});
+
+mock.module("react-router", () => ({
+  useNavigate: () => navigateMock,
+}));
+
+// Mocked at the boundary the bell calls, so "Go to Conversation" and the
+// empty state's recipe can be asserted without dragging the conversation
+// stores, haptics, and sound manager that the real helpers drive into a
+// popover test.
+const navigateToConversationMock = mock((..._args: unknown[]) => {});
+const navigateToNewConversationMock = mock((..._args: unknown[]) => "draft-1");
+
+mock.module("@/utils/conversation-navigation", () =>
+  conversationNavigationMock({
+    navigateToConversation: navigateToConversationMock,
+    navigateToNewConversation: navigateToNewConversationMock,
+  }),
+);
+
+/**
+ * The three conversation lists the detail validates its link against, plus a
+ * record of the `enabled` flag each hook was called with. The flags are what
+ * pin the lazy-loading property: the bell must not fetch these lists to render
+ * its list view.
+ */
+type ConversationListName = "foreground" | "background" | "scheduled";
+
+const conversationListsRef: {
+  foreground: Conversation[];
+  background: Conversation[];
+  scheduled: Conversation[];
+  isPending: boolean;
+} = { foreground: [], background: [], scheduled: [], isPending: false };
+
+const enabledCalls: Record<ConversationListName, boolean[]> = {
+  foreground: [],
+  background: [],
+  scheduled: [],
+};
+
+function conversationListResult(name: ConversationListName, enabled: boolean) {
+  enabledCalls[name].push(enabled);
+  return {
+    conversations: conversationListsRef[name],
+    isLoading: false,
+    isPending: conversationListsRef.isPending,
+    isError: false,
+    error: null,
+    refetch: () => {},
+  };
+}
+
+mock.module("@/hooks/conversation-queries", () => ({
+  useConversationListQuery: (_assistantId: string | null, enabled = true) =>
+    conversationListResult("foreground", enabled),
+  useBackgroundConversationListQuery: (
+    _assistantId: string | null,
+    enabled = true,
+  ) => conversationListResult("background", enabled),
+  useScheduledConversationListQuery: (
+    _assistantId: string | null,
+    enabled = true,
+  ) => conversationListResult("scheduled", enabled),
+}));
+
+/**
+ * The by-id existence check the detail uses for "Go to Conversation". Default
+ * is that any named conversation still exists, matching production: a
+ * scheduled run is reachable even when it is in none of the sidebar lists.
+ * `missing` is the 404 case; `isPending` is the in-flight case.
+ */
+const conversationLinkRef: {
+  missing: Set<string>;
+  isPending: boolean;
+} = {
+  missing: new Set(),
+  isPending: false,
+};
+
+const conversationLinkEnabledCalls: boolean[] = [];
+
+mock.module("@/domains/home/hooks/use-feed-item-conversation-link", () => ({
+  useFeedItemConversationLink: (
+    conversationId: string | null,
+    assistantId: string | null | undefined,
+    enabled: boolean,
+  ) => {
+    const canFetch = enabled && Boolean(assistantId) && Boolean(conversationId);
+    conversationLinkEnabledCalls.push(canFetch);
+    if (!conversationId || !canFetch) {
+      return { conversationId: null, isPending: false };
+    }
+    if (conversationLinkRef.isPending) {
+      return { conversationId, isPending: true };
+    }
+    if (conversationLinkRef.missing.has(conversationId)) {
+      return { conversationId: null, isPending: false };
+    }
+    return { conversationId, isPending: false };
+  },
+}));
+
+function conversation(conversationId: string): Conversation {
+  return { conversationId } as Conversation;
+}
+
+/**
+ * The targets a skill-update receipt's list validates, plus the `enabled`
+ * flag the hook was called with. Same lazy-loading property as the single
+ * links: the list view must not fetch anything for a receipt.
+ */
+const updateLinksRef: {
+  validSkillIds: Set<string>;
+  validConversationIds: Set<string>;
+  isPending: boolean;
+} = {
+  validSkillIds: new Set(),
+  validConversationIds: new Set(),
+  isPending: false,
+};
+
+const updateLinksEnabledCalls: boolean[] = [];
+
+mock.module(
+  "@/domains/home/hooks/use-feed-item-update-links",
+  (): Partial<typeof UpdateLinksModule> => ({
+    useFeedItemUpdateLinks: (
+      updates: FeedItemUpdate[],
+      assistantId: string | null | undefined,
+      enabled: boolean,
+    ) => {
+      const canFetch = enabled && Boolean(assistantId);
+      if (updates.length > 0) {
+        updateLinksEnabledCalls.push(canFetch);
+      }
+      if (!canFetch || updates.length === 0) {
+        return {
+          validSkillIds: new Set(),
+          validConversationIds: new Set(),
+          isPending: false,
+        };
+      }
+      return updateLinksRef;
+    },
+  }),
+);
+
+/**
+ * The lists the detail validates its entity links against ("View schedule",
+ * "View skill"), plus a record of the `enabled` flag each query was called
+ * with. Same shape as the conversation lists above, and the flags pin the same
+ * lazy-loading property: the bell must not fetch either list to render its
+ * list view.
+ */
+interface ScheduleStub {
+  id: string;
+  status?: string;
+  sourceKey?: string | null;
+  enabled?: boolean;
+}
+
+const schedulesRef: {
+  list: ScheduleStub[];
+  isPending: boolean;
+  isError: boolean;
+} = {
+  list: [],
+  isPending: false,
+  isError: false,
+};
+
+const skillsRef: { list: { id: string }[]; isPending: boolean } = {
+  list: [],
+  isPending: false,
+};
+
+// The `enabled` flag every read of each list was called with, recorded per
+// query key. Two call sites read the schedules list (the entity-link resolver
+// and the empty state's recipe gate) and they enable it under different
+// conditions, so the flags are asserted as a set rather than by position.
+const schedulesEnabledCalls: boolean[] = [];
+const skillsEnabledCalls: boolean[] = [];
+
+mock.module("@/utils/schedules", () => ({
+  schedulesListQueryOptions: (assistantId: string | undefined) => ({
+    queryKey: ["schedules", assistantId ?? ""],
+    queryFn: () => Promise.resolve(schedulesRef.list),
+  }),
+}));
+
+interface DecisionVars {
+  path?: { assistant_id?: string };
+  body?: { requestId?: string; action?: string };
+}
+
+interface DecisionCallbacks {
+  onSuccess?: (
+    data: { applied: boolean; reason?: string; committed?: boolean },
+    variables: DecisionVars,
+  ) => void;
+  onError?: (error: Error, variables: DecisionVars) => void;
+  onSettled?: (
+    data: unknown,
+    error: Error | null,
+    variables: DecisionVars,
+  ) => void;
+}
+
+/** What the rows' inline Approve and Reject submit to the decision route. */
+const decisionCalls: DecisionVars[] = [];
+
+/**
+ * How the mocked decision settles. "not-applied" is the 200 the route
+ * returns when it declines to apply the decision, carrying a `reason`; it
+ * reaches `onSuccess` rather than `onError`.
+ */
+const decisionRef: {
+  outcome: "pending" | "applied" | "not-applied" | "gone" | "failed";
+  reason?: string;
+  /** The daemon's `committed` field; absent on daemons that predate it. */
+  committed?: boolean;
+} = { outcome: "pending" };
+
+/** Feed refreshes the bell asked for, one per decision outcome. */
+const feedInvalidateCalls: number[] = [];
+
+/** Toasts the bell raised, by tone. */
+const toastCalls: Array<[string, string]> = [];
+
+mock.module("@/generated/daemon/@tanstack/react-query.gen", () => ({
+  skillsGetOptions: (options: { query?: { kind?: string } }) => ({
+    queryKey: ["skills", options.query?.kind ?? ""],
+    queryFn: () => Promise.resolve({ skills: skillsRef.list }),
+  }),
+  useGuardianactionsDecisionPostMutation: (options?: DecisionCallbacks) => ({
+    mutate: (vars: DecisionVars) => {
+      decisionCalls.push(vars);
+      if (decisionRef.outcome === "applied") {
+        options?.onSuccess?.({ applied: true }, vars);
+      } else if (decisionRef.outcome === "not-applied") {
+        options?.onSuccess?.(
+          {
+            applied: false,
+            reason: decisionRef.reason,
+            ...(decisionRef.committed !== undefined
+              ? { committed: decisionRef.committed }
+              : {}),
+          },
+          vars,
+        );
+      } else if (decisionRef.outcome === "gone") {
+        // The route's 404 for a request that no longer exists, as the
+        // daemon client's error interceptor surfaces it.
+        options?.onError?.(
+          new ApiError(404, "Guardian request not found"),
+          vars,
+        );
+      } else if (decisionRef.outcome === "failed") {
+        options?.onError?.(new ApiError(500, "boom"), vars);
+      }
+      // "pending" leaves the decision in flight, which is the state the
+      // shared in-flight guard has to hold under.
+      if (decisionRef.outcome !== "pending") {
+        options?.onSettled?.(undefined, null, vars);
+      }
+    },
+    isPending: false,
+  }),
+}));
+
+mock.module("@/lib/sentry/capture-error", () => ({
+  captureError: () => {},
+}));
+
+// The entity-link resolver is the only part of this tree that reads a TanStack
+// query directly (the feed and conversation hooks are mocked above), so
+// stubbing `useQuery` stands in for a QueryClientProvider and exposes the
+// `enabled` flag. Dispatching on the query key keeps the two lists distinct:
+// the resolver reads both on every render, and a stub that answered them
+// identically could not tell a present skill from a present schedule.
+mock.module("@tanstack/react-query", () => ({
+  useQuery: (options: { enabled?: boolean; queryKey: unknown[] }) => {
+    const enabled = options.enabled === true;
+    if (options.queryKey[0] === "skills") {
+      skillsEnabledCalls.push(enabled);
+      return {
+        data: { skills: skillsRef.list },
+        isPending: skillsRef.isPending,
+        isError: false,
+      };
+    }
+    schedulesEnabledCalls.push(enabled);
+    return {
+      // A failed load carries no list, the way TanStack reports one.
+      data: schedulesRef.isError ? undefined : schedulesRef.list,
+      isPending: schedulesRef.isPending,
+      isError: schedulesRef.isError,
+    };
+  },
+}));
+
+/**
+ * A schedule as the list endpoint returns one. `status` and `sourceKey` are
+ * what separate a schedule the user set up from a spent one-shot or a row a
+ * plugin declared, so both default to the user-created case.
+ */
+function schedule(id: string, overrides: Partial<ScheduleStub> = {}) {
+  return { id, status: "active", sourceKey: null, ...overrides };
+}
+
+function skill(id: string): { id: string } {
+  return { id };
+}
+
+// The active assistant resolves asynchronously, so it is null for the first
+// frames after a load. Held in a ref so a test can render that window.
+const activeAssistantIdRef: { value: string | null } = { value: "assistant-1" };
+
+mock.module("@/stores/resolved-assistants-store", () => {
+  const store = () => null;
+  store.use = {
+    activeAssistantId: () => activeAssistantIdRef.value,
+  };
+  return { useResolvedAssistantsStore: store };
+});
+
+import { NotificationsBell } from "@/domains/home/components/notifications-bell";
+import { useGuardianDecisionStore } from "@/domains/home/guardian-decision-store";
+
+// The dot element itself, matched by a styling-independent test hook so the
+// assertions survive restyling. The accessible name is a separate concern, so
+// it is asserted alongside. The closing quote is load-bearing: it stops
+// READ_LABEL matching the unread label.
+const UNREAD_DOT = 'data-testid="notifications-bell-unread-dot"';
+const UNREAD_LABEL = 'aria-label="Notifications (unread)"';
+const READ_LABEL = 'aria-label="Notifications"';
+
+/** The recipe card, matched by the title it leads with. */
+const RECIPE_LABEL = /^Set up a morning briefing/;
+
+const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * One timestamp for every fixture item, read once here rather than on each
+ * call. Relative, so the bell's recency treatment is exercised, but shared,
+ * because `sortFeedItems` orders items of equal priority by `createdAt`
+ * descending: two items built on either side of a millisecond tick sort by
+ * which one the clock stamped later, and an assertion naming items in list
+ * order then passes or fails on that. Equal timestamps leave the sort stable,
+ * so a test's items hold the order it declares them in.
+ */
+const FIXTURE_TIMESTAMP = new Date(Date.now() - THREE_HOURS_MS).toISOString();
+
+function bellItem(overrides: Partial<FeedItem>): FeedItem {
+  return feedItem({
+    id: "item-1",
+    summary: "Something happened",
+    timestamp: FIXTURE_TIMESTAMP,
+    createdAt: FIXTURE_TIMESTAMP,
+    ...overrides,
+  });
+}
+
+function renderBell(): string {
+  return renderToStaticMarkup(createElement(NotificationsBell));
+}
+
+async function clickTrigger(): Promise<void> {
+  fireEvent.click(screen.getByRole("button", { name: /^Notifications/ }));
+  // Radix measures and positions the panel after the click, off a promise.
+  await act(async () => {});
+}
+
+async function openBell(): Promise<void> {
+  render(<NotificationsBell />);
+  await clickTrigger();
+}
+
+/** Open the bell and select a row by the title its card carries. */
+async function openDetail(title: string): Promise<void> {
+  await openBell();
+  if (!screen.queryByRole("button", { name: title })) {
+    fireEvent.click(screen.getByRole("switch", { name: "Unread" }));
+    await act(async () => {});
+  }
+  fireEvent.click(screen.getByRole("button", { name: title }));
+  await act(async () => {});
+}
+
+/**
+ * Labels of the boxes the detail's footer holds, in document order. Read off
+ * the elements rather than the accessibility tree so the row can be compared
+ * across the pending window, where the links are deliberately not exposed.
+ */
+function footerLinkLabels(footer: HTMLElement): (string | null)[] {
+  return Array.from(footer.querySelectorAll("button")).map(
+    (button) => button.textContent,
+  );
+}
+
+/** The detail's fixed-height content region. */
+function detailContent(): HTMLElement {
+  return screen.getByTestId("notifications-bell-detail-content");
+}
+
+/** The detail's pinned footer strip. */
+function detailFooter(): HTMLElement {
+  return screen.getByTestId("notifications-bell-detail-footer");
+}
+
+beforeEach(() => {
+  isTouchMobileRef.value = false;
+  setTouchSurface(false);
+  feedRef.items = [];
+  feedRef.isError = false;
+  conversationListsRef.foreground = [];
+  conversationListsRef.background = [];
+  conversationListsRef.scheduled = [];
+  conversationListsRef.isPending = false;
+  enabledCalls.foreground = [];
+  enabledCalls.background = [];
+  enabledCalls.scheduled = [];
+  conversationLinkRef.missing = new Set();
+  conversationLinkRef.isPending = false;
+  conversationLinkEnabledCalls.length = 0;
+  updateLinksRef.validSkillIds = new Set();
+  updateLinksRef.validConversationIds = new Set();
+  updateLinksRef.isPending = false;
+  updateLinksEnabledCalls.length = 0;
+  schedulesRef.list = [];
+  schedulesRef.isPending = false;
+  schedulesRef.isError = false;
+  skillsRef.list = [];
+  skillsRef.isPending = false;
+  schedulesEnabledCalls.length = 0;
+  skillsEnabledCalls.length = 0;
+  activeAssistantIdRef.value = "assistant-1";
+  localStorage.clear();
+  updateStatusCalls.length = 0;
+  markAllCalls.length = 0;
+  markAllPendingRef.value = false;
+  supportsBulkFeedStatusRef.value = true;
+  decisionCalls.length = 0;
+  decisionRef.outcome = "pending";
+  decisionRef.reason = undefined;
+  decisionRef.committed = undefined;
+  useGuardianDecisionStore.getState().reset();
+  feedInvalidateCalls.length = 0;
+  toastCalls.length = 0;
+  triggerActionCalls.length = 0;
+  triggerActionRef.outcome = "pending";
+  navigateMock.mockClear();
+  navigateToConversationMock.mockClear();
+  navigateToNewConversationMock.mockClear();
+});
+
+afterEach(async () => {
+  // Radix schedules the panel's mount and unmount off a frame. Draining those
+  // before the tree goes away keeps them from landing in the next test's
+  // render, where React has no act scope to attribute them to.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  cleanup();
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: originalMatchMedia,
+  });
+});
+
+describe("NotificationsBell unread dot", () => {
+  test("shows the dot when an unread notification exists", () => {
+    feedRef.items = [bellItem({ status: "new" })];
+    const html = renderBell();
+    expect(html).toContain(UNREAD_DOT);
+    expect(html).toContain(UNREAD_LABEL);
+    expect(html).toContain("bg-[var(--notification-attention)]");
+  });
+
+  test("hides the dot when every notification has been read", () => {
+    feedRef.items = [
+      bellItem({ id: "a", status: "seen" }),
+      bellItem({ id: "b", status: "acted_on" }),
+    ];
+    const html = renderBell();
+    expect(html).not.toContain(UNREAD_DOT);
+    expect(html).toContain(READ_LABEL);
+    expect(html).not.toContain(UNREAD_LABEL);
+  });
+
+  test("hides the dot when the feed is empty", () => {
+    const html = renderBell();
+    expect(html).not.toContain(UNREAD_DOT);
+    expect(html).toContain(READ_LABEL);
+  });
+
+  test("ignores unread items that the popover never shows", () => {
+    // Dismissed and high-urgency items are filtered out of the list, so
+    // they must not light a dot the panel can't explain.
+    feedRef.items = [
+      bellItem({ id: "a", status: "dismissed" }),
+      bellItem({ id: "b", status: "new", urgency: "high" }),
+    ];
+    const html = renderBell();
+    expect(html).not.toContain(UNREAD_DOT);
+    expect(html).toContain(READ_LABEL);
+  });
+
+  test("mobile trigger carries the same dot", () => {
+    isTouchMobileRef.value = true;
+    feedRef.items = [bellItem({ status: "new" })];
+    const html = renderBell();
+    expect(html).toContain(UNREAD_DOT);
+    expect(html).toContain(UNREAD_LABEL);
+  });
+});
+
+describe("NotificationsBell panel", () => {
+  test("renders each row with its title and timestamp, and no preview", async () => {
+    feedRef.items = [
+      bellItem({
+        category: "background",
+        title: "Watcher job failed",
+        summary: "The watcher job could not reach the upstream service.",
+      }),
+    ];
+
+    await openBell();
+
+    expect(screen.getByText("Watcher job failed")).toBeTruthy();
+    expect(screen.getByText("3h ago")).toBeTruthy();
+    // A row that only reports is carried by its title; the body waits in
+    // the detail.
+    expect(
+      screen.queryByText(
+        "The watcher job could not reach the upstream service.",
+      ),
+    ).toBeNull();
+  });
+
+  test("names the thread a notification came from", async () => {
+    conversationListsRef.foreground = [
+      { conversationId: "conv-1", title: "Weekly report" } as Conversation,
+    ];
+    feedRef.items = [
+      bellItem({ title: "Watcher job failed", conversationId: "conv-1" }),
+    ];
+
+    await openBell();
+
+    expect(screen.getByTestId("home-recap-row-thread").textContent).toBe(
+      "Weekly report",
+    );
+  });
+
+  test("falls back to the source label when the conversation is unknown", async () => {
+    feedRef.items = [
+      bellItem({
+        title: "Watcher job failed",
+        conversationId: "conv-gone",
+        sourceLabel: "Heartbeat",
+      }),
+    ];
+
+    await openBell();
+
+    expect(screen.getByTestId("home-recap-row-thread").textContent).toBe(
+      "Heartbeat",
+    );
+  });
+
+  test("counts the visible notifications in the header", async () => {
+    feedRef.items = [
+      bellItem({ id: "item-1" }),
+      bellItem({ id: "item-2" }),
+      bellItem({ id: "item-3", status: "dismissed" }),
+    ];
+
+    await openBell();
+
+    expect(screen.getByTestId("notifications-bell-count").textContent).toBe(
+      "2",
+    );
+  });
+
+  test("rows carry no category chip", async () => {
+    feedRef.items = [
+      bellItem({
+        category: "background",
+        title: "Watcher job failed",
+      }),
+    ];
+
+    await openBell();
+
+    expect(screen.queryByText("Background")).toBeNull();
+  });
+
+  test("keeps its own unread dot distinct from the rows'", async () => {
+    feedRef.items = [bellItem({ status: "new" })];
+
+    await openBell();
+
+    expect(screen.getByTestId("notifications-bell-unread-dot")).toBeTruthy();
+    expect(screen.getByTestId("home-recap-row-unread-dot")).toBeTruthy();
+  });
+
+  test("keeps the panel header and puts bulk actions in its overflow menu", async () => {
+    feedRef.items = [bellItem({ status: "new" })];
+
+    await openBell();
+
+    expect(screen.getByRole("heading", { name: "Notifications" })).toBeTruthy();
+    expect(
+      screen.queryByRole("menuitem", { name: "Mark all as read" }),
+    ).toBeNull();
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Notification actions" }),
+    );
+    await act(async () => {});
+
+    expect(
+      screen.getByRole("menuitem", { name: "Mark all as read" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Clear all" })).toBeTruthy();
+  });
+
+  test("opens on unread notifications and counts only displayed rows", async () => {
+    feedRef.items = [
+      bellItem({ id: "unread", status: "new", title: "Unread item" }),
+      bellItem({ id: "read", status: "seen", title: "Read item" }),
+      bellItem({ id: "acted", status: "acted_on", title: "Acted item" }),
+    ];
+
+    await openBell();
+
+    const filter = screen.getByRole("switch", { name: "Unread" });
+    expect(filter.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText("Unread item")).toBeTruthy();
+    expect(screen.queryByText("Read item")).toBeNull();
+    expect(screen.queryByText("Acted item")).toBeNull();
+    expect(screen.getByTestId("notifications-bell-count").textContent).toBe(
+      "1",
+    );
+
+    fireEvent.click(filter);
+    await act(async () => {});
+
+    expect(filter.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByText("Read item")).toBeTruthy();
+    expect(screen.getByText("Acted item")).toBeTruthy();
+    expect(screen.getByTestId("notifications-bell-count").textContent).toBe(
+      "3",
+    );
+  });
+
+  test("uses the design-system small toggle for the unread filter", async () => {
+    feedRef.items = [bellItem({ status: "new" })];
+
+    await openBell();
+
+    const filter = screen.getByRole("switch", { name: "Unread" });
+    expect(filter.parentElement?.className).toContain("flex items-center");
+    expect(filter.parentElement?.className).not.toContain("--avatar-accent");
+    expect(filter.className).toContain("--system-positive-strong");
+    expect(filter.className).toContain("h-4 w-6");
+    expect(filter.querySelector("span")?.className).toContain("--aux-white");
+  });
+
+  test("uses the standard theme surface for the count", async () => {
+    feedRef.items = [bellItem({ status: "new" })];
+
+    await openBell();
+
+    const count = screen.getByTestId("notifications-bell-count");
+    expect(count.parentElement?.className).toContain("--surface-active");
+    expect(count.className).toContain("--content-secondary");
+    expect(count.parentElement?.className).not.toContain("--avatar-accent");
+    expect(count.className).not.toContain("--avatar-accent");
+  });
+
+  test("preserves the filter through detail and back", async () => {
+    feedRef.items = [
+      bellItem({ id: "unread", status: "new", title: "Unread item" }),
+      bellItem({ id: "read", status: "seen", title: "Read item" }),
+    ];
+
+    await openBell();
+    fireEvent.click(screen.getByRole("switch", { name: "Unread" }));
+    fireEvent.click(screen.getByRole("button", { name: "Read item" }));
+    await act(async () => {});
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to notifications" }),
+    );
+    await act(async () => {});
+
+    expect(
+      screen
+        .getByRole("switch", { name: "Unread" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(screen.getByText("Unread item")).toBeTruthy();
+    expect(screen.getByText("Read item")).toBeTruthy();
+  });
+
+  test("resets the unread filter on each fresh opening", async () => {
+    feedRef.items = [
+      bellItem({ id: "unread", status: "new", title: "Unread item" }),
+      bellItem({ id: "read", status: "seen", title: "Read item" }),
+    ];
+
+    await openBell();
+    fireEvent.click(screen.getByRole("switch", { name: "Unread" }));
+    expect(screen.getByText("Read item")).toBeTruthy();
+
+    await clickTrigger();
+    await clickTrigger();
+
+    expect(
+      screen
+        .getByRole("switch", { name: "Unread" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(screen.queryByText("Read item")).toBeNull();
+    expect(screen.getByTestId("notifications-bell-count").textContent).toBe(
+      "1",
+    );
+  });
+
+  test("offers no route out to a full-page feed", async () => {
+    feedRef.items = [bellItem({ status: "new" })];
+
+    await openBell();
+
+    expect(screen.queryByRole("button", { name: "View all" })).toBeNull();
+  });
+});
+
+describe("NotificationsBell bulk action menu", () => {
+  function pendingGuardianItem(): FeedItem {
+    return bellItem({
+      id: "guardian:req-1",
+      status: "new",
+      urgency: "high",
+      title: "Guardian request",
+      guardianRequest: {
+        requestId: "req-1",
+        kind: "tool_approval",
+        intent: "approval",
+        status: "pending",
+      },
+    });
+  }
+
+  async function openActionsMenu(): Promise<void> {
+    const trigger = screen.getByRole("button", {
+      name: "Notification actions",
+    });
+    if (isTouchMobileRef.value) {
+      fireEvent.click(trigger);
+    } else {
+      fireEvent.pointerDown(trigger);
+    }
+    await act(async () => {});
+  }
+
+  test("applies bulk actions to every eligible item regardless of the filter", async () => {
+    feedRef.items = [
+      bellItem({ id: "unread", status: "new" }),
+      bellItem({ id: "read", status: "seen" }),
+      pendingGuardianItem(),
+    ];
+
+    await openBell();
+    await openActionsMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Mark all as read" }));
+    await act(async () => {});
+
+    expect(markAllCalls).toEqual([
+      { from: ["new"], to: "seen", ids: ["unread"] },
+    ]);
+
+    await openActionsMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Clear all" }));
+    await act(async () => {});
+
+    expect(markAllCalls[1]).toEqual({
+      from: ["new", "seen", "acted_on"],
+      to: "dismissed",
+      ids: ["unread", "read"],
+    });
+  });
+
+  test("hides bulk actions when the assistant does not support them", async () => {
+    supportsBulkFeedStatusRef.value = false;
+    feedRef.items = [bellItem({ status: "new" })];
+
+    await openBell();
+
+    expect(
+      screen.queryByRole("button", { name: "Notification actions" }),
+    ).toBeNull();
+  });
+
+  test("hides bulk actions when only a pending guardian request is visible", async () => {
+    feedRef.items = [pendingGuardianItem()];
+
+    await openBell();
+
+    expect(
+      screen.queryByRole("button", { name: "Notification actions" }),
+    ).toBeNull();
+  });
+
+  test("holds every action inert while a bulk mutation is pending", async () => {
+    markAllPendingRef.value = true;
+    feedRef.items = [
+      bellItem({ id: "unread", status: "new" }),
+      bellItem({ id: "read", status: "seen" }),
+    ];
+
+    await openBell();
+    await openActionsMenu();
+
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Mark all as read" })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Clear all" })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+  });
+
+  test("Escape closes the action menu and leaves the notification panel open", async () => {
+    feedRef.items = [bellItem({ status: "new" })];
+
+    await openBell();
+    await openActionsMenu();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await act(async () => {});
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Mark all as read" }),
+    ).toBeNull();
+    expect(screen.getByRole("heading", { name: "Notifications" })).toBeTruthy();
+  });
+
+  test("uses the adaptive action sheet on touch mobile", async () => {
+    isTouchMobileRef.value = true;
+    setTouchSurface(true);
+    feedRef.items = [bellItem({ status: "new" })];
+
+    await openBell();
+    expect(
+      screen
+        .getByRole("button", { name: "Notification actions" })
+        .getAttribute("aria-haspopup"),
+    ).toBe("dialog");
+    await openActionsMenu();
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark all as read" }));
+    await act(async () => {});
+
+    expect(markAllCalls).toEqual([
+      { from: ["new"], to: "seen", ids: ["item-1"] },
+    ]);
+    expect(
+      screen.getAllByRole("heading", { name: "Notifications" }).length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("NotificationsBell guardian rows", () => {
+  function guardianBellItem(overrides: Partial<FeedItem> = {}): FeedItem {
+    return bellItem({
+      id: "guardian:req-1",
+      status: "new",
+      urgency: "high",
+      // Production shape: the daemon's title is the generic kind of request
+      // and the ask itself arrives in the body.
+      title: "Guardian Question",
+      summary: "Alice asked the assistant to look up an issue",
+      guardianRequest: {
+        requestId: "req-1",
+        kind: "tool_approval",
+        intent: "approval",
+        status: "pending",
+        sourceContextLabel: "Slack #user-feedback",
+      },
+      ...overrides,
+    });
+  }
+
+  test("a waiting request sorts above the notifications that only report", async () => {
+    feedRef.items = [
+      bellItem({ id: "update-1", title: "Watcher job failed" }),
+      guardianBellItem(),
+    ];
+
+    await openBell();
+
+    const titles = screen
+      .getAllByTestId("home-recap-row-title")
+      .map((node) => node.textContent);
+    // Named by what it asks of the user, never by the daemon's generic
+    // "Guardian Question", with the ask itself on the line below.
+    expect(titles[0]).toBe("Needs your approval");
+    expect(titles[1]).toBe("Watcher job failed");
+    expect(
+      screen.getByText("Alice asked the assistant to look up an issue"),
+    ).toBeTruthy();
+  });
+
+  test("the guardian row's second line carries the ask", async () => {
+    feedRef.items = [guardianBellItem()];
+
+    await openBell();
+
+    expect(
+      screen.getByText("Alice asked the assistant to look up an issue"),
+    ).toBeTruthy();
+  });
+
+  test("only the waiting row carries the attention treatment", async () => {
+    feedRef.items = [
+      bellItem({ id: "update-1", title: "Watcher job failed" }),
+      guardianBellItem(),
+    ];
+
+    await openBell();
+
+    const marked = document.querySelectorAll("[data-needs-attention]");
+    expect(marked.length).toBe(1);
+    expect(marked[0]?.textContent).toContain("Alice asked the assistant");
+  });
+
+  test("a settled request keeps no attention treatment", async () => {
+    feedRef.items = [
+      guardianBellItem({
+        id: "guardian:req-2",
+        urgency: "medium",
+        guardianRequest: {
+          requestId: "req-2",
+          kind: "tool_approval",
+          intent: "approval",
+          status: "approved",
+          // Receipts keep the context the pending item carried.
+          sourceContextLabel: "Slack #user-feedback",
+        },
+      }),
+    ];
+
+    await openBell();
+
+    expect(document.querySelectorAll("[data-needs-attention]").length).toBe(0);
+    // A settled receipt reads by its own title like any other notification,
+    // with the ask it carried left to the detail.
+    expect(screen.getByText("Guardian Question")).toBeTruthy();
+    expect(
+      screen.queryByText("Alice asked the assistant to look up an issue"),
+    ).toBeNull();
+    expect(screen.queryByTestId("home-recap-row-decision")).toBeNull();
+  });
+
+  test("a waiting question quotes the ask and offers no buttons", async () => {
+    feedRef.items = [
+      guardianBellItem({
+        guardianRequest: {
+          requestId: "req-q",
+          kind: "pending_question",
+          intent: "question",
+          status: "pending",
+        },
+      }),
+    ];
+
+    await openBell();
+
+    expect(screen.getByText("Needs your answer")).toBeTruthy();
+    expect(screen.getByTestId("home-recap-row-question").textContent).toContain(
+      "Alice asked the assistant to look up an issue",
+    );
+    expect(screen.queryByTestId("home-recap-row-decision")).toBeNull();
+  });
+
+  test("a waiting approval is decided from its row", async () => {
+    feedRef.items = [guardianBellItem()];
+
+    await openBell();
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(decisionCalls).toEqual([
+      {
+        path: { assistant_id: "assistant-1" },
+        body: { requestId: "req-1", action: "approve_once" },
+      },
+    ]);
+    // Deciding is not opening: the list stays where it is.
+    expect(
+      screen.queryByRole("button", { name: "Back to notifications" }),
+    ).toBeNull();
+
+    // The decision is still in flight, so the row's other button is held
+    // and cannot send a conflicting decision on the same request.
+    await act(async () => {});
+    const reject = screen.getByRole("button", {
+      name: "Reject",
+    }) as HTMLButtonElement;
+    expect(reject.disabled).toBe(true);
+    fireEvent.click(reject);
+    expect(decisionCalls.length).toBe(1);
+  });
+
+  test("a waiting approval can be rejected from its row", async () => {
+    feedRef.items = [guardianBellItem()];
+
+    await openBell();
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+
+    expect(decisionCalls.at(-1)?.body).toEqual({
+      requestId: "req-1",
+      action: "reject",
+    });
+  });
+
+  test("an applied decision refreshes the feed so the row becomes its receipt", async () => {
+    decisionRef.outcome = "applied";
+    feedRef.items = [guardianBellItem()];
+
+    await openBell();
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(feedInvalidateCalls.length).toBe(1);
+    expect(toastCalls).toEqual([]);
+  });
+
+  // The route answers 200 with `applied: false` and a reason when it declines
+  // a decision, which is not an error. The feed is refreshed either way, and
+  // the toast says what happened in the reason's own terms, so a request that
+  // was settled elsewhere reads as such and one this actor may not decide is
+  // not retried as if it might succeed next time.
+  test.each([
+    ["already_resolved", undefined, "info", "Already resolved"],
+    ["not_found", undefined, "info", "Already resolved"],
+    ["expired", undefined, "info", "Request expired"],
+    [
+      "identity_mismatch",
+      undefined,
+      "error",
+      "You don't have permission to decide this request.",
+    ],
+    [
+      "request_misconfigured",
+      undefined,
+      "error",
+      "That decision couldn't be applied.",
+    ],
+    [
+      "resolver_failed",
+      true,
+      "error",
+      "Your decision was recorded, but the step after it failed.",
+    ],
+    // An older daemon reports a failed persist under the same reason and
+    // without the `committed` field, so nothing is claimed to be recorded.
+    [
+      "resolver_failed",
+      undefined,
+      "error",
+      "That decision couldn't be applied.",
+    ],
+    [
+      "decision_not_persisted",
+      false,
+      "error",
+      "That decision couldn't be applied.",
+    ],
+    [undefined, undefined, "error", "That decision couldn't be applied."],
+  ] as const)(
+    "a decision declined for %s (committed: %s) says so and refreshes the feed",
+    async (reason, committed, tone, message) => {
+      decisionRef.outcome = "not-applied";
+      decisionRef.reason = reason;
+      decisionRef.committed = committed;
+      feedRef.items = [guardianBellItem()];
+
+      await openBell();
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+      expect(feedInvalidateCalls.length).toBe(1);
+      expect(toastCalls).toEqual([[tone, message]]);
+    },
+  );
+
+  // The feed can keep projecting a settled request as pending for a while: an
+  // expiry is only written by a periodic sweep, and a resolver failure lands
+  // after the decision itself. The row's buttons stay down regardless, so a
+  // request decided once cannot be decided again in the meantime.
+  test.each([
+    ["applied", undefined, undefined],
+    ["not-applied", "expired", undefined],
+    ["not-applied", "resolver_failed", true],
+    ["not-applied", "already_resolved", undefined],
+  ] as const)(
+    "a %s decision (%s) keeps the row's buttons down until the feed catches up",
+    async (outcome, reason, committed) => {
+      decisionRef.outcome = outcome;
+      decisionRef.reason = reason;
+      decisionRef.committed = committed;
+      feedRef.items = [guardianBellItem()];
+
+      await openBell();
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await act(async () => {});
+
+      expect(screen.queryByTestId("home-recap-row-decision")).toBeNull();
+    },
+  );
+
+  test("a decision made from the row reads as decided in its detail", async () => {
+    decisionRef.outcome = "applied";
+    // The canonical guardian item, whose detail is the request card.
+    feedRef.items = [
+      guardianBellItem({ detailPanel: { kind: "permissionChat" } }),
+    ];
+
+    await openBell();
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await act(async () => {});
+    fireEvent.click(
+      screen.getByRole("button", { name: "Needs your approval" }),
+    );
+    await act(async () => {});
+
+    // The feed still projects the request as pending, but the outcome is
+    // shared, so the detail shows the receipt rather than offering the
+    // decision again.
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.getByText("Request approved")).toBeTruthy();
+  });
+
+  test.each([
+    ["identity_mismatch", undefined],
+    ["request_misconfigured", undefined],
+    ["decision_not_persisted", false],
+    // The undifferentiated `resolver_failed` of an older daemon: it may be
+    // a failed persist, so the request has to stay decidable.
+    ["resolver_failed", undefined],
+  ] as const)(
+    "a decision declined for %s (committed: %s) leaves the row's buttons in place",
+    async (reason, committed) => {
+      decisionRef.outcome = "not-applied";
+      decisionRef.reason = reason;
+      decisionRef.committed = committed;
+      feedRef.items = [guardianBellItem()];
+
+      await openBell();
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await act(async () => {});
+
+      expect(screen.getByTestId("home-recap-row-decision")).toBeTruthy();
+    },
+  );
+
+  test("a decision in flight from the row holds the detail's buttons too", async () => {
+    // "pending" leaves the decision in flight.
+    feedRef.items = [
+      guardianBellItem({ detailPanel: { kind: "permissionChat" } }),
+    ];
+
+    await openBell();
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await act(async () => {});
+    fireEvent.click(
+      screen.getByRole("button", { name: "Needs your approval" }),
+    );
+    await act(async () => {});
+
+    // The detail's card has its own mutation, whose own pending bit is
+    // false; the in-flight request is shared, so its buttons are held all
+    // the same and no second decision can be sent.
+    const approve = screen.getByRole("button", {
+      name: "Approve",
+    }) as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    fireEvent.click(approve);
+    expect(decisionCalls.length).toBe(1);
+  });
+
+  test("a request that no longer exists is retired like one already resolved", async () => {
+    decisionRef.outcome = "gone";
+    feedRef.items = [guardianBellItem()];
+
+    await openBell();
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    // The route answers a stale row's decision with a 404, which reaches the
+    // error path rather than a declined 200. The feed is still refreshed so
+    // the row goes, and the click reads as the request being gone rather
+    // than as a failure to retry.
+    expect(feedInvalidateCalls.length).toBe(1);
+    expect(toastCalls).toEqual([["info", "Already resolved"]]);
+  });
+
+  test("any other failure reports a submission failure and leaves the row", async () => {
+    decisionRef.outcome = "failed";
+    feedRef.items = [guardianBellItem()];
+
+    await openBell();
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(feedInvalidateCalls).toEqual([]);
+    expect(toastCalls).toEqual([
+      ["error", "The decision could not be submitted. Try again."],
+    ]);
+  });
+});
+
+describe("NotificationsBell empty state", () => {
+  test("distinguishes read history from a feed with no notifications", async () => {
+    feedRef.items = [
+      bellItem({ id: "read", status: "seen", title: "Read item" }),
+    ];
+
+    await openBell();
+
+    expect(screen.getByText("No unread notifications.")).toBeTruthy();
+    expect(screen.queryByText("Nothing yet.")).toBeNull();
+    expect(screen.queryByRole("button", { name: RECIPE_LABEL })).toBeNull();
+    expect(screen.getByTestId("notifications-bell-count").textContent).toBe(
+      "0",
+    );
+  });
+
+  test("offers the schedule that produces the first notification", async () => {
+    await openBell();
+
+    expect(screen.getByText("Nothing yet.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: RECIPE_LABEL })).toBeTruthy();
+  });
+
+  test("carries no second call to action beside the recipe", async () => {
+    // The bell trigger and the recipe. Nothing else: a second call to action
+    // would compete with the one thing this scene is asking for.
+    await openBell();
+
+    expect(screen.getAllByRole("button")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: RECIPE_LABEL })).toBeTruthy();
+  });
+
+  test("the recipe closes the panel and seeds a conversation", async () => {
+    await openBell();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: RECIPE_LABEL }));
+      // The close runs off a frame, so it has to settle inside the act scope
+      // that owns the click.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(navigateToNewConversationMock).toHaveBeenCalledTimes(1);
+    const [, options] = navigateToNewConversationMock.mock.calls[0] as [
+      unknown,
+      { prompt?: string },
+    ];
+    expect(options.prompt).toContain("morning briefing");
+    // The panel dismisses itself, so the conversation it opened is not left
+    // behind a popover.
+    expect(screen.queryByText("Nothing yet.")).toBeNull();
+  });
+
+  test("a failed load keeps its own message instead of the scene", async () => {
+    feedRef.isError = true;
+
+    await openBell();
+
+    expect(screen.getByText("Couldn't load notifications.")).toBeTruthy();
+    expect(screen.queryByText("Nothing yet.")).toBeNull();
+    expect(screen.queryByRole("button", { name: RECIPE_LABEL })).toBeNull();
+  });
+});
+
+/**
+ * The recipe is an advertisement for schedules, so it is aimed at the people
+ * who have not adopted them and it goes away for good when waved off. The
+ * scene around it does not: the icon well and the title stand on their own.
+ *
+ * Every case that is not a settled, empty list hides the card. An offer shown
+ * while the list is still arriving would have to be withdrawn the moment a
+ * schedule landed, and a failed load knows nothing about whether the user has
+ * schedules, so neither may advertise.
+ */
+describe("NotificationsBell briefing recipe gating", () => {
+  test("offers the recipe when the user has no schedules", async () => {
+    schedulesRef.list = [];
+
+    await openBell();
+
+    expect(screen.getByRole("button", { name: RECIPE_LABEL })).toBeTruthy();
+  });
+
+  test("hides the recipe once the user has a schedule", async () => {
+    schedulesRef.list = [schedule("schedule-1")];
+
+    await openBell();
+
+    expect(screen.queryByRole("button", { name: RECIPE_LABEL })).toBeNull();
+    // The scene still has to hold together with nothing under the title.
+    expect(screen.getByText("Nothing yet.")).toBeTruthy();
+  });
+
+  test("hides the recipe while the schedules list is loading", async () => {
+    schedulesRef.isPending = true;
+
+    await openBell();
+
+    expect(screen.queryByRole("button", { name: RECIPE_LABEL })).toBeNull();
+    expect(screen.getByText("Nothing yet.")).toBeTruthy();
+  });
+
+  test("hides the recipe when the schedules list fails to load", async () => {
+    schedulesRef.isError = true;
+
+    await openBell();
+
+    expect(screen.queryByRole("button", { name: RECIPE_LABEL })).toBeNull();
+    expect(screen.getByText("Nothing yet.")).toBeTruthy();
+  });
+
+  test("counts a spent one-shot as no schedule at all", async () => {
+    // `fired` and `cancelled` are terminal: neither will produce another
+    // notification, so neither is a reason to stop offering the recipe.
+    schedulesRef.list = [
+      schedule("fired-1", { status: "fired" }),
+      schedule("cancelled-1", { status: "cancelled" }),
+    ];
+
+    await openBell();
+
+    expect(screen.getByRole("button", { name: RECIPE_LABEL })).toBeTruthy();
+  });
+
+  test("counts a plugin-declared schedule as no schedule at all", async () => {
+    // Installed with the plugin rather than set up by anyone, so it is no
+    // evidence the user has ever made a schedule.
+    schedulesRef.list = [
+      schedule("plugin-1", { sourceKey: "plugin:gmail/poll-inbox" }),
+    ];
+
+    await openBell();
+
+    expect(screen.getByRole("button", { name: RECIPE_LABEL })).toBeTruthy();
+  });
+
+  test("hides the recipe for a schedule that is merely paused", async () => {
+    // A paused schedule is still one the user set up, and it fires again the
+    // moment it is switched back on, so it is not someone to advertise to.
+    schedulesRef.list = [schedule("paused-1", { enabled: false })];
+
+    await openBell();
+
+    expect(screen.queryByRole("button", { name: RECIPE_LABEL })).toBeNull();
+  });
+
+  test("hides the recipe before the active assistant resolves", async () => {
+    // No assistant means no list to judge by, and a recipe launched here would
+    // seed a conversation with nothing to open it against.
+    activeAssistantIdRef.value = null;
+
+    await openBell();
+
+    expect(screen.queryByRole("button", { name: RECIPE_LABEL })).toBeNull();
+    expect(screen.getByText("Nothing yet.")).toBeTruthy();
+    expect(schedulesEnabledCalls.some((enabled) => enabled)).toBe(false);
+  });
+
+  test("the recipe gate does not fetch schedules for a feed that has items", async () => {
+    feedRef.items = [bellItem({ status: "seen" })];
+
+    await openBell();
+
+    expect(schedulesEnabledCalls.length).toBeGreaterThan(0);
+    expect(schedulesEnabledCalls.some((enabled) => enabled)).toBe(false);
+  });
+});
+
+describe("NotificationsBell detail", () => {
+  // bellItem, not the shared fixture: this block asserts the rendered
+  // relative timestamp, which needs a time relative to now.
+  const FIRST = bellItem({
+    id: "first",
+    title: "Watcher job failed",
+    summary: "The watcher job could not reach the upstream service.",
+  });
+  const SECOND = feedItem({ id: "second", title: "Backup finished" });
+
+  /**
+   * Opens the detail on a body of the given length and reports the height its
+   * content region resolved to, tearing the tree down so the next call starts
+   * from one bell.
+   */
+  async function detailFrameHeight(summary: string): Promise<string> {
+    feedRef.items = [{ ...FIRST, summary }];
+    await openDetail("Watcher job failed");
+    const height = detailContent().style.height;
+    cleanup();
+    return height;
+  }
+
+  test("selecting a row opens that item's detail in place", async () => {
+    feedRef.items = [FIRST, SECOND];
+
+    await openDetail("Watcher job failed");
+
+    expect(
+      screen.getByRole("heading", { name: "Watcher job failed" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("The watcher job could not reach the upstream service."),
+    ).toBeTruthy();
+    expect(detailFooter().textContent).toContain(
+      formatCompactLocalDate(FIRST.timestamp),
+    );
+    // The list is gone, so its other row went with it.
+    expect(screen.queryByText("Backup finished")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Notifications" })).toBeNull();
+  });
+
+  test("selecting a row does not navigate", async () => {
+    feedRef.items = [FIRST];
+
+    await openDetail("Watcher job failed");
+
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(navigateToConversationMock).not.toHaveBeenCalled();
+  });
+
+  test("the list-level bulk actions stay out of the detail", async () => {
+    feedRef.items = [FIRST];
+
+    await openDetail("Watcher job failed");
+
+    expect(
+      screen.queryByRole("button", { name: "Mark all as read" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clear all" })).toBeNull();
+  });
+
+  test("the back control returns to the list", async () => {
+    feedRef.items = [FIRST, SECOND];
+
+    await openDetail("Watcher job failed");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to notifications" }),
+    );
+    await act(async () => {});
+
+    expect(screen.getByRole("heading", { name: "Notifications" })).toBeTruthy();
+    expect(screen.getByText("Backup finished")).toBeTruthy();
+  });
+
+  test("offers Go to Conversation when the item has a conversation", async () => {
+    feedRef.items = [{ ...FIRST, conversationId: "conversation-1" }];
+
+    await openDetail("Watcher job failed");
+    fireEvent.click(screen.getByRole("button", { name: "Go to Conversation" }));
+    await act(async () => {});
+
+    expect(navigateToConversationMock).toHaveBeenCalledTimes(1);
+    expect(navigateToConversationMock.mock.calls[0]?.[1]).toBe(
+      "conversation-1",
+    );
+    // Navigating closes the bell, so the panel is gone with it.
+    expect(
+      screen.queryByRole("heading", { name: "Watcher job failed" }),
+    ).toBeNull();
+  });
+
+  test("omits the conversation footer when the item has none", async () => {
+    feedRef.items = [FIRST];
+
+    await openDetail("Watcher job failed");
+
+    expect(
+      screen.queryByRole("button", { name: "Go to Conversation" }),
+    ).toBeNull();
+  });
+
+  test("offers Go to Conversation for a background job that still exists", async () => {
+    feedRef.items = [{ ...FIRST, conversationId: "background-1" }];
+    conversationListsRef.background = [conversation("background-1")];
+
+    await openDetail("Watcher job failed");
+
+    expect(
+      screen.getByRole("button", { name: "Go to Conversation" }),
+    ).toBeTruthy();
+  });
+
+  test("offers Go to Conversation for a scheduled run that is not in the sidebar lists", async () => {
+    feedRef.items = [
+      {
+        ...FIRST,
+        conversationId: "scheduled-1",
+        metadata: { scheduleId: "schedule-1" },
+      },
+    ];
+    schedulesRef.list = [schedule("schedule-1")];
+
+    await openDetail("Watcher job failed");
+
+    expect(screen.getByRole("button", { name: "View schedule" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Go to Conversation" }),
+    ).toBeTruthy();
+  });
+
+  test("omits the conversation footer when the conversation is gone", async () => {
+    feedRef.items = [{ ...FIRST, conversationId: "deleted-1" }];
+    conversationLinkRef.missing.add("deleted-1");
+
+    await openDetail("Watcher job failed");
+
+    expect(
+      screen.queryByRole("button", { name: "Go to Conversation" }),
+    ).toBeNull();
+  });
+
+  test("withholds Go to Conversation while the conversation read is still loading", async () => {
+    feedRef.items = [{ ...FIRST, conversationId: "background-1" }];
+    conversationLinkRef.isPending = true;
+
+    await openDetail("Watcher job failed");
+
+    expect(
+      screen.queryByRole("button", { name: "Go to Conversation" }),
+    ).toBeNull();
+    // The row the link will take is held, so the panel keeps its height when
+    // the lists land.
+    expect(screen.getByTestId("notifications-bell-detail-footer")).toBeTruthy();
+  });
+
+  test("offers View schedule when the item's schedule still exists", async () => {
+    feedRef.items = [{ ...FIRST, metadata: { scheduleId: "schedule-1" } }];
+    schedulesRef.list = [schedule("schedule-1")];
+
+    await openDetail("Watcher job failed");
+
+    expect(screen.getByRole("button", { name: "View schedule" })).toBeTruthy();
+  });
+
+  test("omits View schedule when the item has no schedule", async () => {
+    feedRef.items = [FIRST];
+    schedulesRef.list = [schedule("schedule-1")];
+
+    await openDetail("Watcher job failed");
+
+    expect(screen.queryByRole("button", { name: "View schedule" })).toBeNull();
+  });
+
+  test("omits View schedule when the schedule is gone", async () => {
+    feedRef.items = [{ ...FIRST, metadata: { scheduleId: "deleted-1" } }];
+    schedulesRef.list = [schedule("schedule-1")];
+
+    await openDetail("Watcher job failed");
+
+    expect(screen.queryByRole("button", { name: "View schedule" })).toBeNull();
+  });
+
+  test("withholds View schedule while the schedules list is still loading", async () => {
+    feedRef.items = [{ ...FIRST, metadata: { scheduleId: "schedule-1" } }];
+    schedulesRef.isPending = true;
+
+    await openDetail("Watcher job failed");
+
+    expect(screen.queryByRole("button", { name: "View schedule" })).toBeNull();
+    expect(screen.getByTestId("notifications-bell-detail-footer")).toBeTruthy();
+  });
+
+  test("View schedule opens the schedule and closes the bell", async () => {
+    feedRef.items = [{ ...FIRST, metadata: { scheduleId: "schedule-1" } }];
+    schedulesRef.list = [schedule("schedule-1")];
+
+    await openDetail("Watcher job failed");
+    fireEvent.click(screen.getByRole("button", { name: "View schedule" }));
+    await act(async () => {});
+
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock.mock.calls[0]?.[0]).toBe(
+      "/assistant/schedules/schedule-1",
+    );
+    // Navigating closes the bell, so the panel is gone with it.
+    expect(
+      screen.queryByRole("heading", { name: "Watcher job failed" }),
+    ).toBeNull();
+  });
+
+  test("offers View skill when the skill a background pass updated still exists", async () => {
+    feedRef.items = [{ ...FIRST, metadata: { skillId: "weekly-export" } }];
+    skillsRef.list = [skill("weekly-export")];
+
+    await openDetail("Watcher job failed");
+
+    // The schedules list stays empty: a skill link must come from the skills
+    // list, not from whichever list answered first.
+    expect(screen.getByRole("button", { name: "View skill" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "View schedule" })).toBeNull();
+  });
+
+  test("omits View skill when the item names no skill", async () => {
+    feedRef.items = [FIRST];
+    skillsRef.list = [skill("weekly-export")];
+
+    await openDetail("Watcher job failed");
+
+    expect(screen.queryByRole("button", { name: "View skill" })).toBeNull();
+  });
+
+  test("omits View skill when the skill has since been removed", async () => {
+    feedRef.items = [{ ...FIRST, metadata: { skillId: "removed-skill" } }];
+    skillsRef.list = [skill("weekly-export")];
+
+    await openDetail("Watcher job failed");
+
+    expect(screen.queryByRole("button", { name: "View skill" })).toBeNull();
+  });
+
+  test("withholds View skill while the skills list is still loading", async () => {
+    feedRef.items = [{ ...FIRST, metadata: { skillId: "weekly-export" } }];
+    skillsRef.isPending = true;
+
+    await openDetail("Watcher job failed");
+
+    expect(screen.queryByRole("button", { name: "View skill" })).toBeNull();
+    expect(screen.getByTestId("notifications-bell-detail-footer")).toBeTruthy();
+  });
+
+  test("View skill opens the skill and closes the bell", async () => {
+    feedRef.items = [{ ...FIRST, metadata: { skillId: "weekly-export" } }];
+    skillsRef.list = [skill("weekly-export")];
+
+    await openDetail("Watcher job failed");
+    fireEvent.click(screen.getByRole("button", { name: "View skill" }));
+    await act(async () => {});
+
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock.mock.calls[0]?.[0]).toBe(
+      "/assistant/skills/weekly-export",
+    );
+    // Navigating closes the bell, so the panel is gone with it.
+    expect(
+      screen.queryByRole("heading", { name: "Watcher job failed" }),
+    ).toBeNull();
+  });
+
+  test("percent-encodes a namespaced skill id so the deep link stays one path segment", async () => {
+    feedRef.items = [{ ...FIRST, metadata: { skillId: "org/repo/skill" } }];
+    skillsRef.list = [skill("org/repo/skill")];
+
+    await openDetail("Watcher job failed");
+    fireEvent.click(screen.getByRole("button", { name: "View skill" }));
+    await act(async () => {});
+
+    expect(navigateMock.mock.calls[0]?.[0]).toBe(
+      "/assistant/skills/org%2Frepo%2Fskill",
+    );
+  });
+
+  test("offers both footer links when the item has a schedule and a conversation", async () => {
+    feedRef.items = [
+      {
+        ...FIRST,
+        conversationId: "conversation-1",
+        metadata: { scheduleId: "schedule-1" },
+      },
+    ];
+    conversationListsRef.foreground = [conversation("conversation-1")];
+    schedulesRef.list = [schedule("schedule-1")];
+
+    await openDetail("Watcher job failed");
+
+    expect(screen.getByRole("button", { name: "View schedule" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Go to Conversation" }),
+    ).toBeTruthy();
+  });
+
+  test("neither footer link is reachable while the lists are still loading", async () => {
+    feedRef.items = [
+      {
+        ...FIRST,
+        conversationId: "conversation-1",
+        metadata: { scheduleId: "schedule-1" },
+      },
+    ];
+    conversationLinkRef.isPending = true;
+    schedulesRef.isPending = true;
+
+    await openDetail("Watcher job failed");
+
+    // Out of the accessibility tree, so neither reads as an actionable
+    // control before its target is known to exist.
+    expect(
+      screen.queryByRole("button", { name: "Go to Conversation" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "View schedule" })).toBeNull();
+
+    const conversationLink = screen.getByText("Go to Conversation");
+    const scheduleLink = screen.getByText("View schedule");
+    expect(conversationLink.hasAttribute("inert")).toBe(true);
+    expect(scheduleLink.hasAttribute("inert")).toBe(true);
+
+    fireEvent.click(conversationLink);
+    fireEvent.click(scheduleLink);
+    await act(async () => {});
+
+    expect(navigateToConversationMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  test("the footer keeps its reserved row when the lists resolve", async () => {
+    feedRef.items = [
+      {
+        ...FIRST,
+        conversationId: "conversation-1",
+        metadata: { scheduleId: "schedule-1" },
+      },
+    ];
+    conversationLinkRef.isPending = true;
+    schedulesRef.isPending = true;
+
+    const { rerender } = render(<NotificationsBell />);
+    await clickTrigger();
+    fireEvent.click(screen.getByRole("switch", { name: "Unread" }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Watcher job failed" }));
+    await act(async () => {});
+
+    const pendingFooter = screen.getByTestId(
+      "notifications-bell-detail-footer",
+    );
+    expect(footerLinkLabels(pendingFooter)).toEqual([
+      "View schedule",
+      "Go to Conversation",
+    ]);
+
+    conversationLinkRef.isPending = false;
+    schedulesRef.isPending = false;
+    schedulesRef.list = [schedule("schedule-1")];
+    rerender(<NotificationsBell />);
+    await act(async () => {});
+
+    // The same footer element holding the same two boxes: the row the links
+    // reserved is the row they end up in, so nothing resizes around them.
+    const resolvedFooter = screen.getByTestId(
+      "notifications-bell-detail-footer",
+    );
+    expect(resolvedFooter).toBe(pendingFooter);
+    expect(footerLinkLabels(resolvedFooter)).toEqual([
+      "View schedule",
+      "Go to Conversation",
+    ]);
+    expect(screen.getByRole("button", { name: "View schedule" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Go to Conversation" }),
+    ).toBeTruthy();
+  });
+
+  test("keeps the footer once the lists resolve without either target", async () => {
+    feedRef.items = [
+      {
+        ...FIRST,
+        conversationId: "deleted-1",
+        metadata: { scheduleId: "deleted-2" },
+      },
+    ];
+    conversationLinkRef.missing.add("deleted-1");
+    schedulesRef.list = [schedule("other-2")];
+
+    await openDetail("Watcher job failed");
+
+    // No links survived validation, but the strip carries the timestamp, so
+    // it stays and only the links go.
+    const footer = detailFooter();
+    expect(footerLinkLabels(footer)).toEqual([]);
+    expect(footer.textContent).toContain(
+      formatCompactLocalDate(FIRST.timestamp),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Go to Conversation" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "View schedule" })).toBeNull();
+  });
+
+  test("keeps the footer for an item with neither a conversation nor a schedule", async () => {
+    feedRef.items = [FIRST];
+
+    await openDetail("Watcher job failed");
+
+    const footer = detailFooter();
+    expect(footerLinkLabels(footer)).toEqual([]);
+    expect(footer.textContent).toContain(
+      formatCompactLocalDate(FIRST.timestamp),
+    );
+  });
+
+  test("the timestamp rides in the footer rather than the body", async () => {
+    feedRef.items = [FIRST];
+
+    await openDetail("Watcher job failed");
+
+    const footer = detailFooter();
+    const absolute = formatCompactLocalDate(FIRST.timestamp);
+    expect(footer.textContent).toContain(absolute);
+    // The absolute form only. The relative label is the list row's treatment,
+    // and repeating it here crowds the strip the links share.
+    expect(footer.textContent).not.toContain("3h ago");
+    expect(detailContent().textContent).not.toContain(absolute);
+  });
+
+  test("the content region is a fixed frame rather than a cap", async () => {
+    feedRef.items = [FIRST];
+
+    await openDetail("Watcher job failed");
+
+    // A `height` in bare pixels, so the frame is drawn at the budget whatever
+    // the notification is. The `max-height` riding alongside it is the
+    // viewport clamp below, which carries no content term either.
+    expect(detailContent().style.height).toMatch(/^\d+px$/);
+  });
+
+  test("the frame is clamped to the available viewport height", async () => {
+    feedRef.items = [FIRST];
+
+    await openDetail("Watcher job failed");
+
+    // A phone in landscape is roughly 844x390: wide enough to take the
+    // popover path (the mobile query is on width alone) but far too short for
+    // the budget, which a fixed height on its own would overflow. `dvh` over
+    // `vh` so the term stays honest under mobile browser chrome.
+    const content = detailContent();
+    const clamp = /^calc\(100dvh - (\d+)px\)$/.exec(content.style.maxHeight);
+    expect(clamp).not.toBeNull();
+
+    // The clamp may only engage on a viewport shorter than any ordinary
+    // desktop window, so the frame there is still exactly the budget.
+    const budget = Number.parseInt(content.style.height, 10);
+    const chromeAllowance = Number.parseInt(clamp?.[1] ?? "", 10);
+    expect(budget + chromeAllowance).toBeLessThan(600);
+  });
+
+  test("a long body and a short body render in the same frame", async () => {
+    const shortHeight = await detailFrameHeight("Done.");
+    const longHeight = await detailFrameHeight(
+      "The watcher job could not reach the upstream service. ".repeat(80),
+    );
+
+    expect(shortHeight).not.toBe("");
+    expect(shortHeight).toBe(longHeight);
+  });
+
+  test("loads the conversation and entity-link lists only once a detail is open", async () => {
+    feedRef.items = [FIRST];
+
+    await openBell();
+
+    // The list view names its threads off whatever the caches already hold
+    // and fetches nothing for it. Conversation lists stay cache-only: the
+    // Go to Conversation link is a by-id read, not a drain of every bucket.
+    // Schedule and skill ids matter only to a detail's links, so those lists
+    // stay untouched too.
+    expect(enabledCalls.foreground.length).toBeGreaterThan(0);
+    expect(enabledCalls.foreground.some((enabled) => enabled)).toBe(false);
+    expect(enabledCalls.background.some((enabled) => enabled)).toBe(false);
+    expect(enabledCalls.scheduled.some((enabled) => enabled)).toBe(false);
+    expect(conversationLinkEnabledCalls.some((enabled) => enabled)).toBe(false);
+    expect(skillsEnabledCalls.length).toBeGreaterThan(0);
+    expect(skillsEnabledCalls.some((enabled) => enabled)).toBe(false);
+    // The recipe gate reads the same list, but only for an empty feed, and
+    // this one has an item in it.
+    expect(schedulesEnabledCalls.length).toBeGreaterThan(0);
+    expect(schedulesEnabledCalls.some((enabled) => enabled)).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Watcher job failed" }));
+    await act(async () => {});
+
+    expect(enabledCalls.foreground.at(-1)).toBe(false);
+    expect(enabledCalls.background.at(-1)).toBe(false);
+    expect(enabledCalls.scheduled.at(-1)).toBe(false);
+    // This item names no conversation, so the by-id read stays off.
+    expect(conversationLinkEnabledCalls.at(-1)).toBe(false);
+    expect(skillsEnabledCalls.at(-1)).toBe(true);
+    expect(schedulesEnabledCalls.some((enabled) => enabled)).toBe(true);
+  });
+
+  test("reads the conversation by id once a detail that names one is open", async () => {
+    feedRef.items = [{ ...FIRST, conversationId: "scheduled-1" }];
+
+    await openBell();
+    expect(conversationLinkEnabledCalls.some((enabled) => enabled)).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Watcher job failed" }));
+    await act(async () => {});
+
+    expect(conversationLinkEnabledCalls.at(-1)).toBe(true);
+  });
+
+  test("reopening the bell lands back on the list", async () => {
+    feedRef.items = [FIRST, SECOND];
+
+    await openDetail("Watcher job failed");
+    await clickTrigger();
+    await clickTrigger();
+
+    expect(screen.getByRole("heading", { name: "Notifications" })).toBeTruthy();
+    expect(screen.getByText("Backup finished")).toBeTruthy();
+  });
+
+  test("mobile opens the detail in the bottom sheet", async () => {
+    isTouchMobileRef.value = true;
+    feedRef.items = [FIRST];
+
+    await openDetail("Watcher job failed");
+
+    expect(
+      screen.getByRole("button", { name: "Back to notifications" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("The watcher job could not reach the upstream service."),
+    ).toBeTruthy();
+    // No viewport clamp on this path: the sheet is capped at 85dvh and its
+    // body scrolls, so an oversized frame scrolls inside the sheet rather
+    // than escaping the viewport the way the popover would. The sheet's own
+    // budget is a bare `dvh` length, which happy-dom drops from the CSSOM, so
+    // the height value itself is only observable on the popover path above.
+    expect(detailContent().style.maxHeight).toBe("");
+    expect(detailFooter().textContent).toContain(
+      formatCompactLocalDate(FIRST.timestamp),
+    );
+  });
+});
+
+describe("NotificationsBell detail status actions", () => {
+  const READ = feedItem({
+    id: "first",
+    status: "seen",
+    title: "Watcher job failed",
+  });
+  const SECOND = feedItem({
+    id: "second",
+    status: "seen",
+    title: "Backup finished",
+  });
+
+  test("marks an unread item as read", async () => {
+    feedRef.items = [feedItem({ id: "first", title: "Watcher job failed" })];
+
+    await openDetail("Watcher job failed");
+    fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
+    await act(async () => {});
+
+    // Two calls: selecting the row already marks it seen, and the header
+    // button is the second. The mocked feed never writes the status back, so
+    // the item stays unread and the button keeps offering the same action.
+    expect(updateStatusCalls).toEqual([
+      { itemId: "first", status: "seen" },
+      { itemId: "first", status: "seen" },
+    ]);
+  });
+
+  test("marks a read item as unread", async () => {
+    feedRef.items = [READ];
+
+    await openDetail("Watcher job failed");
+    fireEvent.click(screen.getByRole("button", { name: "Mark as unread" }));
+    await act(async () => {});
+
+    expect(updateStatusCalls).toEqual([{ itemId: "first", status: "new" }]);
+  });
+
+  test("dismissing returns to the list", async () => {
+    feedRef.items = [READ, SECOND];
+
+    await openDetail("Watcher job failed");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await act(async () => {});
+
+    expect(updateStatusCalls).toEqual([
+      { itemId: "first", status: "dismissed" },
+    ]);
+    expect(screen.getByRole("heading", { name: "Notifications" })).toBeTruthy();
+    expect(screen.getByText("Backup finished")).toBeTruthy();
+  });
+
+  test("an item dismissed elsewhere offers Restore in place of Dismiss", async () => {
+    feedRef.items = [READ];
+
+    const { rerender } = render(<NotificationsBell />);
+    await clickTrigger();
+    fireEvent.click(screen.getByRole("switch", { name: "Unread" }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Watcher job failed" }));
+    await act(async () => {});
+
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
+
+    feedRef.items = [{ ...READ, status: "dismissed" }];
+    rerender(<NotificationsBell />);
+    await act(async () => {});
+
+    // The detail stays on the item rather than blanking, and swaps the
+    // destructive action for the one that undoes it.
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    await act(async () => {});
+
+    expect(updateStatusCalls).toEqual([{ itemId: "first", status: "seen" }]);
+  });
+
+  test("the status actions stay out of the list view", async () => {
+    feedRef.items = [READ];
+
+    await openBell();
+
+    expect(screen.queryByRole("button", { name: "Restore" })).toBeNull();
+  });
+});
+
+describe("NotificationsBell detail action items", () => {
+  const ACTIONS = [
+    { id: "triage", label: "Triage my inbox", prompt: "Triage my inbox" },
+    { id: "digest", label: "Set up daily digest", prompt: "Set up a digest" },
+  ];
+
+  const WITH_ACTIONS = feedItem({
+    id: "first",
+    status: "seen",
+    title: "Gmail connected",
+    actions: ACTIONS,
+  });
+
+  async function openActionDetail(): Promise<void> {
+    feedRef.items = [WITH_ACTIONS];
+    await openDetail("Gmail connected");
+  }
+
+  test("renders one button per action, labelled by the action", async () => {
+    await openActionDetail();
+
+    expect(
+      screen.getByTestId("notifications-bell-detail-actions"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Triage my inbox" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Set up daily digest" }),
+    ).toBeTruthy();
+  });
+
+  test("renders no action section when the item carries none", async () => {
+    feedRef.items = [
+      feedItem({ id: "first", status: "seen", title: "Backup finished" }),
+    ];
+
+    await openDetail("Backup finished");
+
+    expect(
+      screen.queryByTestId("notifications-bell-detail-actions"),
+    ).toBeNull();
+  });
+
+  test("renders no action section when the actions list is empty", async () => {
+    feedRef.items = [{ ...WITH_ACTIONS, actions: [] }];
+
+    await openDetail("Gmail connected");
+
+    expect(
+      screen.queryByTestId("notifications-bell-detail-actions"),
+    ).toBeNull();
+  });
+
+  test("triggering an action opens the conversation it creates and closes the bell", async () => {
+    triggerActionRef.outcome = "success";
+    await openActionDetail();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Set up daily digest" }),
+    );
+    await act(async () => {});
+
+    expect(triggerActionCalls).toEqual([
+      { itemId: "first", actionId: "digest" },
+    ]);
+    expect(navigateToConversationMock).toHaveBeenCalledTimes(1);
+    expect(navigateToConversationMock.mock.calls[0]?.[1]).toBe(
+      "action-conversation-1",
+    );
+    // Navigating closes the bell, so the panel is gone with it.
+    expect(
+      screen.queryByRole("heading", { name: "Gmail connected" }),
+    ).toBeNull();
+  });
+
+  test("a second click while the first is in flight creates no second conversation", async () => {
+    triggerActionRef.outcome = "pending";
+    await openActionDetail();
+
+    const action = screen.getByRole("button", { name: "Triage my inbox" });
+    fireEvent.click(action);
+    fireEvent.click(action);
+    await act(async () => {});
+
+    expect(triggerActionCalls).toEqual([
+      { itemId: "first", actionId: "triage" },
+    ]);
+    expect(navigateToConversationMock).not.toHaveBeenCalled();
+  });
+
+  test("a failed action keeps the detail open and lets the user retry", async () => {
+    triggerActionRef.outcome = "error";
+    await openActionDetail();
+
+    const action = screen.getByRole("button", { name: "Triage my inbox" });
+    fireEvent.click(action);
+    await act(async () => {});
+
+    expect(navigateToConversationMock).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("heading", { name: "Gmail connected" }),
+    ).toBeTruthy();
+
+    fireEvent.click(action);
+    await act(async () => {});
+
+    expect(triggerActionCalls.length).toBe(2);
+  });
+});
+
+describe("NotificationsBell skill-update receipt", () => {
+  const RECEIPT = skillUpdateReceipt({ id: "receipt-1", status: "seen" });
+
+  function allTargetsValid(): void {
+    updateLinksRef.validSkillIds = new Set(
+      FIXTURE_SKILL_UPDATES.map((update) => update.skillId),
+    );
+    updateLinksRef.validConversationIds = new Set([
+      FIXTURE_CONVERSATION_ID,
+      FIXTURE_SECOND_CONVERSATION_ID,
+    ]);
+  }
+
+  /** The list's skill sections, each with the names of its links. */
+  function skillSections(): Array<{ heading: string; links: string[] }> {
+    return screen.getAllByTestId("home-updates-list-skill").map((section) => ({
+      heading: section.firstElementChild?.textContent ?? "",
+      links: Array.from(section.querySelectorAll("button")).map(
+        (button) => button.textContent ?? "",
+      ),
+    }));
+  }
+
+  test("the row and the detail are titled by the skills the receipt counts", async () => {
+    feedRef.items = [RECEIPT];
+    allTargetsValid();
+
+    // Three skills, one of them rewritten twice: the count is of skills.
+    await openDetail("3 skills updated");
+
+    expect(
+      screen.getByRole("heading", { name: "3 skills updated" }),
+    ).toBeTruthy();
+  });
+
+  test("the list groups the rewrites by skill and links every target", async () => {
+    feedRef.items = [RECEIPT];
+    allTargetsValid();
+
+    await openDetail("3 skills updated");
+
+    expect(skillSections()).toEqual([
+      {
+        heading: "Approved PR Merge Gate",
+        links: [
+          "Approved PR Merge Gate",
+          "Go to Conversation",
+          "Go to Conversation",
+        ],
+      },
+      {
+        heading: "Release Notes Draft",
+        links: ["Release Notes Draft", "Go to Conversation"],
+      },
+      // No source conversation resolved for this rewrite.
+      { heading: "Weekly Report Export", links: ["Weekly Report Export"] },
+    ]);
+    for (const update of FIXTURE_SKILL_UPDATES) {
+      expect(screen.getByText(update.summary, { exact: false })).toBeTruthy();
+    }
+    // A receipt spanning several sources carries no footer conversation
+    // link; the timestamp is the footer's only occupant.
+    expect(footerLinkLabels(detailFooter())).toEqual([]);
+  });
+
+  test("a skill link opens the skill page", async () => {
+    feedRef.items = [RECEIPT];
+    allTargetsValid();
+
+    await openDetail("3 skills updated");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Release Notes Draft" }),
+    );
+    await act(async () => {});
+
+    expect(navigateMock).toHaveBeenCalledWith(
+      "/assistant/skills/release-notes-draft",
+    );
+    expect(navigateToConversationMock).not.toHaveBeenCalled();
+  });
+
+  test("a source link opens that rewrite's conversation", async () => {
+    feedRef.items = [RECEIPT];
+    allTargetsValid();
+
+    await openDetail("3 skills updated");
+    // The first skill's rewrites came from two conversations; the first
+    // source link belongs to the first rewrite.
+    const [firstSection] = screen.getAllByTestId("home-updates-list-skill");
+    const [, firstSource] = Array.from(
+      firstSection?.querySelectorAll("button") ?? [],
+    );
+    expect(firstSource?.textContent).toBe("Go to Conversation");
+    fireEvent.click(firstSource!);
+    await act(async () => {});
+
+    expect(navigateToConversationMock).toHaveBeenCalledWith(
+      navigateMock,
+      FIXTURE_CONVERSATION_ID,
+    );
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  test("a target that is gone reads as text while the rest still link", async () => {
+    feedRef.items = [RECEIPT];
+    updateLinksRef.validSkillIds = new Set(["release-notes-draft"]);
+    updateLinksRef.validConversationIds = new Set([
+      FIXTURE_SECOND_CONVERSATION_ID,
+    ]);
+
+    await openDetail("3 skills updated");
+
+    expect(skillSections()).toEqual([
+      { heading: "Approved PR Merge Gate", links: ["Go to Conversation"] },
+      {
+        heading: "Release Notes Draft",
+        links: ["Release Notes Draft", "Go to Conversation"],
+      },
+      { heading: "Weekly Report Export", links: [] },
+    ]);
+  });
+
+  test("links hold their place but do nothing while validation is pending", async () => {
+    feedRef.items = [RECEIPT];
+    updateLinksRef.isPending = true;
+
+    await openDetail("3 skills updated");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Release Notes Draft" }),
+    );
+    await act(async () => {});
+
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(skillSections()[1]?.links).toEqual([
+      "Release Notes Draft",
+      "Go to Conversation",
+    ]);
+  });
+
+  test("the list view never validates a receipt's targets", async () => {
+    feedRef.items = [RECEIPT];
+
+    await openBell();
+
+    expect(updateLinksEnabledCalls).toEqual([]);
+  });
+
+  test("a receipt with no entries falls back to its summary", async () => {
+    feedRef.items = [
+      skillUpdateReceipt({
+        id: "receipt-empty",
+        status: "seen",
+        title: "Skill updated: Approved PR Merge Gate",
+        summary: "Added the receipt step after the merge.",
+        updates: [],
+      }),
+    ];
+
+    await openDetail("Skill updated: Approved PR Merge Gate");
+
+    expect(screen.queryByTestId("home-updates-list")).toBeNull();
+    expect(
+      screen.getByText("Added the receipt step after the merge."),
+    ).toBeTruthy();
+  });
+});

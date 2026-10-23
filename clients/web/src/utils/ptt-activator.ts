@@ -1,0 +1,254 @@
+/**
+ * Activator types and helpers: what a user-bound key or chord looks like, how
+ * it serializes, and what counts as a keyboard event matching it.
+ *
+ * Mirrors the macOS `PTTActivator` model, so the web port reads and writes the
+ * same serialized values. Voice mode's binding is built on this shape; see
+ * `utils/voice-mode-activation.ts` for the rules a toggle adds on top.
+ *
+ * Browsers cannot observe the Fn key, so stored Fn preferences fall back to
+ * Ctrl on read. The desktop voice key (`utils/voice-key`) is where Fn lives.
+ */
+
+export type PTTModifier =
+  | "function"
+  | "control"
+  | "shift"
+  | "option"
+  | "command";
+
+export interface PTTOff {
+  kind: "off";
+}
+
+export interface PTTModifierOnly {
+  kind: "modifierOnly";
+  modifiers: PTTModifier[];
+}
+
+export interface PTTKey {
+  kind: "key";
+  /** Display label for the captured key (e.g. "A", "Space"). */
+  label: string;
+  /** Modifiers held alongside the key, if any. */
+  modifiers: PTTModifier[];
+}
+
+export type PTTActivator = PTTOff | PTTModifierOnly | PTTKey;
+
+export const CTRL_PTT_ACTIVATOR: PTTModifierOnly = {
+  kind: "modifierOnly",
+  modifiers: ["control"],
+};
+
+const MODIFIER_ORDER: PTTModifier[] = [
+  "function",
+  "control",
+  "option",
+  "shift",
+  "command",
+];
+
+const MODIFIER_LABELS: Record<PTTModifier, string> = {
+  function: "Fn",
+  control: "Ctrl",
+  option: "Alt",
+  shift: "Shift",
+  command: "Cmd",
+};
+
+export function sortModifiers(
+  modifiers: readonly PTTModifier[],
+): PTTModifier[] {
+  const unique = Array.from(new Set(modifiers));
+  return unique.sort(
+    (a, b) => MODIFIER_ORDER.indexOf(a) - MODIFIER_ORDER.indexOf(b),
+  );
+}
+
+export function modifierLabel(modifiers: readonly PTTModifier[]): string {
+  return sortModifiers(modifiers)
+    .map((m) => MODIFIER_LABELS[m])
+    .join("+");
+}
+
+export function activatorDisplayName(activator: PTTActivator): string {
+  if (activator.kind === "off") {
+    return "Off";
+  }
+  if (activator.kind === "modifierOnly") {
+    return modifierLabel(activator.modifiers);
+  }
+  const mods = modifierLabel(activator.modifiers);
+  return mods ? `${mods}+${activator.label}` : activator.label;
+}
+
+export function activatorsEqual(a: PTTActivator, b: PTTActivator): boolean {
+  if (a.kind !== b.kind) {
+    return false;
+  }
+  if (a.kind === "off" || b.kind === "off") {
+    return true;
+  }
+  const aMods = sortModifiers(a.modifiers);
+  const bMods = sortModifiers(b.modifiers);
+  if (aMods.length !== bMods.length) {
+    return false;
+  }
+  if (aMods.some((m, i) => m !== bMods[i])) {
+    return false;
+  }
+  if (a.kind === "key" && b.kind === "key") {
+    return a.label === b.label;
+  }
+  return true;
+}
+
+export function serializeActivator(activator: PTTActivator): string {
+  return JSON.stringify(activator);
+}
+
+function isPTTModifier(value: unknown): value is PTTModifier {
+  return (
+    typeof value === "string" &&
+    (MODIFIER_ORDER as readonly string[]).includes(value)
+  );
+}
+
+function normalizeModifiers(raw: readonly unknown[]): PTTModifier[] {
+  return sortModifiers(
+    raw.filter(isPTTModifier).filter((m) => m !== "function"),
+  );
+}
+
+export function parseActivator(raw: string | null): PTTActivator {
+  if (!raw) {
+    return CTRL_PTT_ACTIVATOR;
+  }
+  // Back-compat with the macOS legacy string values. Browsers cannot detect
+  // the Fn key, so any stored "fn" preference falls back to Ctrl.
+  if (raw === "fn" || raw === "ctrl") {
+    return CTRL_PTT_ACTIVATOR;
+  }
+  if (raw === "fn_shift") {
+    return { kind: "modifierOnly", modifiers: ["shift"] };
+  }
+  if (raw === "off") {
+    return { kind: "off" };
+  }
+  try {
+    const parsed = JSON.parse(raw) as PTTActivator;
+    if (parsed.kind === "off") {
+      return { kind: "off" };
+    }
+    if (parsed.kind === "modifierOnly" && Array.isArray(parsed.modifiers)) {
+      const modifiers = normalizeModifiers(parsed.modifiers);
+      if (modifiers.length === 0) {
+        return CTRL_PTT_ACTIVATOR;
+      }
+      return { kind: "modifierOnly", modifiers };
+    }
+    if (
+      parsed.kind === "key" &&
+      typeof parsed.label === "string" &&
+      Array.isArray(parsed.modifiers)
+    ) {
+      return {
+        kind: "key",
+        label: parsed.label,
+        modifiers: normalizeModifiers(parsed.modifiers),
+      };
+    }
+  } catch {
+    // fall through
+  }
+  return CTRL_PTT_ACTIVATOR;
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard event matching (runtime PTT listener)
+// ---------------------------------------------------------------------------
+
+function eventModifiers(event: KeyboardEvent): PTTModifier[] {
+  const mods: PTTModifier[] = [];
+  if (event.ctrlKey) {
+    mods.push("control");
+  }
+  if (event.altKey) {
+    mods.push("option");
+  }
+  if (event.shiftKey) {
+    mods.push("shift");
+  }
+  if (event.metaKey) {
+    mods.push("command");
+  }
+  return mods;
+}
+
+function keyIsModifier(key: string): boolean {
+  return (
+    key === "Control" ||
+    key === "Alt" ||
+    key === "Shift" ||
+    key === "Meta" ||
+    key === "Fn"
+  );
+}
+
+function sameModifierSet(
+  a: readonly PTTModifier[],
+  b: readonly PTTModifier[],
+): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  const sortedA = sortModifiers(a);
+  const sortedB = sortModifiers(b);
+  return sortedA.every((m, i) => m === sortedB[i]);
+}
+
+/**
+ * Returns `true` if the given keyboard event fully satisfies the configured
+ * activator (used to trigger start-recording on keydown).
+ *
+ * - For `modifierOnly` activators, returns `true` when *all* required
+ *   modifiers are held and the event key is one of those modifiers (so
+ *   pressing Ctrl alone fires Ctrl-only, and pressing Ctrl+Shift in sequence
+ *   fires on the second keydown).
+ * - For `key` activators, returns `true` when the key matches and all
+ *   required modifiers are held.
+ */
+export function eventActivatesPTT(
+  event: KeyboardEvent,
+  activator: PTTActivator,
+): boolean {
+  if (activator.kind === "off") {
+    return false;
+  }
+  // `KeyboardEvent.key` is typed `string`, but trusted keydowns from
+  // autofill, IME composition, and other synthetic dispatchers arrive
+  // with no key at all. An event with no usable key matches no binding.
+  if (typeof event.key !== "string") {
+    return false;
+  }
+  if (activator.modifiers.includes("function")) {
+    return false;
+  }
+  const held = eventModifiers(event);
+  const requiredMods = activator.modifiers.filter((m) => m !== "function");
+
+  if (activator.kind === "modifierOnly") {
+    if (!keyIsModifier(event.key)) {
+      return false;
+    }
+    return sameModifierSet(held, requiredMods);
+  }
+
+  const eventKeyLabel =
+    event.key.length === 1 ? event.key.toUpperCase() : event.key;
+  if (eventKeyLabel !== activator.label) {
+    return false;
+  }
+  return sameModifierSet(held, requiredMods);
+}

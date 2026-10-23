@@ -1,0 +1,246 @@
+import {
+  type FeedItem,
+  type FeedItemStatus,
+  type FeedItemUpdate,
+  isPendingGuardianFeedItem,
+} from "@vellumai/assistant-api";
+
+import { flattenSummary } from "./feed-preview";
+
+/**
+ * Sort feed items: pending guardian items first (they block the
+ * assistant on the user, so they head any list), then by priority
+ * descending, then by createdAt descending.
+ */
+export function sortFeedItems(items: FeedItem[]): FeedItem[] {
+  return [...items].sort((a, b) => {
+    const guardianDelta =
+      Number(isPendingGuardianFeedItem(b)) -
+      Number(isPendingGuardianFeedItem(a));
+    if (guardianDelta !== 0) {
+      return guardianDelta;
+    }
+    if (a.priority !== b.priority) {
+      return b.priority - a.priority;
+    }
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+}
+
+/**
+ * The items the notifications bell shows: dismissed items are hidden, and so
+ * are high-urgency ones, which surface through their own channels instead.
+ *
+ * A pending guardian item is the exception to the urgency rule: the bell is
+ * that item's canonical home (no separate channel renders it), so it stays
+ * visible however loud it is. The bell's unread dot, its list, and its bulk
+ * actions all read this one derivation, so they cannot disagree.
+ */
+export function getVisibleFeedItems(items: FeedItem[]): FeedItem[] {
+  return items.filter(
+    (item) =>
+      item.status !== "dismissed" &&
+      (isPendingGuardianFeedItem(item) ||
+        (item.urgency !== "high" && item.urgency !== "critical")),
+  );
+}
+
+/**
+ * Read a non-empty string id out of a feed item's free-form `metadata` bag.
+ *
+ * `metadata` is `Record<string, unknown>` on the wire (the daemon spreads a
+ * notification's whole context payload into it, see `home-feed-side-effect.ts`),
+ * so every entity id a link is built from has to be narrowed the same way.
+ */
+function readMetadataId(item: FeedItem | null, key: string): string | null {
+  const id = item?.metadata?.[key];
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+
+/**
+ * Scheduled-run notifications (`schedule.notify`) carry their originating
+ * schedule id in `metadata.scheduleId`, letting a detail view link to the
+ * schedule. Returns null for feed items not tied to a schedule.
+ */
+export function getFeedItemScheduleId(item: FeedItem | null): string | null {
+  return readMetadataId(item, "scheduleId");
+}
+
+/**
+ * A skill-update receipt naming one skill carries its id in
+ * `metadata.skillId` (set by the daemon's skill-update receipt job), letting
+ * a detail view link to the skill it names from the footer. Returns null for
+ * feed items not tied to one skill; a receipt spanning several links to each
+ * from its list instead.
+ *
+ * Only *updates* reach the feed. A newly authored skill announces itself with
+ * an in-chat card instead (`skill-created-card.tsx`), which deep-links the same
+ * way; this is the update path's equivalent.
+ */
+export function getFeedItemSkillId(item: FeedItem | null): string | null {
+  return readMetadataId(item, "skillId");
+}
+
+/**
+ * The skill updates a receipt lists, or an empty array for any other item.
+ *
+ * A receipt is the item whose panel kind says so and whose `updates` carry at
+ * least one entry: an item with the kind but no entries reads as the generic
+ * markdown notification it also carries in `summary`, so an older assistant
+ * that never writes `updates` and a receipt that arrived empty both fall back
+ * the same way. Never inferred from the title or summary text.
+ */
+export function getFeedItemUpdates(item: FeedItem | null): FeedItemUpdate[] {
+  if (item?.detailPanel?.kind !== "updatesList") {
+    return [];
+  }
+  return item.updates ?? [];
+}
+
+/** One skill's entries on a receipt, in the order the rewrites happened. */
+export interface FeedItemUpdateGroup {
+  skillId: string;
+  /** The name the latest rewrite gave the skill. */
+  name: string;
+  updates: FeedItemUpdate[];
+}
+
+/**
+ * Group a receipt's updates by skill, keeping first-seen order across skills
+ * and rewrite order within one. Groups on `skillId` alone: two skills can
+ * share a name, and one skill can be renamed between rewrites, in which case
+ * the group carries the latest name.
+ */
+export function groupFeedItemUpdates(
+  updates: FeedItemUpdate[],
+): FeedItemUpdateGroup[] {
+  const groups = new Map<string, FeedItemUpdateGroup>();
+  for (const update of updates) {
+    const group = groups.get(update.skillId);
+    if (group) {
+      group.name = update.name;
+      group.updates.push(update);
+    } else {
+      groups.set(update.skillId, {
+        skillId: update.skillId,
+        name: update.name,
+        updates: [update],
+      });
+    }
+  }
+  return [...groups.values()];
+}
+
+/**
+ * Name for an item with neither a title nor a summary that renders as text, so
+ * the surface showing it always has something to name it by. The category is
+ * not used here: on a card carrying its category chip, repeating it would read
+ * the same word twice.
+ */
+const UNNAMED_ITEM_TITLE = "Notification";
+
+/**
+ * Display name for a feed item: its own title, or its summary when it carries
+ * none. `summary` is markdown, so the fallback goes through the flattener
+ * rather than showing syntax. Shared by the notification rows and the bell's
+ * detail, so the title the user clicked is the title they land on.
+ *
+ * Flattening parses markdown, so callers rendering a list memoize the result on
+ * the two fields it reads.
+ */
+export function resolveFeedItemTitle(
+  item: Pick<FeedItem, "title" | "summary">,
+): string {
+  const resolved = item.title ?? flattenSummary(item.summary);
+  return resolved.length > 0 ? resolved : UNNAMED_ITEM_TITLE;
+}
+
+/** Arguments for the feed's bulk status mutation (`markAll`). */
+export interface FeedMarkAllArgs {
+  from: FeedItemStatus[];
+  to: FeedItemStatus;
+  ids: string[];
+}
+
+/**
+ * Bulk payload marking every visible unread item as read.
+ *
+ * Pending guardian items stay out of both bulk payloads: marking one
+ * read is not a substitute for resolving it (the unread dot is its
+ * "needs you" signal), and clearing one would hide the only canonical
+ * home an unresolved request has. The daemon enforces the dismissal
+ * half server-side; excluding them here keeps the optimistic cache
+ * update honest.
+ */
+export function markAllReadArgs(visibleItems: FeedItem[]): FeedMarkAllArgs {
+  return {
+    from: ["new"],
+    to: "seen",
+    ids: visibleItems
+      .filter((i) => i.status === "new" && !isPendingGuardianFeedItem(i))
+      .map((i) => i.id),
+  };
+}
+
+/** Bulk payload dismissing every visible item ("Clear all"). */
+export function clearAllArgs(visibleItems: FeedItem[]): FeedMarkAllArgs {
+  return {
+    from: ["new", "seen", "acted_on"],
+    to: "dismissed",
+    ids: visibleItems
+      .filter((i) => !isPendingGuardianFeedItem(i))
+      .map((i) => i.id),
+  };
+}
+
+/** Catalog keys naming a guardian request. */
+export type GuardianLabelKey =
+  | "category.guardianAction"
+  | "category.guardianAnswer"
+  | "category.guardianQuestion"
+  | "category.guardianRequest";
+
+/**
+ * What to call a guardian-request item, on the row and on the panel it
+ * opens. A waiting request is named by what it needs of the user ("Needs
+ * your approval", "Needs your answer"); once it is settled nothing is
+ * needed of anyone, so it is named for what it was. Null for every other
+ * item, which is named by its own title.
+ */
+export function guardianLabelKey(item: FeedItem): GuardianLabelKey | null {
+  if (!item.guardianRequest) {
+    return null;
+  }
+  const isPending = isPendingGuardianFeedItem(item);
+  if (item.guardianRequest.intent === "question") {
+    return isPending ? "category.guardianAnswer" : "category.guardianQuestion";
+  }
+  return isPending ? "category.guardianAction" : "category.guardianRequest";
+}
+
+/** Source labels that name nothing a reader could recognise a thread by. */
+const GENERIC_SOURCE_LABELS = new Set(["Conversation", "Other"]);
+
+/**
+ * The thread a feed item came from, as the reader knows it: the title of its
+ * conversation when the conversation lists carry one, otherwise the source the
+ * daemon labelled it with (a schedule's name, "Heartbeat"). Null when neither
+ * says anything, so the row leaves the line out rather than printing a
+ * placeholder.
+ */
+export function resolveThreadName(
+  item: Pick<FeedItem, "conversationId" | "sourceLabel">,
+  conversationTitles: ReadonlyMap<string, string>,
+): string | null {
+  const conversationTitle =
+    item.conversationId !== undefined
+      ? conversationTitles.get(item.conversationId)
+      : undefined;
+  if (conversationTitle !== undefined && conversationTitle.length > 0) {
+    return conversationTitle;
+  }
+  if (item.sourceLabel && !GENERIC_SOURCE_LABELS.has(item.sourceLabel)) {
+    return item.sourceLabel;
+  }
+  return null;
+}

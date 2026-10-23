@@ -1,0 +1,165 @@
+/**
+ * Handles actions a sandboxed app viewer dispatches through
+ * `window.vellum.sendAction(actionId, data)`. Three independent actions:
+ *
+ * - `relay_prompt` ({ prompt, conversation }) — sends `prompt` to a conversation
+ *   via the `?prompt=` auto-send pathway (see `use-auto-send-effects.ts`),
+ *   with the in-app `autoSendPromptState` marker that distinguishes it from a
+ *   clicked link. `conversation` is `"active"` (default, the open
+ *   conversation) or `"new"` (a fresh draft). It never touches the layout, so
+ *   the app the viewer keeps on screen rides along in the URL's app segment.
+ *   Each relay carries a unique token so the auto-send dedupe re-fires even
+ *   when the same prompt is relayed repeatedly. The relay replaces the entry
+ *   it is dispatched from, so repeated relays stay one entry, and it carries
+ *   that entry's recorded return only when it relays into the conversation the
+ *   entry names, which leaves the close popping through the recording. A relay
+ *   into another conversation drops the recording, so the close lands on the
+ *   conversation the relay started. No-op for `"active"` when no conversation
+ *   is open.
+ *
+ * - `open_conversation` ({ conversationId }) — navigates to an existing
+ *   conversation by ID without sending a message. On a wide viewport the
+ *   app stays open in the side-by-side layout, named in the URL's app
+ *   segment, so the conversation is visible beside it. Used by plugins that
+ *   manage their own background conversations (e.g. battleship) to let the
+ *   user view the conversation from within the app UI.
+ *
+ * - `set_view` ({ view }) — moves the app panel: `"split"` (side by side with
+ *   chat), `"full"` (full-width), or `"chat"` (`closeAppRoute`, which closes
+ *   the viewer and returns through the entry the app was opened from, landing
+ *   on a conversation URL that names no app). Side-by-side
+ *   has no mobile layout, so `"split"` is ignored on mobile (the app keeps its
+ *   full-screen overlay). On a wide viewport it uses the open conversation,
+ *   and starts one when none is open.
+ *
+ * Stateless and framework-agnostic: stores are read via `getState()` and
+ * navigation / viewport arrive through `ctx`, so this is unit-testable.
+ */
+
+import { createDraftConversationId } from "@/domains/chat/utils/conversation-selection";
+import { useConversationStore } from "@/stores/conversation-store";
+import { autoSendPromptState } from "@/utils/auto-send-prompt";
+import {
+  closeAppRoute,
+  currentPathname,
+  exitAppSplit,
+  keepOpenAppBesideConversation,
+  keptAppId,
+  type PathNavigate,
+} from "@/utils/conversation-navigation";
+import { conversationIdForPath, routes } from "@/utils/routes";
+
+export interface AppViewerActionContext {
+  /** Navigation from the route component, keeping this module framework-agnostic. */
+  navigate: PathNavigate;
+  /** Side-by-side has no mobile layout, so `set_view: "split"` is ignored when true. */
+  isMobile: boolean;
+  /** The current entry's history state, holding the entry the app was opened from. */
+  state?: unknown;
+}
+
+function relayPrompt(
+  ctx: AppViewerActionContext,
+  data?: Record<string, unknown>,
+): void {
+  const prompt = typeof data?.prompt === "string" ? data.prompt : "";
+  if (!prompt) {
+    return;
+  }
+
+  let conversationId: string | null;
+  if (data?.conversation === "new") {
+    conversationId = createDraftConversationId();
+    useConversationStore.getState().setActiveConversationId(conversationId);
+  } else {
+    conversationId = useConversationStore.getState().activeConversationId;
+  }
+  if (!conversationId) {
+    return;
+  }
+
+  const staysOnEntry =
+    conversationId === conversationIdForPath(currentPathname());
+  ctx.navigate(
+    routes.conversationWithPrompt(
+      conversationId,
+      prompt,
+      crypto.randomUUID(),
+      keptAppId(),
+    ),
+    {
+      replace: true,
+      state: autoSendPromptState(staysOnEntry ? ctx.state : undefined),
+    },
+  );
+}
+
+/**
+ * Select `conversationId` and land on it, keeping an open app beside it
+ * rather than dismissing the app for the chat.
+ */
+function goToConversation(
+  ctx: AppViewerActionContext,
+  conversationId: string,
+): void {
+  useConversationStore.getState().setActiveConversationId(conversationId);
+  keepOpenAppBesideConversation(conversationId);
+  ctx.navigate(routes.conversation(conversationId, keptAppId()));
+}
+
+function openConversation(
+  ctx: AppViewerActionContext,
+  data?: Record<string, unknown>,
+): void {
+  const conversationId =
+    typeof data?.conversationId === "string" ? data.conversationId : "";
+  if (!conversationId) {
+    return;
+  }
+  goToConversation(ctx, conversationId);
+}
+
+function setView(
+  ctx: AppViewerActionContext,
+  data?: Record<string, unknown>,
+): void {
+  switch (data?.view) {
+    case "chat":
+      closeAppRoute(ctx.navigate, { state: ctx.state });
+      return;
+    case "full":
+      exitAppSplit();
+      return;
+    case "split": {
+      if (ctx.isMobile) {
+        return;
+      }
+      const conversationId =
+        useConversationStore.getState().activeConversationId;
+      if (conversationId) {
+        keepOpenAppBesideConversation(conversationId);
+        return;
+      }
+      // Split view is a chat beside the app, so it needs a conversation to
+      // put there.
+      goToConversation(ctx, createDraftConversationId());
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+export function handleAppViewerAction(
+  ctx: AppViewerActionContext,
+  actionId: string,
+  data?: Record<string, unknown>,
+): void {
+  if (actionId === "relay_prompt") {
+    relayPrompt(ctx, data);
+  } else if (actionId === "open_conversation") {
+    openConversation(ctx, data);
+  } else if (actionId === "set_view") {
+    setView(ctx, data);
+  }
+}

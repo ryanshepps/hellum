@@ -1,0 +1,334 @@
+import {
+  Check,
+  Copy,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Link2,
+  Loader2,
+  Trash2,
+} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { useTranslation } from "@/i18n";
+import { credentialsRevealPost } from "@/generated/daemon/sdk.gen";
+import { copyToClipboard } from "@/lib/copy-to-clipboard";
+import { Button } from "@vellumai/design-library/components/button";
+import { Card } from "@vellumai/design-library/components/card";
+import { Tooltip } from "@vellumai/design-library/components/tooltip";
+import { toast } from "@vellumai/design-library/components/toast";
+
+/**
+ * A locally stored credential row from `POST /v1/credentials/list`. Mirrors the
+ * daemon's `buildCredentialOutput` shape for the fields the page renders.
+ */
+export interface StoredCredential {
+  service: string;
+  field: string;
+  credentialId: string | null;
+  scrubbedValue: string;
+  hasSecret: boolean;
+  alias: string | null;
+  usageDescription: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+/** How long the "copied" checkmark stays up after copying a revealed value. */
+const COPIED_FEEDBACK_MS = 1500;
+
+function formatCreatedAt(iso: string | null): string {
+  if (!iso) {
+    return "";
+  }
+  try {
+    return new Date(iso).toLocaleDateString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return "";
+  }
+}
+
+interface CredentialRowProps {
+  credential: StoredCredential;
+  /** Assistant whose vault owns this credential — scopes the reveal request. */
+  assistantId: string;
+  /** A link is currently being minted for this row. */
+  generatingLink: boolean;
+  /** This row is currently being deleted. */
+  deleting: boolean;
+  onGenerateLink: () => void;
+  onDelete: () => void;
+}
+
+/**
+ * Renders a single stored-credential row matching the settings row layout used
+ * by integrations and devices: `KeyRound` icon + title/subtitle on the left,
+ * and the row actions as icon-only buttons on the right. The masked secret
+ * preview sits on its own line directly beneath the title, above the
+ * `service:field · added date` metadata, with an on-demand reveal (see
+ * `CredentialValue`).
+ *
+ * The two actions are:
+ *   - Generate link: mints a one-time credential-request link.
+ *   - Delete:        removes the credential (with confirmation upstream).
+ *
+ * Both are icon-only, so each carries the action name as its accessible name
+ * and as a pointer tooltip.
+ */
+export function CredentialRow({
+  credential,
+  assistantId,
+  generatingLink,
+  deleting,
+  onGenerateLink,
+  onDelete,
+}: CredentialRowProps) {
+  const { t } = useTranslation("settings");
+  const name = `${credential.service}:${credential.field}`;
+  const busy = generatingLink || deleting;
+  // Metadata line: the `service:field` (shown only when an alias is the
+  // title) and the added date.
+  const metadataParts = [
+    credential.alias ? name : null,
+    credential.createdAt
+      ? t("credentialRow.addedMetadata", {
+          date: formatCreatedAt(credential.createdAt),
+        })
+      : null,
+  ].filter((part): part is string => Boolean(part));
+
+  return (
+    <Card.Root>
+      <Card.Body padding="sm" className="flex items-center gap-4 px-4">
+        <KeyRound
+          className="h-5 w-5 shrink-0 text-[var(--content-secondary)]"
+          aria-hidden
+        />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-title-small text-[var(--content-default)]">
+            {credential.alias || name}
+          </p>
+          <div className="mt-0.5 flex min-w-0 items-center">
+            <CredentialValue
+              assistantId={assistantId}
+              credential={credential}
+            />
+          </div>
+          {metadataParts.length > 0 && (
+            <p className="mt-0.5 truncate font-mono text-body-medium-lighter text-[var(--content-tertiary)]">
+              {metadataParts.join(" · ")}
+            </p>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* The label lives in the tooltip and in `aria-label`, never in the
+              native `title`: the two would otherwise both surface on hover. */}
+          <Tooltip content={t("credentialRow.generateLinkLabel")} side="top">
+            <Button
+              variant="outlined"
+              onClick={onGenerateLink}
+              disabled={busy}
+              aria-label={t("credentialRow.generateLinkAriaLabel", { name })}
+              loading={generatingLink}
+              iconOnly={<Link2 aria-hidden />}
+            />
+          </Tooltip>
+          <Tooltip content={t("credentialRow.deleteLabel")} side="top">
+            <Button
+              variant="dangerOutline"
+              onClick={onDelete}
+              disabled={busy}
+              aria-label={t("credentialRow.deleteAriaLabel", { name })}
+              loading={deleting}
+              iconOnly={<Trash2 aria-hidden />}
+            />
+          </Tooltip>
+        </div>
+      </Card.Body>
+    </Card.Root>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CredentialValue — masked/revealed secret preview for a single stored
+// credential. Owns its own reveal + copy state so the row stays a thin
+// orchestrator. The masked preview (`first4****`) is rendered blurred until the
+// user reveals it, at which point the plaintext is fetched on demand via
+// `POST /v1/credentials/reveal` — the value is never held in the list query
+// cache, only in this component's transient state, and is dropped on re-hide.
+// ---------------------------------------------------------------------------
+
+function CredentialValue({
+  assistantId,
+  credential,
+}: {
+  assistantId: string;
+  credential: StoredCredential;
+}) {
+  const { t } = useTranslation("settings");
+  const [revealed, setRevealed] = useState<string | null>(null);
+  const [isRevealing, setIsRevealing] = useState(false);
+  const [justCopied, setJustCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Monotonic token used to ignore stale reveal responses. Incremented on
+  // every reveal, hide, and credential change so that an in-flight promise
+  // whose row has since changed (or been hidden) is silently dropped instead
+  // of overwriting newer state with an obsolete secret.
+  const revealVersionRef = useRef(0);
+
+  const name = `${credential.service}:${credential.field}`;
+
+  const hide = useCallback(() => {
+    revealVersionRef.current++;
+    setRevealed(null);
+    setIsRevealing(false);
+    setJustCopied(false);
+    if (copiedTimer.current) {
+      clearTimeout(copiedTimer.current);
+      copiedTimer.current = null;
+    }
+  }, []);
+
+  // Clear any revealed plaintext when the underlying secret changes (e.g. the
+  // user replaces the credential via the form). The row key stays stable for
+  // an upsert, so without this the stale plaintext from the previous value
+  // would remain visible and copyable until the row remounts. Using
+  // `updatedAt` (not `scrubbedValue`) avoids a false negative when the
+  // replacement masks to the same preview (e.g. same first four chars or any
+  // value ≤ 4 chars where scrubSecret() returns "****").
+  useEffect(() => {
+    hide();
+  }, [credential.updatedAt, hide]);
+
+  const reveal = useCallback(async () => {
+    const myVersion = ++revealVersionRef.current;
+    setIsRevealing(true);
+    try {
+      const { data } = await credentialsRevealPost({
+        path: { assistant_id: assistantId },
+        body: { service: credential.service, field: credential.field },
+        throwOnError: true,
+      });
+      // Only apply the result if no newer reveal, hide, or credential change
+      // has superseded this request.
+      if (revealVersionRef.current === myVersion) {
+        setRevealed(data.value);
+      }
+    } catch {
+      if (revealVersionRef.current === myVersion) {
+        toast.error(t("credentialRow.revealFailedToast", { name }));
+      }
+    } finally {
+      if (revealVersionRef.current === myVersion) {
+        setIsRevealing(false);
+      }
+    }
+  }, [assistantId, credential.service, credential.field, name, t]);
+
+  const copy = useCallback(() => {
+    if (revealed == null) {
+      return;
+    }
+    copyToClipboard(revealed, {
+      errorMessage: t("credentialRow.copyFailedToast"),
+      onCopied: () => {
+        setJustCopied(true);
+        if (copiedTimer.current) {
+          clearTimeout(copiedTimer.current);
+        }
+        copiedTimer.current = setTimeout(
+          () => setJustCopied(false),
+          COPIED_FEEDBACK_MS,
+        );
+      },
+    });
+  }, [revealed, t]);
+
+  const isRevealed = revealed !== null;
+
+  // Metadata-only rows (e.g. transient credential prompts or OAuth entries)
+  // have no storable secret — `hasSecret` is false and the reveal handler can
+  // only return "Credential not found". Render the inert scrubbed preview
+  // (typically "(not set)") without any reveal/copy affordances.
+  if (!credential.hasSecret) {
+    return (
+      <span className="min-w-0 truncate font-mono text-body-medium-lighter text-[var(--content-tertiary)]">
+        {credential.scrubbedValue}
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5 align-middle font-mono text-body-medium-lighter">
+      <button
+        type="button"
+        onClick={() => (isRevealed ? hide() : void reveal())}
+        disabled={isRevealing}
+        aria-label={
+          isRevealed
+            ? t("credentialRow.hideValueAriaLabel", { name })
+            : t("credentialRow.revealValueAriaLabel", { name })
+        }
+        title={
+          isRevealed
+            ? t("credentialRow.hideValueTitle")
+            : t("credentialRow.clickToRevealTitle")
+        }
+        // Prevent session-replay (LogRocket) from recording the credential
+        // value. The attribute is always present so the masked preview
+        // (first4****) is also excluded, not just the revealed plaintext.
+        // https://docs.logrocket.com/reference/dom#sanitizing-individual-elements
+        data-private
+        className={`min-w-0 truncate rounded-sm text-left transition-[filter,color] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] ${
+          isRevealed
+            ? "text-[var(--content-secondary)]"
+            : "select-none text-[var(--content-tertiary)] blur-[3px] hover:blur-[2px]"
+        }`}
+      >
+        {isRevealed ? revealed : credential.scrubbedValue}
+      </button>
+      {isRevealing ? (
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden />
+      ) : isRevealed ? (
+        <>
+          <Button
+            variant="ghost"
+            size="compact"
+            iconOnly={justCopied ? <Check aria-hidden /> : <Copy aria-hidden />}
+            expandOnMobile={false}
+            onClick={copy}
+            aria-label={t("credentialRow.copyValueAriaLabel", { name })}
+            tooltip={t("credentialRow.copyValueTitle")}
+            className="size-4.5 shrink-0 rounded-sm"
+          />
+          <Button
+            variant="ghost"
+            size="compact"
+            iconOnly={<EyeOff aria-hidden />}
+            expandOnMobile={false}
+            onClick={hide}
+            aria-label={t("credentialRow.hideValueAriaLabel", { name })}
+            tooltip={t("credentialRow.hideValueTitle")}
+            className="size-4.5 shrink-0 rounded-sm"
+          />
+        </>
+      ) : (
+        <Button
+          variant="ghost"
+          size="compact"
+          iconOnly={<Eye aria-hidden />}
+          expandOnMobile={false}
+          onClick={() => void reveal()}
+          aria-label={t("credentialRow.revealValueAriaLabel", { name })}
+          tooltip={t("credentialRow.clickToRevealTitle")}
+          className="size-4.5 shrink-0 rounded-sm"
+        />
+      )}
+    </span>
+  );
+}

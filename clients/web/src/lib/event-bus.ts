@@ -1,0 +1,449 @@
+/**
+ * Cross-domain typed publish/subscribe registry for assistant-global
+ * signals (SSE events, app lifecycle, network reachability, deep
+ * links). Plain module — `publish` and `subscribe` are exported
+ * functions, the handler registry is module-private.
+ *
+ * Not a Zustand store. The bus has no state; what looks like state
+ * (the handler set) is a registry, not user-observable application
+ * state, so Zustand's selector + re-render machinery does not apply.
+ * Handlers fire synchronously from `publish()` and never through
+ * reactive state, where a burst written inside one batched commit would
+ * surface only its last event. See `STATE_MANAGEMENT.md` for the
+ * convention carve-out.
+ *
+ * Producers:
+ *   - `runtime/event-sources/*` for host-environment signals
+ *   - `assistant/sse-service.ts` for SSE-derived signals
+ *   - `domains/chat/hooks/use-event-stream.ts` for
+ *     `reachability.retry-requested`
+ *   - `hooks/use-notification-tap-navigation.ts` and
+ *     `runtime/push-registration.ts` for notification-tap
+ *     `deeplink.openThread`
+ *
+ * Consumers: `useBusSubscription` (React) or `subscribe` directly
+ * (non-React).
+ */
+
+import type { AssistantEventEnvelope } from "@vellumai/assistant-api";
+import { captureError } from "@/lib/sentry/capture-error";
+import type { CommandUrlProvenance } from "@/runtime/native-deep-link";
+
+/**
+ * Source of a synthetic `"app.resume"` event.
+ *
+ * `"visibility"`: `document.visibilitychange` fired with
+ * `visibilityState === "visible"` on a web client.
+ * `"app_state"`: Capacitor `App.appStateChange` fired with `isActive`
+ * in the iOS native shell. Both describe the same physical edge on iOS,
+ * where they fire milliseconds apart, so
+ * `runtime/event-sources/lifecycle-edge.ts` publishes the pair once and
+ * consumers see either label depending on which source arrived first.
+ * `"online"`: `window.online` fired after `navigator.onLine` flipped
+ * back to true; surfaced as a resume so consumers that just want
+ * "we're probably stale, refresh" can subscribe to a single channel.
+ * `"window_attention"`: the Electron main process reported the window this
+ * renderer runs in leaving or returning to the screen. It is the desktop
+ * renderer's only source for this edge, because Vellum windows disable
+ * background throttling and that disables the Page Visibility API with it,
+ * so `"visibility"` never fires there.
+ *
+ * The label is load-bearing on the hidden edge. A desktop window off screen
+ * is not the same fact as a mobile app frozen by the OS or a browser tab
+ * backgrounded: the desktop has no push fallback, so `assistant/sse-service.ts`
+ * keeps the stream through a `"window_attention"` hide and tears down on the
+ * other signals. Every other consumer treats the labels alike, which is what
+ * gives the camera back and drops capture consent on a minimize.
+ */
+export type AppResumeSignal =
+  | "visibility"
+  | "app_state"
+  | "online"
+  | "window_attention";
+
+/** Source of a synthetic `"app.hidden"` event. */
+export type AppHiddenSignal = "visibility" | "app_state" | "window_attention";
+
+/**
+ * Which checkout a completed Stripe session belongs to: a Pro
+ * subscription upgrade or a credit top-up. Carried on
+ * `deeplink.billingCheckoutComplete`; the deep-link parsers in
+ * `runtime/` share this alias.
+ */
+export type BillingCheckoutFlow = "subscription" | "top_up";
+
+/**
+ * Map of bus event name → payload type. New event names are added
+ * here so subscribers get exact handler types via the `keyof` lookup.
+ */
+export interface BusEventMap {
+  /**
+   * Re-broadcast of an SSE event received on the bus-owned
+   * assistant-scoped `/v1/events` connection. The envelope carries
+   * transport metadata (`seq`, `conversationId`, `emittedAt`);
+   * subscribers read the semantic event from `envelope.message`.
+   */
+  "sse.event": AssistantEventEnvelope;
+  /**
+   * The bus-owned SSE connection just opened (or reopened). Carries the
+   * `cause` of the (re)open so consumers can distinguish a fresh
+   * connection from a transport-error reconnect, a watchdog-driven
+   * recovery, or a manual `_vellumDebug.events.reconnectClient()`
+   * trigger. Conversation-scoped consumers use this to schedule a
+   * post-reconnect reconciliation pass.
+   *
+   * `"anchor"` is the cold-start anchored-replay reopen (see
+   * `cold-anchor.ts`): the connection re-attaches carrying
+   * `lastSeenSeq = S` so the daemon ring-replays the snapshot→attach
+   * gap. It deliberately does NOT trigger a post-reopen `/messages`
+   * reconcile — the ring replay is the catch-up mechanism, and ring
+   * eviction is handled by the consumer's seq-gap detector.
+   */
+  "sse.opened": {
+    assistantId: string;
+    cause: "fresh" | "error" | "watchdog" | "resume" | "debug" | "anchor";
+  };
+  /**
+   * The bus-owned SSE connection closed for a non-cancel reason
+   * (network error, etc). Carries a short reason tag for diagnostics.
+   * The bus will attempt to reopen on its own; consumers use this to
+   * recover conversation-scoped turn state (e.g. settle processing
+   * state, kick reachability probes).
+   */
+  "sse.closed": { reason: string };
+  /**
+   * Published by `useEventStream`'s reachability-retry burst limiter
+   * when the reachability probe recovers into "ready" from a degraded
+   * phase ("connecting", "checking", or "failed"). Tells the bus to
+   * close + reopen its SSE connection so the conversation-scoped
+   * reconcile pass can run. A "ready" entered from "idle" or "ready"
+   * confirms an already-healthy stream (boot, remount) and does not
+   * publish.
+   */
+  "reachability.retry-requested": Record<string, never>;
+  /**
+   * Published by `cold-anchor.ts` once `/messages` has resolved with a
+   * snapshot watermark `S` on a cold session. Tells the bus to bounce
+   * its SSE connection so the reopen carries `lastSeenSeq = S` and the
+   * daemon ring-replays the snapshot→attach gap. The cursor is already
+   * seeded at `S` before this fires; if no connection is attached yet
+   * the bounce is a no-op and the upcoming cold connect carries the
+   * cursor directly.
+   */
+  "sse.anchor-requested": Record<string, never>;
+  /** Page visible / app foregrounded / network came back online. */
+  "app.resume": { signal: AppResumeSignal };
+  /** Page hidden / app backgrounded. */
+  "app.hidden": { signal: AppHiddenSignal };
+  /**
+   * Window attention changes from the Electron host or browser focus/blur.
+   * Separate from visibility lifecycle events: losing focus reports presence
+   * as away without stopping foreground hardware work in an on-screen window.
+   */
+  "app.attention": { attended: boolean };
+  /** Browser reported the network came back. Fires alongside `app.resume`. */
+  "app.online": Record<string, never>;
+  /** Browser reported the network went away. */
+  "app.offline": Record<string, never>;
+  /**
+   * System-level power events from the Electron host. Distinct from
+   * `app.resume` / `app.hidden` because a tray-resident or
+   * full-screen Electron app stays "visible" during system sleep —
+   * the renderer never sees `visibilitychange`, but `powerMonitor`
+   * does. Long-running consumers (SSE, WebSockets, refresh timers)
+   * use these to bounce-and-reconnect because browser timers freeze
+   * during system suspend and sockets may appear "open" but be
+   * half-dead on wake.
+   *
+   * Off Electron (web build, Capacitor iOS) these never fire — the
+   * platform's resume signals come through `app.resume` instead.
+   */
+  "power.suspend": Record<string, never>;
+  "power.resume": Record<string, never>;
+  "power.lock": Record<string, never>;
+  "power.unlock": Record<string, never>;
+  "power.active": Record<string, never>;
+  /**
+   * A `saveFile` download was handed to the browser's own download UI
+   * (plain-browser host only). The browser owns everything after the
+   * handoff, so this is the one signal that host can give: Electron
+   * reports real outcomes via `download.done` instead, and Capacitor's
+   * share sheet is its own feedback, so neither publishes this.
+   * `use-download-feedback` is the consumer and owns the toast.
+   */
+  "download.started": { filename: string };
+  /**
+   * Terminal report for an Electron-host download: pushed by the main
+   * process once it saved (or failed to save) a download this window
+   * started, and published by `saveFile` itself when a URL source fails to
+   * fetch before any download could start (the shell denies the anchor
+   * fallback, so that failure has no other signal). The Capacitor save path
+   * publishes the failure case too, when the source cannot be fetched or
+   * staged before the share sheet presents; a presented sheet remains its
+   * own feedback. `id` accompanies `state: "completed"` and keys the
+   * file-manager reveal (`revealDownload`). The plain-browser host
+   * publishes `download.started` at handoff instead.
+   */
+  "download.done": {
+    id?: string;
+    filename: string;
+    state: "completed" | "interrupted";
+  };
+  /**
+   * Inbound deep links — `vellum://` / `vellum-assistant://` URLs
+   * the OS routed to us, plus notification taps that resolve to a
+   * conversation. Domain consumers (chat composer, conversation
+   * router) subscribe here to take action.
+   *
+   * Publishers: Electron deep links, the notification tap handler,
+   * push-registration, and Capacitor `appUrlOpen` — see
+   * docs/EVENT_BUS.md for the per-event table. `deeplink.unknown` is a
+   * no-action signal (consumers log and drop it) so the bridge surface
+   * stays exhaustive.
+   */
+  "deeplink.send": { message: string };
+  "deeplink.openThread": { threadId: string };
+  /**
+   * Open a conversation with a message staged in its composer:
+   * `<scheme>://thread/<id>?message=…`, produced by the iOS
+   * `SendMessageToChatIntent` (the "Send Message to Chat" Shortcuts
+   * action). Split from `deeplink.openThread` because the consumer does
+   * more than navigate. With `provenance: "intent"` it parks a
+   * send-on-arrival request that the chat domain fulfils once the target
+   * thread is confirmed to exist; otherwise it parks `message` as a
+   * composer pre-fill and requests focus, so the user lands one tap from
+   * sent (a custom-scheme link with no proven origin carries no caller
+   * identity; see `useGlobalDeepLinkConsumer`). `message` is
+   * bounded and sanitized by `parseOpenThreadDeepLink`; a thread link
+   * whose message fails sanitization publishes plain `deeplink.openThread`
+   * instead.
+   */
+  "deeplink.sendToThread": {
+    threadId: string;
+    message: string;
+    /** As on `deeplink.startVoice`: proven intent origin, or `null`. */
+    provenance: CommandUrlProvenance;
+  };
+  /**
+   * Stripe Checkout finished for a checkout a native shell started
+   * (the Electron shell's system browser or Capacitor iOS's in-app
+   * SFSafariViewController). The platform bounces the browser to
+   * `<scheme>://billing/checkout-complete`; the billing domain consumes
+   * this to land the user back on billing. `flow` says which checkout
+   * it was: `subscription` opens the post-checkout Pro onboarding
+   * wizard on success (and the upgrade-cancel page on cancel), while
+   * `top_up` toasts on success and funnels a cancel into the billing
+   * page's server-verified checkout-bonus offer flow. Parsers default
+   * `flow` to `subscription` when the link omits it (all released
+   * clients and current Pro links).
+   */
+  "deeplink.billingCheckoutComplete":
+    | { status: "success"; sessionId: string; flow: BillingCheckoutFlow }
+    | { status: "cancel"; sessionId: null; flow: BillingCheckoutFlow };
+  /**
+   * The user asked to talk, from outside the SPA:
+   * `<scheme>://voice?mode=new|resume&prompt=…`. The single native→SPA
+   * voice command channel — Siri / the Action Button (App Intents), the
+   * Dynamic Island Live Activity's tap-to-return `widgetURL`, and
+   * manual test links all publish through it.
+   *
+   * `useGlobalDeepLinkConsumer` navigates and hands the request to the
+   * live-voice starter, parking it when the layout-scoped session
+   * controller has not mounted yet (cold launch).
+   *
+   * `prompt` is what the user already said before the app was up (Siri's
+   * "Ask …" intent). It is `null` unless the link carried usable text —
+   * `parseStartVoiceDeepLink` bounds and sanitizes its shape, but the
+   * scheme proves nothing about the sender, so consumers must treat it as
+   * untrusted: it pre-fills the composer and is never auto-sent, and no
+   * voice session starts for it (see `useGlobalDeepLinkConsumer`).
+   */
+  "deeplink.startVoice": {
+    mode: "new" | "resume";
+    prompt: string | null;
+    /**
+     * `"intent"` when the iOS shell proved an App Intent produced the URL
+     * (`CommandURLProvenance.swift`); `null` for any other origin. A
+     * proven prompt may be sent on the user's behalf; an unproven one is
+     * only staged. See `CommandUrlProvenance` in `native-deep-link.ts`.
+     */
+    provenance: CommandUrlProvenance;
+  };
+  /**
+   * A Home Screen widget's camera button was tapped: `<scheme>://camera`.
+   * `useGlobalDeepLinkConsumer` navigates to the assistant and parks the
+   * request, which the composer's attachment layer drains when it mounts
+   * (the composer does not exist yet on a cold launch, and never exists on
+   * settings / logs / account routes).
+   */
+  "deeplink.openCamera": {
+    /** As on `deeplink.startVoice`; no consumer gates on it today. */
+    provenance: CommandUrlProvenance;
+  };
+  /**
+   * A Home Screen widget's New Chat button was tapped:
+   * `<scheme>://new-chat`. `useGlobalDeepLinkConsumer` navigates to a fresh
+   * draft conversation through `navigateToNewConversation`.
+   */
+  "deeplink.newChat": {
+    /** As on `deeplink.startVoice`; no consumer gates on it today. */
+    provenance: CommandUrlProvenance;
+  };
+  /**
+   * A Home Screen widget's unread affordance was tapped:
+   * `<scheme>://conversations`. `useGlobalDeepLinkConsumer` parks the request
+   * in `usePendingDeepLinkStore` and lands on the chat; `ChatLayout` drains it
+   * and brings up the conversation list, which on mobile is the drawer and on
+   * a wider window is the sidebar.
+   */
+  "deeplink.openConversations": {
+    /** As on `deeplink.startVoice`; no consumer gates on it today. */
+    provenance: CommandUrlProvenance;
+  };
+  /**
+   * Drain one share-inbox item written by the iOS Share Sheet extension:
+   * `<scheme>://share/<id>`, or a Darwin / resume fallback with no id.
+   * `inboxId` names the item when the command URL arrived; `null` means
+   * take the newest unexpired item (the URL never opened the host). The
+   * payload itself is not on the URL: `useGlobalDeepLinkConsumer` consumes
+   * the App Group inbox and parks a send (`useShareInboxSend`). Inbox
+   * existence is the send-authorization. A forged id finds nothing.
+   */
+  "deeplink.share": { inboxId: string | null };
+  /**
+   * Electron host only: inbound `<scheme>://connect` URL from the pair
+   * page's "Open in the Vellum app" button or a `vellum pair --app`
+   * QR code. `url` is the validated https server base and `code` the
+   * device code the link carried; together they are the pairing link the
+   * connect dialog hands to the local-mode host. `code` is credential
+   * material, so consumers must never log or breadcrumb it. `legacy`
+   * marks a link that carried an older version's pairing bundle, whose
+   * payload the main-process parser drops. `useGlobalDeepLinkConsumer`
+   * parks the request in the connect-dialog store and navigates to the
+   * assistant chooser.
+   */
+  "deeplink.connect": {
+    url: string | null;
+    code: string | null;
+    legacy: boolean;
+  };
+  "deeplink.unknown": { url: string };
+  /**
+   * Connectivity state change from the Electron host. Main fuses
+   * device-level online/offline with backend health-probe results into
+   * three states: `"online"`, `"device-offline"`, `"backend-unreachable"`.
+   *
+   * Off Electron this never fires.
+   */
+  "connectivity.state": {
+    state: "online" | "device-offline" | "backend-unreachable";
+  };
+  /**
+   * A daemon SDK request came back with a gateway-class status (502/503/504):
+   * it reached the platform but could not reach the assistant's runtime, which
+   * is restarting or not yet ready. Published by `daemonUnreachableInterceptor`
+   * so the connecting overlay appears even when the failure lands on an
+   * incidental request (a page load, a background refetch) rather than on the
+   * SSE stream. The lifecycle service subscribes and kicks its retry probe.
+   *
+   * Distinct from `connectivity.state`, which is the Electron host's fused
+   * view of device and backend health and never fires off Electron. This one
+   * is derived from a response the client actually received, so it reports on
+   * every platform.
+   */
+  "assistant.unreachable": Record<string, never>;
+  /**
+   * The local gateway rejects the guardian token behind this session, past
+   * what the renderer can repair on its own: the `/auth/token` mint still
+   * answers 401 after the wake `primeLocalGatewayConnectionWithRepair` ran,
+   * and a plain wake never re-leases a guardian token. Only a guardian
+   * re-provision clears it, and that revokes the assistant's other
+   * device-bound tokens, so no automatic path may run it.
+   *
+   * Published by `localGatewayAuthRecoveryInterceptor`, which has no route
+   * to the user, once it has given up. `useGuardianRepairRoute` sends the
+   * session to the assistant chooser, whose connect path owns the
+   * re-provision.
+   */
+  "gateway.guardian-repair-required": Record<string, never>;
+}
+
+export type BusEventName = keyof BusEventMap;
+export type BusEventPayload<K extends BusEventName> = BusEventMap[K];
+export type BusHandler<K extends BusEventName> = (
+  payload: BusEventPayload<K>,
+) => void;
+
+type AnyHandler = (payload: never) => void;
+// `let` (not `const`) because `__resetForTesting` reassigns to a
+// fresh Map rather than clearing in place. After reset the module-
+// level `handlers` points to an empty Map, so any old unsubscribe
+// closure (which reads `handlers` through the binding, not by value)
+// sees `handlers.get(event) === undefined` and early-returns — that's
+// the property the "unsubscribe-after-reset is a no-op" test relies on.
+let handlers: Map<BusEventName, Set<AnyHandler>> = new Map();
+
+/**
+ * Subscribe a handler to a bus event. Returns an unsubscribe
+ * function; safe to call multiple times. Handlers are invoked
+ * synchronously in registration order; a thrown handler is logged
+ * and does not block downstream handlers.
+ */
+export function subscribe<K extends BusEventName>(
+  event: K,
+  handler: BusHandler<K>,
+): () => void {
+  let set = handlers.get(event);
+  if (!set) {
+    set = new Set();
+    handlers.set(event, set);
+  }
+  set.add(handler as AnyHandler);
+  return () => {
+    const current = handlers.get(event);
+    if (!current) {
+      return;
+    }
+    current.delete(handler as AnyHandler);
+    if (current.size === 0) {
+      handlers.delete(event);
+    }
+  };
+}
+
+/** Publish a payload to every handler subscribed to `event`. */
+export function publish<K extends BusEventName>(
+  event: K,
+  payload: BusEventPayload<K>,
+): void {
+  const set = handlers.get(event);
+  if (!set || set.size === 0) {
+    return;
+  }
+  // Snapshot before iterating so handlers that unsubscribe (or
+  // resubscribe) during dispatch don't mutate the in-flight set.
+  for (const handler of Array.from(set)) {
+    try {
+      (handler as (p: typeof payload) => void)(payload);
+    } catch (err) {
+      // One bad subscriber must not block downstream subscribers, and its
+      // error must not stop here either: a handler that throws has skipped
+      // the rest of its work for this event, and most subscribers have no
+      // catch of their own. `captureError` logs to the console and reports
+      // to Sentry, tagged with the event so one failing handler groups apart
+      // from another's.
+      captureError(err, {
+        context: "event_bus.handler",
+        tags: { bus_event: event },
+      });
+    }
+  }
+}
+
+/**
+ * Reset the handler registry. Tests use this between cases to ensure
+ * isolation; not intended for production callers.
+ */
+export function __resetForTesting(): void {
+  handlers = new Map();
+}

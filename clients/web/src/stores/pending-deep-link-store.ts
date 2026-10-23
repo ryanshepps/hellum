@@ -1,0 +1,364 @@
+/**
+ * Pending deep-link state — a one-shot inbox the global deep-link
+ * consumer writes to and the chat composer reads from.
+ *
+ * Why a store: a `vellum://send?message=…` deep link can arrive
+ * while the user is on a non-chat route (`/assistant/settings`,
+ * `/assistant/logs`, etc.). The global consumer (mounted at
+ * `RootLayout`) navigates to the chat AND parks the message here;
+ * `ChatPage` then consumes on mount once the composer store is alive
+ * (`useDeepLinkConsumer`). Without this hand-off, the message
+ * would be dropped — the bus event publishes to no chat-domain
+ * subscriber until `ChatPage` mounts.
+ *
+ * One-shot semantics — `consumePendingComposerMessage` returns and
+ * clears. If a second deep link arrives before consumption, the
+ * latest message wins (silent overwrite — two-link-overwrite is
+ * below the noise floor in practice). Renderer reloads / hard
+ * navigates blow this away because it's not persisted — by design,
+ * deep links are transient signals.
+ *
+ * @see {@link https://zustand.docs.pmnd.rs/}
+ */
+
+import { create } from "zustand";
+
+import type { LiveVoiceEntry } from "@/domains/chat/voice/live-voice/protocol";
+import type { EmailReference } from "@/types/email-reference";
+import { createSelectors } from "@/utils/create-selectors";
+
+export interface PendingDeepLinkState {
+  /**
+   * Latest pending composer pre-fill text, or `null` if none. Written for a
+   * `deeplink.send` message and for a `deeplink.startVoice` prompt (Siri's
+   * "Ask …" intent). Pre-fill only, by design: deep-link text is untrusted,
+   * so the user is the one who sends it.
+   */
+  pendingComposerMessage: string | null;
+  /**
+   * When a `deeplink.startVoice` was parked waiting for a live-voice session
+   * starter (`Date.now()`), or `null` if none is. Same cold-launch race as
+   * `pendingComposerMessage`: the starter is registered by
+   * `useLiveVoiceSessionController` at `ChatLayout` scope, so it does not exist
+   * yet when a launch deep link fires (and never exists on settings / logs /
+   * account routes). A timestamp rather than a payload — a second link before
+   * the drain is the same request, but the drain needs to know how stale it is
+   * (see `consumePendingVoiceStart`).
+   */
+  pendingVoiceStartAt: number | null;
+  /**
+   * The first turn the parked start-voice request takes on its session, or
+   * `null` for a plain start. A press from a surface that already knows what
+   * the user wants to say (a hold made over a selection) parks its question
+   * here, and the drain hands it to the starter. Travels with
+   * `pendingVoiceStartAt` and clears with it.
+   */
+  pendingVoiceStartAsk: string | null;
+  /**
+   * Which control parked the start-voice request, for the daemon's telemetry.
+   * Opaque here: the live-voice domain mints the values and reads them back.
+   * Travels with `pendingVoiceStartAt` and clears with it.
+   */
+  pendingVoiceStartEntry: LiveVoiceEntry | null;
+  /**
+   * A message that a *proven* App Intent asked to send into a specific
+   * conversation (`deeplink.sendToThread` with `provenance: "intent"`), or
+   * `null` if none. Unlike `pendingComposerMessage` this is a request to
+   * send, not to pre-fill, so it stays parked until the chat domain has
+   * confirmed the target thread exists (`useDeepLinkThreadSend`); relaying
+   * before that could let a stale id mint a new conversation. `parkedAt`
+   * lets the consumer bound how long a park that never drains stays a
+   * *send* (it demotes to a pre-fill past the bound), as with the voice
+   * start's age check.
+   */
+  pendingThreadSend: PendingThreadSend | null;
+  /**
+   * A parked `deeplink.openCamera` request, or `null` if none is. Same race as
+   * `pendingVoiceStartAt`, one layer lower: the camera input is owned by the
+   * composer, which does not exist yet when a widget tap cold-launches the app
+   * and never exists on settings / logs / account routes. The command carries
+   * nothing of its own, so the park is only an address and a timestamp: the
+   * address names the composer that answers it (see {@link PendingCamera}) and
+   * the timestamp lets the drain know how stale it is.
+   */
+  pendingCamera: PendingCamera | null;
+  /**
+   * When a `deeplink.openConversations` was parked (`Date.now()`), or `null` if
+   * none is. Same race as `pendingCamera`, against a different owner: the
+   * conversation list belongs to `ChatLayout`, which is not mounted on a cold
+   * launch and never mounts on settings / logs / account routes. A timestamp
+   * rather than a payload, since the command carries nothing of its own and a
+   * second tap before the drain is the same request; the drain owns the age
+   * bound (see `consumePendingConversationList`).
+   */
+  pendingConversationListAt: number | null;
+  /**
+   * A share-inbox item the iOS Share Sheet asked to send (`deeplink.share`),
+   * or `null` if none. Inbox existence is the send-authorization: only this
+   * app's share extension can write the App Group, so the consumer may send
+   * on arrival the way a proven intent does. `parkedAt` lets the consumer
+   * bound how long a park that never drains stays a send.
+   */
+  pendingShareSend: PendingShareSend | null;
+  /**
+   * Emails the Assistant Inbox asked to stage in a conversation's composer
+   * (its "Start a new chat" over a selection), or `null` if none. The inbox
+   * mints the draft with `navigateToNewConversation` and parks the selection
+   * here because the composer store resets its attachments on the switch
+   * into that draft; the chat domain stages them once the draft is the
+   * active conversation (`usePendingEmailReferences`). A pre-fill, not a
+   * send: the user says what they want done with the mail.
+   */
+  pendingComposerEmails: PendingComposerEmails | null;
+}
+
+/** A parked stage-these-emails request; see `pendingComposerEmails`. */
+export interface PendingComposerEmails {
+  /** The conversation whose composer takes the emails. */
+  threadId: string;
+  emails: EmailReference[];
+  parkedAt: number;
+}
+
+/** A proven send-into-thread request; see `pendingThreadSend`. */
+export interface PendingThreadSend {
+  threadId: string;
+  message: string;
+  parkedAt: number;
+}
+
+/** A share-inbox send request; see `pendingShareSend`. */
+export interface PendingShareSend {
+  threadId: string;
+  isNewDraft: boolean;
+  text: string;
+  files: File[];
+  parkedAt: number;
+}
+
+/** A parked open-the-camera request; see `pendingCamera`. */
+export interface PendingCamera {
+  /**
+   * The conversation whose composer answers this request. Addressed rather
+   * than broadcast because the handler parks around a navigation: a composer
+   * still mounted on the route the tap is leaving would otherwise drain the
+   * one-shot park and raise a viewfinder that the navigation unmounts a beat
+   * later, leaving the composer the tap was meant for with nothing to open.
+   */
+  targetConversationId: string;
+  parkedAt: number;
+}
+
+export interface PendingDeepLinkActions {
+  /**
+   * Set the pending composer message. If one is already pending,
+   * it's overwritten — the most recent deep link wins. Used by the
+   * global consumer in `useGlobalDeepLinkConsumer`.
+   */
+  setPendingComposerMessage: (message: string) => void;
+  /**
+   * Read and clear the pending composer message. Returns `null` if
+   * none was set. Used by `useDeepLinkConsumer` in the chat domain.
+   */
+  consumePendingComposerMessage: () => string | null;
+  /**
+   * Park a start-voice request until a session starter is registered, with
+   * the control that asked for it and the first turn it should take, if it
+   * has one. A newer park replaces the older one's entry and ask.
+   */
+  setPendingVoiceStart: (request: {
+    entry: LiveVoiceEntry;
+    ask?: string;
+  }) => void;
+  /**
+   * Read and clear the parked start-voice request. Returns `null` when none
+   * was parked, and when the parked one is older than `maxAgeMs` — a park that
+   * was never drained (its navigation bounced off a route guard, say) must not
+   * open a full-screen voice session minutes later. Either way the park is
+   * cleared. Used by `drainPendingVoiceStart` in the live-voice domain,
+   * which owns the age bound.
+   */
+  consumePendingVoiceStart: (
+    maxAgeMs: number,
+  ) => { entry: LiveVoiceEntry | null; ask: string | null } | null;
+  /**
+   * Park a proven send-into-thread request. A newer request replaces an
+   * older one: the most recent intent wins, same as the composer message.
+   */
+  setPendingThreadSend: (threadId: string, message: string) => void;
+  /**
+   * Read and clear the parked send request, `parkedAt` included. Returns
+   * `null` when none is parked. Unlike `consumePendingVoiceStart` the age
+   * bound is not applied here: the consumer (`useDeepLinkThreadSend`) owns
+   * it, because an expired request is demoted to a composer pre-fill rather
+   * than dropped, and only the consumer can do that demotion.
+   */
+  consumePendingThreadSend: () => PendingThreadSend | null;
+  /**
+   * Park a camera deep link until the attachment layer of the composer bound
+   * to `targetConversationId` mounts. A newer request replaces an older one,
+   * as with the composer message.
+   */
+  setPendingCamera: (targetConversationId: string) => void;
+  /**
+   * Spend the parked camera request, whatever it was. Returns nothing, unlike
+   * `consumePendingVoiceStart`: the drain (`useCameraDeepLink`) subscribes to
+   * `pendingCamera` and so already holds the park it is spending, and every
+   * decision about one is its own. It owns the age bound, since a park that was
+   * never drained (its navigation bounced off a route guard, say) must not
+   * throw the camera open minutes later; it owns the address check, since only
+   * the drain knows which conversation it is bound to; and it gives way to a
+   * running call. All three spend the request, so what is left here is the
+   * one-shot clear they share.
+   */
+  consumePendingCamera: () => void;
+  /**
+   * Park an open-conversations deep link until `ChatLayout` is mounted on a
+   * settled route. A newer request replaces an older one, as with the camera.
+   */
+  setPendingConversationList: () => void;
+  /**
+   * Spend the parked open-conversations request. Returns nothing, like
+   * `consumePendingCamera`: the drain subscribes to `pendingConversationListAt`
+   * and so already holds the park it is spending, and both decisions about one
+   * are its own. It owns the age bound, since a park that was never drained
+   * (its navigation bounced off a route guard, say) must not throw the list
+   * open minutes later, and it owns when the route counts as settled, since
+   * only the layout knows whether the landing it is on is still redirecting.
+   */
+  consumePendingConversationList: () => void;
+  /**
+   * Park a share-inbox send. A newer request replaces an older one: the
+   * most recent share wins, same as the composer message.
+   */
+  setPendingShareSend: (request: Omit<PendingShareSend, "parkedAt">) => void;
+  /**
+   * Read and clear the parked share send. Returns `null` when none is
+   * parked. Age is applied by `useShareInboxSend`, because an expired
+   * request is demoted to a composer pre-fill rather than dropped.
+   */
+  consumePendingShareSend: () => PendingShareSend | null;
+  /**
+   * Park emails for a conversation's composer. A newer request replaces an
+   * older one: the most recent selection wins, same as the composer message.
+   */
+  setPendingComposerEmails: (
+    request: Omit<PendingComposerEmails, "parkedAt">,
+  ) => void;
+  /**
+   * Read and clear the parked emails. Returns `null` when none are parked.
+   * The drain (`usePendingEmailReferences`) owns the address check and the
+   * age bound.
+   */
+  consumePendingComposerEmails: () => PendingComposerEmails | null;
+}
+
+export type PendingDeepLinkStore = PendingDeepLinkState &
+  PendingDeepLinkActions;
+
+const usePendingDeepLinkStoreBase = create<PendingDeepLinkStore>()(
+  (set, get) => ({
+    pendingComposerMessage: null,
+    pendingVoiceStartAt: null,
+    pendingVoiceStartAsk: null,
+    pendingVoiceStartEntry: null,
+    pendingThreadSend: null,
+    pendingCamera: null,
+    pendingConversationListAt: null,
+    pendingShareSend: null,
+    pendingComposerEmails: null,
+    setPendingComposerMessage: (message) =>
+      set({ pendingComposerMessage: message }),
+    consumePendingComposerMessage: () => {
+      const message = get().pendingComposerMessage;
+      if (message !== null) {
+        set({ pendingComposerMessage: null });
+      }
+      return message;
+    },
+    setPendingVoiceStart: ({ entry, ask }) =>
+      set({
+        pendingVoiceStartAt: Date.now(),
+        pendingVoiceStartAsk: ask ?? null,
+        pendingVoiceStartEntry: entry,
+      }),
+    consumePendingVoiceStart: (maxAgeMs) => {
+      const {
+        pendingVoiceStartAt: parkedAt,
+        pendingVoiceStartAsk: ask,
+        pendingVoiceStartEntry: entry,
+      } = get();
+      if (parkedAt === null) {
+        return null;
+      }
+      set({
+        pendingVoiceStartAt: null,
+        pendingVoiceStartAsk: null,
+        pendingVoiceStartEntry: null,
+      });
+      return Date.now() - parkedAt <= maxAgeMs ? { entry, ask } : null;
+    },
+    setPendingThreadSend: (threadId, message) =>
+      set({ pendingThreadSend: { threadId, message, parkedAt: Date.now() } }),
+    consumePendingThreadSend: () => {
+      const parked = get().pendingThreadSend;
+      if (parked !== null) {
+        set({ pendingThreadSend: null });
+      }
+      return parked;
+    },
+    setPendingCamera: (targetConversationId) =>
+      set({ pendingCamera: { targetConversationId, parkedAt: Date.now() } }),
+    consumePendingCamera: () => {
+      if (get().pendingCamera !== null) {
+        set({ pendingCamera: null });
+      }
+    },
+    setPendingConversationList: () =>
+      set({ pendingConversationListAt: Date.now() }),
+    consumePendingConversationList: () => {
+      if (get().pendingConversationListAt !== null) {
+        set({ pendingConversationListAt: null });
+      }
+    },
+    setPendingShareSend: (request) =>
+      set({ pendingShareSend: { ...request, parkedAt: Date.now() } }),
+    consumePendingShareSend: () => {
+      const parked = get().pendingShareSend;
+      if (parked !== null) {
+        set({ pendingShareSend: null });
+      }
+      return parked;
+    },
+    setPendingComposerEmails: (request) =>
+      set({ pendingComposerEmails: { ...request, parkedAt: Date.now() } }),
+    consumePendingComposerEmails: () => {
+      const parked = get().pendingComposerEmails;
+      if (parked !== null) {
+        set({ pendingComposerEmails: null });
+      }
+      return parked;
+    },
+  }),
+);
+
+export const usePendingDeepLinkStore = createSelectors(
+  usePendingDeepLinkStoreBase,
+);
+
+/**
+ * Reset hook for tests. Not intended for production callers.
+ */
+export function __resetPendingDeepLinkForTesting(): void {
+  usePendingDeepLinkStoreBase.setState({
+    pendingComposerMessage: null,
+    pendingVoiceStartAt: null,
+    pendingVoiceStartAsk: null,
+    pendingVoiceStartEntry: null,
+    pendingThreadSend: null,
+    pendingCamera: null,
+    pendingConversationListAt: null,
+    pendingShareSend: null,
+    pendingComposerEmails: null,
+  });
+}

@@ -1,0 +1,691 @@
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+
+import { useChatSessionStore } from "@/domains/chat/chat-session-store";
+import {
+  useComposerStore,
+  type ChatAttachment,
+} from "@/domains/chat/composer-store";
+import { useInteractionStore } from "@/domains/chat/interaction-store";
+import { selectTranscriptMessages } from "@/domains/chat/transcript/select-transcript-messages";
+import { useTurnStore } from "@/domains/chat/turn-store";
+import {
+  pushSseEvent,
+  registerSseClient,
+  resetSseDebugStateForTests,
+} from "@/lib/streaming/stream-debug";
+import type { PaginatedHistoryResult } from "@/domains/chat/transcript/types";
+import type { DisplayMessage } from "@/domains/chat/types/types";
+import type { AssistantEvent } from "@/types/event-types";
+import type { AssistantEventEnvelope } from "@vellumai/assistant-api";
+
+const CONV = "conv-A";
+
+// Records which conversations opened a switch-telemetry window and why one was
+// closed, so the gate in `switchToConversation` can be asserted without
+// reaching the ingest layer. The module's other exports are stubbed too: a
+// module mock is process-wide, so a sibling file sharing this Bun process must
+// still find them.
+const switchStartedConversationIds: string[] = [];
+const switchAbandonReasons: string[] = [];
+mock.module("@/lib/telemetry/switch-telemetry", () => ({
+  noteConversationSwitchStarted: (conversationId: string) => {
+    switchStartedConversationIds.push(conversationId);
+  },
+  noteSwitchTranscriptPainted: () => {},
+  abandonSwitchMeasurement: (reason: string) => {
+    switchAbandonReasons.push(reason);
+  },
+  useSwitchPaintMeasurement: () => {},
+  subscribeSwitchTelemetry: () => () => {},
+  __resetSwitchTelemetryForTests: () => {},
+}));
+
+function snapshot(
+  messages: DisplayMessage[],
+  seq: number | null,
+): PaginatedHistoryResult {
+  return {
+    messages,
+    hasMore: false,
+    oldestTimestamp: null,
+    oldestMessageId: null,
+    seq,
+  };
+}
+function textRow(id: string, text: string): DisplayMessage {
+  return {
+    id,
+    role: "assistant",
+    textSegments: [text],
+    contentOrder: [{ type: "text", id: "0" }],
+    contentBlocks: [{ type: "text", text }],
+  };
+}
+function envelope(
+  seq: number,
+  conversationId: string,
+  message: AssistantEvent,
+): AssistantEventEnvelope {
+  return {
+    id: `e${seq}`,
+    conversationId,
+    seq,
+    emittedAt: new Date(1000 + seq).toISOString(),
+    message,
+  } as AssistantEventEnvelope;
+}
+const textDelta = (seq: number, conv: string, id: string, text: string) =>
+  envelope(seq, conv, {
+    type: "assistant_text_delta",
+    messageId: id,
+    text,
+  } as AssistantEvent);
+
+const store = () => useChatSessionStore.getState();
+
+beforeEach(() => {
+  resetSseDebugStateForTests();
+  useChatSessionStore.setState({
+    snapshot: null,
+    optimisticSends: [],
+    previousConversationId: null,
+    previousAssistantId: null,
+    draftConversationIdResolution: false,
+  });
+  useComposerStore.getState().fullReset();
+  useComposerStore.getState().setInput("");
+  useTurnStore.getState().resetTurn();
+  useInteractionStore.getState().resetAll({ assistantChanged: true });
+});
+afterEach(() => {
+  resetSseDebugStateForTests();
+  useChatSessionStore.setState({
+    snapshot: null,
+    optimisticSends: [],
+    previousConversationId: null,
+    previousAssistantId: null,
+    draftConversationIdResolution: false,
+  });
+  useComposerStore.getState().fullReset();
+  useComposerStore.getState().setInput("");
+  useTurnStore.getState().resetTurn();
+  useInteractionStore.getState().resetAll({ assistantChanged: true });
+});
+
+describe("chat-session-store — snapshot + optimistic", () => {
+  test("seedSnapshot with no buffered tail uses the snapshot as-is", () => {
+    const snap = snapshot([textRow("a1", "persisted")], 5);
+    store().seedSnapshot(CONV, snap);
+    expect(store().snapshot).toBe(snap); // resolveSnapshot returns the snapshot ref
+  });
+
+  test("seedSnapshot replays the buffered tail (events that raced the fetch)", () => {
+    const id = registerSseClient(new AbortController().signal);
+    // The ring reaches back to the cursor (oldest retained seq 6 <= snapshot.seq+1).
+    pushSseEvent(id, textDelta(6, CONV, "a1", " + live"));
+
+    store().seedSnapshot(CONV, snapshot([textRow("a1", "persisted")], 5));
+
+    expect(
+      store().snapshot?.messages.find((m) => m.id === "a1")?.textSegments,
+    ).toEqual(["persisted + live"]);
+    expect(store().snapshot?.seq).toBe(6);
+  });
+
+  test("seedSnapshot takes the snapshot wholesale when the tail is an eviction gap", () => {
+    const id = registerSseClient(new AbortController().signal);
+    // Oldest retained seq (50) is past snapshot.seq+1 → getSseEnvelopesSince → null.
+    pushSseEvent(id, textDelta(50, CONV, "a1", " evicted-gap"));
+
+    const snap = snapshot([textRow("a1", "persisted")], 5);
+    store().seedSnapshot(CONV, snap);
+    expect(store().snapshot).toBe(snap); // wholesale, no partial replay
+  });
+
+  test("seedSnapshot drops an anchor-less fetch once the live view has folded stream events", () => {
+    // Fresh-conversation first turn: the daemon's partial-persist debounce
+    // hasn't flushed yet, so a mid-turn /messages fetch returns `seq: null`.
+    // Taking it wholesale would wipe the streamed prefix (the "vanishing
+    // prefix" flicker); the live view must be kept instead.
+    store().seedSnapshot(CONV, snapshot([], null)); // initial seed, nothing folded yet
+    store().applyEnvelopeToSnapshot(textDelta(6, CONV, "a1", "Hey"));
+    store().applyEnvelopeToSnapshot(textDelta(7, CONV, "a1", " yourself."));
+
+    store().seedSnapshot(CONV, snapshot([], null)); // anchor-less mid-turn refetch
+
+    expect(
+      store().snapshot?.messages.find((m) => m.id === "a1")?.textSegments,
+    ).toEqual(["Hey yourself."]);
+    expect(store().snapshot?.seq).toBe(7);
+  });
+
+  test("seedSnapshot still accepts an anchor-less fetch while nothing has been folded", () => {
+    store().seedSnapshot(CONV, snapshot([], null));
+    const snap = snapshot([textRow("a1", "persisted")], null);
+    // Live view exists but has no seq, so the fetch wins.
+    store().seedSnapshot(CONV, snap);
+    expect(store().snapshot).toBe(snap);
+  });
+
+  test("anchor-less refetch mid-stream no longer drops the streamed prefix (flicker repro)", () => {
+    // Regression shape from the field: deltas fold live; an anchor-less
+    // refetch lands mid-word; more deltas follow; the turn-end anchored
+    // reseed adopts the canonical row. The transcript must show the full text
+    // at every step after the refetch, never a suffix-only bubble.
+    store().seedSnapshot(
+      CONV,
+      snapshot([{ ...textRow("u1", "hey"), role: "user" }], null),
+    );
+    store().applyEnvelopeToSnapshot(textDelta(6, CONV, "a1", "Hey"));
+    store().applyEnvelopeToSnapshot(textDelta(7, CONV, "a1", " yourself."));
+
+    // Mid-turn refetch: server still has only the user row, no anchor.
+    store().seedSnapshot(
+      CONV,
+      snapshot([{ ...textRow("u1", "hey"), role: "user" }], null),
+    );
+    store().applyEnvelopeToSnapshot(textDelta(8, CONV, "a1", " You're up."));
+
+    const live = store().snapshot?.messages.find((m) => m.id === "a1");
+    expect(live?.textSegments).toEqual(["Hey yourself. You're up."]);
+
+    // Turn-end reseed carries the persisted row and a real anchor.
+    store().seedSnapshot(
+      CONV,
+      snapshot(
+        [
+          { ...textRow("u1", "hey"), role: "user" },
+          textRow("a1", "Hey yourself. You're up."),
+        ],
+        8,
+      ),
+    );
+    const final = store().snapshot?.messages.find((m) => m.id === "a1");
+    expect(final?.textSegments).toEqual(["Hey yourself. You're up."]);
+  });
+
+  test("seedSnapshot drops a stale-anchored fetch the ring can't bridge (send flicker)", () => {
+    // The logged incident: the live view seeded at seq 100, then folded the
+    // send's user_message_echo (seq 500 — other conversations' events advanced
+    // the global counter in between, so the ring can't bridge from 100). The
+    // echo handler already retired the optimistic copy, so a pre-send fetch
+    // committing now (anchor still 100, no user row) must be dropped — taking
+    // it wholesale would erase the just-sent message from the screen.
+    const id = registerSseClient(new AbortController().signal);
+    store().seedSnapshot(CONV, snapshot([textRow("a1", "earlier")], 100));
+    const echo = envelope(500, CONV, {
+      type: "user_message_echo",
+      text: "hi",
+      messageId: "msg-user-1",
+      clientMessageId: "nonce-1",
+    } as AssistantEvent);
+    pushSseEvent(id, echo);
+    store().applyEnvelopeToSnapshot(echo);
+    expect(store().snapshot?.messages.some((m) => m.id === "msg-user-1")).toBe(
+      true,
+    );
+
+    const before = store().snapshot;
+    store().seedSnapshot(CONV, snapshot([textRow("a1", "earlier")], 100));
+
+    expect(store().snapshot).toBe(before);
+    expect(store().snapshot?.messages.some((m) => m.id === "msg-user-1")).toBe(
+      true,
+    );
+  });
+
+  test("seedSnapshot accepts a caught-up anchor after dropping a stale one", () => {
+    const id = registerSseClient(new AbortController().signal);
+    store().seedSnapshot(CONV, snapshot([textRow("a1", "earlier")], 100));
+    const echo = envelope(500, CONV, {
+      type: "user_message_echo",
+      text: "hi",
+      messageId: "msg-user-1",
+      clientMessageId: "nonce-1",
+    } as AssistantEvent);
+    pushSseEvent(id, echo);
+    store().applyEnvelopeToSnapshot(echo);
+
+    // The authoritative reconcile refetch lands with the persisted user row
+    // and an anchor at (or past) the live watermark — reseeds normally.
+    const fresh = snapshot(
+      [
+        textRow("a1", "earlier"),
+        { ...textRow("msg-user-1", "hi"), role: "user" },
+      ],
+      500,
+    );
+    store().seedSnapshot(CONV, fresh);
+    expect(store().snapshot?.messages.some((m) => m.id === "msg-user-1")).toBe(
+      true,
+    );
+    expect(store().snapshot?.seq).toBe(500);
+  });
+
+  test("applyEnvelopeToSnapshot folds a live event once seeded; idempotent by seq", () => {
+    store().seedSnapshot(CONV, snapshot([textRow("a1", "persisted")], 5));
+    store().applyEnvelopeToSnapshot(textDelta(6, CONV, "a1", " live"));
+    expect(
+      store().snapshot?.messages.find((m) => m.id === "a1")?.textSegments,
+    ).toEqual(["persisted live"]);
+    // Re-applying seq 6 is a no-op.
+    const before = store().snapshot;
+    store().applyEnvelopeToSnapshot(textDelta(6, CONV, "a1", " live"));
+    expect(store().snapshot).toBe(before);
+  });
+
+  test("applyEnvelopeToSnapshot is a no-op before the snapshot is seeded", () => {
+    store().applyEnvelopeToSnapshot(textDelta(6, CONV, "a1", "x"));
+    expect(store().snapshot).toBeNull();
+  });
+
+  test("optimistic sends add and retire via setOptimisticSends", () => {
+    const send: DisplayMessage = {
+      ...textRow("u1", "hi"),
+      role: "user",
+      clientMessageId: "nonce-1",
+    };
+    store().addOptimisticSend(send);
+    expect(store().optimisticSends.map((m) => m.clientMessageId)).toEqual([
+      "nonce-1",
+    ]);
+    store().setOptimisticSends((prev) =>
+      prev.filter((m) => m.clientMessageId !== "nonce-1"),
+    );
+    expect(store().optimisticSends).toEqual([]);
+  });
+
+  test("seedSnapshot prunes optimistic sends the snapshot already represents", () => {
+    // A retained attachment-carrying send (upgraded to the server id by its
+    // echo) is retired once the reseeded snapshot carries the persisted row —
+    // matched by any shared identity key (server id or nonce).
+    store().addOptimisticSend({
+      ...textRow("msg-server-1", "pic"),
+      role: "user",
+      clientMessageId: "nonce-1",
+    });
+    store().addOptimisticSend({
+      ...textRow("u-unconfirmed", "later"),
+      role: "user",
+      clientMessageId: "nonce-2",
+    });
+
+    store().seedSnapshot(
+      CONV,
+      snapshot([{ ...textRow("msg-server-1", "pic"), role: "user" }], 5),
+    );
+
+    expect(store().optimisticSends.map((m) => m.clientMessageId)).toEqual([
+      "nonce-2",
+    ]);
+  });
+
+  test("switching conversation resets snapshot and optimistic sends", () => {
+    store().seedSnapshot(CONV, snapshot([textRow("a1", "x")], 1));
+    store().addOptimisticSend({
+      ...textRow("u1", "hi"),
+      role: "user",
+      clientMessageId: "n",
+    });
+
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "conv-B",
+    });
+
+    expect(store().snapshot).toBeNull();
+    expect(store().optimisticSends).toEqual([]);
+  });
+
+  test("reseed keeps an attachment-carrying send until its snapshot twin is hydrated", () => {
+    // A stale in-flight /messages fetch can commit after the echo: the reseed
+    // replays the buffered echo into a text-only twin row. Pruning against
+    // that unhydrated twin would drop the only blob-preview copy — the send
+    // must survive until a snapshot row with attachments lands.
+    const send: DisplayMessage = {
+      ...textRow("msg-server-1", "pic"),
+      role: "user",
+      clientMessageId: "nonce-1",
+      attachments: [
+        {
+          id: "att-1",
+          filename: "shot.png",
+          mimeType: "image/png",
+          sizeBytes: 10,
+          previewUrl: "blob:preview",
+        },
+      ],
+    };
+    store().addOptimisticSend(send);
+
+    // Stale reseed: the twin row shares identity but has no attachments.
+    store().seedSnapshot(
+      CONV,
+      snapshot([{ ...textRow("msg-server-1", "pic"), role: "user" }], 5),
+    );
+    expect(store().optimisticSends).toEqual([send]);
+
+    // Hydrated reseed: the twin now carries attachment data — send retires.
+    store().seedSnapshot(
+      CONV,
+      snapshot(
+        [
+          {
+            ...textRow("msg-server-1", "pic"),
+            role: "user",
+            attachments: [
+              {
+                id: "att-1",
+                filename: "shot.png",
+                mimeType: "image/png",
+                sizeBytes: 10,
+                previewUrl: "data:image/png;base64,x",
+              },
+            ],
+          },
+        ],
+        6,
+      ),
+    );
+    expect(store().optimisticSends).toEqual([]);
+  });
+
+  test("attachment previews survive the echo → reseed lifecycle (LUM-2663)", () => {
+    // A pasted image's preview lives only on the optimistic send (blob URL).
+    // The echo folds a text-only row into the snapshot; the retained
+    // (id-upgraded) optimistic copy must keep winning the overlay so the
+    // preview never disappears, and the reseed retires it once the server row
+    // carries hydrated attachment data.
+    const attachment = {
+      id: "att-1",
+      filename: "shot.png",
+      mimeType: "image/png",
+      sizeBytes: 10,
+      previewUrl: "blob:preview",
+    };
+    store().seedSnapshot(CONV, snapshot([textRow("a1", "earlier")], 5));
+    store().addOptimisticSend({
+      ...textRow("client-uuid", "look"),
+      role: "user",
+      clientMessageId: "nonce-1",
+      isOptimistic: true,
+      attachments: [attachment],
+    });
+
+    // The echo event folds a text-only user row into the snapshot…
+    store().applyEnvelopeToSnapshot(
+      envelope(6, CONV, {
+        type: "user_message_echo",
+        text: "look",
+        messageId: "msg-server-1",
+        clientMessageId: "nonce-1",
+      } as AssistantEvent),
+    );
+    // …while the handler upgrades the retained optimistic copy in place
+    // (mirrors handleUserMessageEcho's attachment-carrying branch).
+    store().setOptimisticSends((prev) =>
+      prev.map((m) =>
+        m.clientMessageId === "nonce-1"
+          ? { ...m, id: "msg-server-1", isOptimistic: false }
+          : m,
+      ),
+    );
+
+    const midTurn = selectTranscriptMessages(
+      store().snapshot!.messages,
+      store().optimisticSends,
+    );
+    const userRow = midTurn.find((m) => m.id === "msg-server-1");
+    expect(midTurn.filter((m) => m.role === "user")).toHaveLength(1);
+    expect(userRow?.attachments?.[0]?.previewUrl).toBe("blob:preview");
+
+    // Turn-end reseed: the authoritative server row carries hydrated data and
+    // retires the overlay copy.
+    const serverRow: DisplayMessage = {
+      ...textRow("msg-server-1", "look"),
+      role: "user",
+      clientMessageId: "nonce-1",
+      attachments: [{ ...attachment, previewUrl: "data:image/png;base64,x" }],
+    };
+    store().seedSnapshot(
+      CONV,
+      snapshot([textRow("a1", "earlier"), serverRow], 7),
+    );
+
+    expect(store().optimisticSends).toEqual([]);
+    const afterReseed = selectTranscriptMessages(
+      store().snapshot!.messages,
+      store().optimisticSends,
+    );
+    expect(
+      afterReseed.find((m) => m.id === "msg-server-1")?.attachments?.[0]
+        ?.previewUrl,
+    ).toBe("data:image/png;base64,x");
+  });
+});
+
+describe("chat-session-store: conversation identity", () => {
+  const attachments: ChatAttachment[] = [
+    {
+      kind: "uploaded",
+      localId: "local-uploaded",
+      id: "attachment-uploaded",
+      filename: "photo.png",
+      mimeType: "image/png",
+      sizeBytes: 10,
+      previewUrl: "blob:photo-preview",
+      thumbnailUrl: null,
+    },
+    {
+      kind: "uploading",
+      localId: "local-uploading",
+      filename: "notes.txt",
+      mimeType: "text/plain",
+      sizeBytes: 20,
+    },
+    {
+      kind: "failed",
+      localId: "local-failed",
+      filename: "archive.zip",
+      mimeType: "application/zip",
+      sizeBytes: 30,
+      error: "Upload failed",
+    },
+  ];
+
+  test("re-entering the same session preserves ephemeral chat state", () => {
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: CONV,
+    });
+    const history = snapshot([textRow("a1", "persisted")], 1);
+    const optimistic = {
+      ...textRow("u1", "pending"),
+      role: "user" as const,
+      clientMessageId: "client-message-1",
+    };
+    store().seedSnapshot(CONV, history);
+    store().addOptimisticSend(optimistic);
+    store().setError({ message: "Temporary failure" });
+    store().setIsLoadingHistory(false);
+    store().pushPendingQueuedMessageId("queued-message-1");
+    store().setConfirmationToolCall("request-1", "tool-call-1");
+    store().setExpandedToolCallId("tool-call-1", true);
+    useComposerStore.setState({
+      attachments,
+      attachmentLastError: "Upload failed",
+    });
+    useComposerStore.getState().setInput("Unsent draft");
+    useTurnStore.getState().requestSend("turn-1");
+    useInteractionStore
+      .getState()
+      .showQuestion({ requestId: "question-1", entries: [] });
+
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: CONV,
+    });
+
+    expect(store().snapshot).toBe(history);
+    expect(store().optimisticSends).toEqual([optimistic]);
+    expect(store().error).toEqual({ message: "Temporary failure" });
+    expect(store().isLoadingHistory).toBe(false);
+    expect(store().pendingQueuedMessageIds).toEqual(["queued-message-1"]);
+    expect(store().confirmationToolCallMap.get("request-1")).toBe(
+      "tool-call-1",
+    );
+    expect(store().expandedToolCallIds).toEqual(new Set(["tool-call-1"]));
+    expect(useComposerStore.getState().attachments).toEqual(attachments);
+    expect(useComposerStore.getState().attachmentLastError).toBe(
+      "Upload failed",
+    );
+    expect(useComposerStore.getState().input).toBe("Unsent draft");
+    expect(useTurnStore.getState().activeTurnId).toBe("turn-1");
+    expect(useTurnStore.getState().phase).toBe("thinking");
+    expect(useInteractionStore.getState().pendingQuestion?.requestId).toBe(
+      "question-1",
+    );
+  });
+
+  test("draft resolution is consumed before a later real switch", () => {
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "draft-conversation",
+    });
+    useComposerStore.setState({ attachments });
+    store().markDraftResolution();
+
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "server-conversation",
+    });
+
+    expect(store().draftConversationIdResolution).toBe(false);
+    expect(store().previousConversationId).toBe("draft-conversation");
+    expect(useComposerStore.getState().attachments).toEqual(attachments);
+
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "other-conversation",
+    });
+
+    expect(store().previousConversationId).toBe("other-conversation");
+    expect(useComposerStore.getState().attachments).toEqual([]);
+  });
+});
+
+describe("chat-session-store: switch telemetry gate", () => {
+  beforeEach(() => {
+    switchStartedConversationIds.length = 0;
+    switchAbandonReasons.length = 0;
+    useChatSessionStore.setState({
+      previousConversationId: null,
+      previousAssistantId: null,
+      draftConversationIdResolution: false,
+    });
+  });
+
+  test("a cold mount with no prior conversation opens no window", () => {
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "conv-A",
+    });
+
+    expect(switchStartedConversationIds).toEqual([]);
+  });
+
+  test("a move between two conversations of one assistant opens a window", () => {
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "conv-A",
+    });
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "conv-B",
+    });
+
+    expect(switchStartedConversationIds).toEqual(["conv-B"]);
+  });
+
+  test("an assistant change opens no window", () => {
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "conv-A",
+    });
+    store().switchToConversation({
+      assistantId: "asst-2",
+      activeConversationId: "conv-B",
+    });
+
+    expect(switchStartedConversationIds).toEqual([]);
+  });
+
+  test("re-entering the same conversation opens no window", () => {
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "conv-A",
+    });
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "conv-A",
+    });
+
+    expect(switchStartedConversationIds).toEqual([]);
+  });
+
+  test("a draft-key resolution is not a switch", () => {
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "conv-A",
+    });
+    store().markDraftResolution();
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "conv-server-1",
+    });
+
+    expect(switchStartedConversationIds).toEqual([]);
+  });
+
+  test("every unmeasured move closes any window it inherited", () => {
+    // Each of these leaves the panel on a conversation that cannot paint under
+    // the id of a window an earlier switch opened.
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "conv-A",
+    });
+    store().switchToConversation({
+      assistantId: "asst-2",
+      activeConversationId: "conv-B",
+    });
+    store().switchToConversation({
+      assistantId: "asst-2",
+      activeConversationId: "conv-B",
+    });
+    store().markDraftResolution();
+    store().switchToConversation({
+      assistantId: "asst-2",
+      activeConversationId: "conv-server-1",
+    });
+
+    expect(switchAbandonReasons).toEqual([
+      "context_change",
+      "context_change",
+      "draft_resolution",
+    ]);
+  });
+
+  test("a measured move opens a window instead of abandoning", () => {
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "conv-A",
+    });
+    switchAbandonReasons.length = 0;
+    store().switchToConversation({
+      assistantId: "asst-1",
+      activeConversationId: "conv-B",
+    });
+
+    expect(switchAbandonReasons).toEqual([]);
+  });
+});

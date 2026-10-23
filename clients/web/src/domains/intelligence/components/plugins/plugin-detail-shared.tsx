@@ -1,0 +1,404 @@
+import {
+  ArrowDownToLine,
+  ArrowUpCircle,
+  Download,
+  ExternalLink,
+  Loader2,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
+import { useState } from "react";
+
+import { ExternalAnchor } from "@/components/external-anchor";
+import {
+  PLUGIN_INSTALL_ERROR,
+  PLUGIN_REMOVE_ERROR,
+  PLUGIN_UPGRADE_ERROR,
+  pluginRemoveConfirmMessage,
+  pluginRiskyUpgradeConfirmLabel,
+  pluginRiskyUpgradeConfirmMessage,
+} from "@/domains/intelligence/plugins/constants";
+import { shortSha } from "@/lib/plugins/utils";
+import type { PluginDrift } from "@/domains/intelligence/use-plugin-drift";
+import type { PluginsByNameGetResponse } from "@/generated/daemon/types.gen";
+import { useTranslation } from "@/i18n";
+import { saveFile } from "@/runtime/native-file";
+import { cn } from "@/utils/misc";
+import { Button, ConfirmDialog, Toggle } from "@vellumai/design-library";
+
+/**
+ * The on-disk name for a plugin artifact: the URL path's basename.
+ * `artifact.label` is display copy ("Download for macOS"), not a filename.
+ */
+function artifactFilename(url: string): string {
+  try {
+    const basename = new URL(url, window.location.href).pathname
+      .split("/")
+      .pop();
+    return basename || "plugin-artifact";
+  } catch {
+    return "plugin-artifact";
+  }
+}
+
+/**
+ * Presentational building blocks shared by the plugin detail surfaces so the
+ * metadata table, loading / error states, and the Install / Download / Upgrade
+ * / Remove action set don't drift between them. These take props (plugin +
+ * drift + callbacks) and render UI only — data fetching stays in the consuming
+ * panel via `usePluginDetail`.
+ *
+ * The desktop in-tab detail (`plugin-detail.tsx`) and the mobile detail overlay
+ * (`plugin-detail-mobile.tsx`) each place these pieces in their own layout
+ * chrome, so the building blocks stay layout-agnostic.
+ */
+
+interface PluginDetailMetadataProps {
+  plugin: PluginsByNameGetResponse;
+  /**
+   * Contributed-surface counts for an installed copy (skills / hooks / tools).
+   * Only present once the drift inspection resolves; omit for surfaces we don't
+   * track on this view.
+   */
+  surfaces?: PluginDrift["surfaces"];
+  className?: string;
+}
+
+/**
+ * Metadata table for a plugin: Source (repo link), Homepage, License, and —
+ * when an installed copy's contributed surfaces are known — Skills / Hooks /
+ * Tools counts. Only non-empty rows render.
+ */
+export function PluginDetailMetadata({
+  plugin,
+  surfaces = null,
+  className,
+}: PluginDetailMetadataProps) {
+  const { t } = useTranslation("intelligence");
+  const repo =
+    plugin.source?.kind === "github"
+      ? plugin.source.repo
+      : t("pluginDetailShared.localSource");
+  const repoHref =
+    plugin.source?.kind === "github"
+      ? `https://github.com/${plugin.source.repo}`
+      : null;
+
+  const rows: { label: string; value: string; href?: string }[] = [
+    {
+      label: t("pluginDetailShared.sourceLabel"),
+      value: repo,
+      href: repoHref ?? undefined,
+    },
+  ];
+  if (plugin.homepage) {
+    rows.push({
+      label: t("pluginDetailShared.homepageLabel"),
+      value: plugin.homepage,
+      href: plugin.homepage,
+    });
+  }
+  if (plugin.license) {
+    rows.push({
+      label: t("pluginDetailShared.licenseLabel"),
+      value: plugin.license,
+    });
+  }
+  // Surfaces are only present for an installed copy; list the non-empty
+  // contributions (skills / hooks / tools) so the panel shows what the
+  // plugin actually adds.
+  if (surfaces) {
+    if (surfaces.skills.length > 0) {
+      rows.push({
+        label: t("pluginDetailShared.skillsLabel"),
+        value: String(surfaces.skills.length),
+      });
+    }
+    if (surfaces.hooks.length > 0) {
+      rows.push({
+        label: t("pluginDetailShared.hooksLabel"),
+        value: String(surfaces.hooks.length),
+      });
+    }
+    if (surfaces.tools.length > 0) {
+      rows.push({
+        label: t("pluginDetailShared.toolsLabel"),
+        value: String(surfaces.tools.length),
+      });
+    }
+  }
+
+  return (
+    <dl
+      className={cn(
+        "mb-5 grid gap-x-6 gap-y-2 border-b pb-5 sm:grid-cols-[max-content_1fr]",
+        className,
+      )}
+      style={{ borderColor: "var(--border-base)" }}
+    >
+      {rows.map((row) => (
+        <div key={row.label} className="contents">
+          <dt
+            className="text-body-small-default"
+            style={{ color: "var(--content-tertiary)" }}
+          >
+            {row.label}
+          </dt>
+          <dd
+            className="min-w-0 truncate text-body-small-default"
+            style={{ color: "var(--content-secondary)" }}
+          >
+            {row.href ? (
+              <ExternalAnchor
+                href={row.href}
+                tone="default"
+                className="inline-flex items-center gap-1"
+                glyph={false}
+              >
+                {row.value}
+                <ExternalLink className="h-3 w-3" aria-hidden />
+              </ExternalAnchor>
+            ) : (
+              row.value
+            )}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+interface PluginDetailActionsProps {
+  plugin: PluginsByNameGetResponse;
+  drift: PluginDrift | undefined;
+  /** Install the available plugin. */
+  onInstall: () => void;
+  /** Remove the installed plugin (the confirm prompt is wired internally). */
+  onRemove: () => void;
+  /**
+   * Upgrade the installed copy. A locally-edited copy is confirmed first (the
+   * risky-upgrade prompt is wired internally); a clean copy upgrades directly.
+   */
+  onUpgrade: () => void;
+  isInstalling: boolean;
+  isRemoving: boolean;
+  isUpgrading: boolean;
+  /** Gates whether an upgrade prompts before overwriting local edits. */
+  hasLocalEdits: boolean;
+  /** Auto-include state of the installed copy; `undefined` hides the toggle (see `PluginListItem.enabled`). */
+  enabled?: boolean;
+  /** Flip the auto-include state (optimistic, no confirm dialog). */
+  onToggle?: () => void;
+  isToggling?: boolean;
+}
+
+/**
+ * Action set for a plugin: Install when available, otherwise Download-artifact
+ * (when one ships), Upgrade (when an installed copy has drifted), and Remove.
+ * Remove always confirms; Upgrade confirms only when the copy has local edits
+ * that the re-install would clobber. The confirm dialogs are portal-rendered,
+ * so callers can place this anywhere without affecting layout.
+ */
+export function PluginDetailActions({
+  plugin,
+  drift,
+  onInstall,
+  onRemove,
+  onUpgrade,
+  isInstalling,
+  isRemoving,
+  isUpgrading,
+  hasLocalEdits,
+  enabled,
+  onToggle,
+  isToggling,
+}: PluginDetailActionsProps) {
+  const { t } = useTranslation("intelligence");
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const [confirmingUpgrade, setConfirmingUpgrade] = useState(false);
+
+  const installed = plugin.installed ?? false;
+  const artifact = plugin.artifact ?? null;
+  const updateAvailable = drift?.status === "update-available";
+  const upgradeTitle = updateAvailable
+    ? t("pluginDetailShared.upgradeTitle", {
+        fromSha: shortSha(drift?.local?.commit ?? null),
+        toSha: shortSha(drift?.remote?.commit ?? null),
+      })
+    : undefined;
+
+  const confirmRemove = () => {
+    setConfirmingRemove(false);
+    onRemove();
+  };
+
+  // Local edits would be clobbered by the re-install, so confirm first;
+  // a clean copy upgrades directly.
+  const handleUpgrade = () => {
+    if (hasLocalEdits) {
+      setConfirmingUpgrade(true);
+      return;
+    }
+    onUpgrade();
+  };
+
+  const confirmUpgrade = () => {
+    setConfirmingUpgrade(false);
+    onUpgrade();
+  };
+
+  return (
+    <>
+      {installed ? (
+        // Wrap on narrow (mobile overlay) widths so a Download + Upgrade +
+        // Remove set can't push actions off-screen; single row on desktop.
+        <div className="flex flex-wrap items-center gap-2 md:flex-nowrap md:shrink-0">
+          {/* Auto-include toggle leads the cluster (mirrors the MCP card).
+              Hidden when enablement is unknown — an older daemon or a deep-link
+              with no list row to source it from. Optimistic, no confirm. */}
+          {enabled !== undefined && onToggle ? (
+            <Toggle
+              label={t("pluginDetailShared.autoIncludeInChat")}
+              checked={enabled}
+              onChange={() => onToggle()}
+              disabled={isToggling}
+            />
+          ) : null}
+          {artifact ? (
+            <Button
+              type="button"
+              leftIcon={<Download aria-hidden />}
+              onClick={() =>
+                void saveFile(artifact.url, artifactFilename(artifact.url))
+              }
+            >
+              {artifact.label ?? t("pluginDetailShared.download")}
+            </Button>
+          ) : null}
+          {updateAvailable ? (
+            <Button
+              type="button"
+              onClick={handleUpgrade}
+              disabled={isUpgrading}
+              title={upgradeTitle}
+              loading={isUpgrading}
+              leftIcon={<ArrowUpCircle aria-hidden />}
+            >
+              {t("pluginDetailShared.upgrade")}
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="dangerOutline"
+            onClick={() => setConfirmingRemove(true)}
+            disabled={isRemoving}
+            loading={isRemoving}
+            leftIcon={<Trash2 aria-hidden />}
+          >
+            {t("pluginDetailShared.remove")}
+          </Button>
+        </div>
+      ) : (
+        <Button
+          type="button"
+          onClick={onInstall}
+          disabled={isInstalling}
+          loading={isInstalling}
+          leftIcon={<ArrowDownToLine aria-hidden />}
+        >
+          {t("pluginDetailShared.install")}
+        </Button>
+      )}
+
+      <ConfirmDialog
+        open={confirmingRemove}
+        title={t("pluginDetailShared.removePluginTitle")}
+        message={pluginRemoveConfirmMessage(plugin.name)}
+        confirmLabel={t("pluginDetailShared.remove")}
+        destructive
+        onConfirm={confirmRemove}
+        onCancel={() => setConfirmingRemove(false)}
+      />
+
+      <ConfirmDialog
+        open={confirmingUpgrade}
+        title={t("pluginDetailShared.upgradePluginTitle")}
+        message={pluginRiskyUpgradeConfirmMessage(plugin.name)}
+        confirmLabel={pluginRiskyUpgradeConfirmLabel}
+        destructive
+        onConfirm={confirmUpgrade}
+        onCancel={() => setConfirmingUpgrade(false)}
+      />
+    </>
+  );
+}
+
+export function PluginDetailLoading() {
+  return (
+    <div className="flex items-center justify-center py-12">
+      <Loader2
+        className="h-6 w-6 animate-spin"
+        style={{ color: "var(--content-tertiary)" }}
+      />
+    </div>
+  );
+}
+
+export function PluginDetailError() {
+  const { t } = useTranslation("intelligence");
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-2 py-12 text-center"
+      style={{ color: "var(--content-tertiary)" }}
+    >
+      <TriangleAlert className="h-6 w-6" aria-hidden />
+      <p className="text-body-medium-default">
+        {t("pluginDetailShared.loadErrorTitle")}
+      </p>
+      <p className="text-body-small-lighter">
+        {t("pluginDetailShared.loadErrorDetail")}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Inline banner for a failed install / remove / upgrade attempt. Derives the
+ * message from the three error flags so the desktop and mobile detail surfaces
+ * stay in lockstep. Render it only when one of the flags is set.
+ */
+export function PluginDetailActionError({
+  isInstallError,
+  isRemoveError,
+  isUpgradeError,
+}: {
+  isInstallError: boolean;
+  isRemoveError: boolean;
+  isUpgradeError: boolean;
+}) {
+  const message = isInstallError
+    ? PLUGIN_INSTALL_ERROR
+    : isRemoveError
+    ? PLUGIN_REMOVE_ERROR
+    : isUpgradeError
+    ? PLUGIN_UPGRADE_ERROR
+    : null;
+
+  if (!message) {
+    return null;
+  }
+
+  return (
+    <div
+      className="mb-3 flex items-center gap-2 rounded px-3 py-2 text-body-small-default"
+      style={{
+        backgroundColor: "var(--surface-active)",
+        color: "var(--content-warning, var(--content-tertiary))",
+      }}
+      role="alert"
+    >
+      <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />
+      {message}
+    </div>
+  );
+}

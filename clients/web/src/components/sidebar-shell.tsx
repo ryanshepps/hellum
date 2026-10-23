@@ -1,0 +1,215 @@
+import { ArrowLeft } from "lucide-react";
+import { type ReactNode, useCallback, useLayoutEffect, useRef } from "react";
+import { Link, useLocation, useNavigate } from "react-router";
+import { Button, Typography } from "@vellumai/design-library";
+
+import { RuntimeUpgradeBanner } from "@/components/runtime-upgrade-banner";
+import { StatusBanner } from "@/components/status-banner";
+import { useEdgeSwipeBack } from "@/hooks/use-edge-swipe-back";
+import { useIsMobile } from "@/hooks/use-is-mobile";
+import { useTranslation } from "@/i18n";
+import { navigateWithPageTransition } from "@/lib/page-transition";
+import { isElectron } from "@/runtime/is-electron";
+import { routes } from "@/utils/routes";
+
+interface SidebarShellProps {
+  sidebar: ReactNode;
+  children: ReactNode;
+  actions?: ReactNode;
+  backHref: string;
+  title?: string;
+  menuRoute?: string;
+  /**
+   * Whether the nav list is the whole screen on a narrow viewport, so the
+   * routed page can be left unmounted while it is shown.
+   *
+   * Opt in only when the menu route's own child renders nothing the user
+   * needs. A child that redirects has to mount to do its work, and leaving it
+   * out strands the visitor on the menu instead.
+   */
+  menuReplacesContentOnMobile?: boolean;
+}
+
+/**
+ * Sidebar shell — overlay panel treatment.
+ *
+ * Desktop: one outer card containing sidebar + content side-by-side.
+ * Mobile: two-page flow — root shows sidebar, sub-pages show content
+ * with a back arrow returning to the root.
+ */
+export function SidebarShell({
+  sidebar,
+  children,
+  actions,
+  backHref,
+  title = "Settings",
+  menuRoute = routes.settings.root,
+  menuReplacesContentOnMobile = false,
+}: SidebarShellProps) {
+  const { t } = useTranslation();
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const isMenuRoute = pathname === menuRoute;
+  const isMobile = useIsMobile();
+
+  // The two-page flow: on a narrow viewport the menu route is the nav list and
+  // a sub-page is the content, so one signal decides which is on screen rather
+  // than each hiding itself at its own breakpoint.
+  const showsMobileMenu = isMobile && isMenuRoute;
+  // A mounted page runs its render, its effects and its request fan-out
+  // whether or not anything shows it. Its chunk arrives either way, since the
+  // router resolves a lazy component before this renders.
+  const contentMounted = !(showsMobileMenu && menuReplacesContentOnMobile);
+
+  // Edge-swipe back gesture for the mobile two-page flow. It mirrors the
+  // header back arrow: from a sub-page it returns to the menu root, and from
+  // the menu root it exits to `backHref` (the surface that opened this shell).
+  const swipeContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // All routed pages render into the same scrolling <main>, so without a
+  // reset the scroll offset of one page carries over to the next (scroll
+  // down in General, open Privacy, land mid-page). React Router's
+  // <ScrollRestoration> only manages window scroll, not nested containers,
+  // so reset this container whenever the route changes. Layout effect so the
+  // new page never paints at the stale offset.
+  const contentRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    contentRef.current?.scrollTo(0, 0);
+  }, [pathname]);
+  const mobileBackHref = isMenuRoute ? backHref : menuRoute;
+  const handleSwipeBack = useCallback(() => {
+    navigate(mobileBackHref);
+  }, [navigate, mobileBackHref]);
+  useEdgeSwipeBack({
+    containerRef: swipeContainerRef,
+    onBack: handleSwipeBack,
+    enabled: isMobile,
+    navKey: pathname,
+    prefetchHref: mobileBackHref,
+  });
+
+  // In the Electron shell the macOS window controls (traffic lights) sit in an
+  // inline title-bar zone at the top of the renderer (see `ChatLayoutHeader` /
+  // the desktop app's `MAIN_TRAFFIC_LIGHT_POSITION`). Unlike chat, this shell
+  // has no inline header row, so reserve top space to clear the controls AND
+  // match the chat layout, whose sidebar/content sits below the 44px title bar
+  // plus the 16px content inset (`p-4`) — i.e. 60px (3.75rem) from the top.
+  // Off Electron it stays at the standard 1rem inset.
+  const electron = isElectron();
+
+  const mobileBackLabel = isMenuRoute
+    ? t("sidebarShell.backFrom", { title })
+    : t("sidebarShell.backToMenu", { title });
+
+  const mobileBackButton = (
+    <Button
+      variant="ghost"
+      iconOnly={<ArrowLeft />}
+      aria-label={mobileBackLabel}
+      tintColor="var(--content-secondary)"
+      onClick={() =>
+        navigateWithPageTransition(navigate, mobileBackHref, "pop")
+      }
+    />
+  );
+
+  const desktopBackButton = (
+    <Button
+      asChild
+      variant="outlined"
+      aria-label={t("sidebarShell.backFrom", { title })}
+      className="h-8 w-8 px-0"
+      tintColor="var(--content-secondary)"
+    >
+      <Link
+        to={backHref}
+        className="flex items-center justify-center no-underline"
+      >
+        <ArrowLeft size={16} aria-hidden="true" />
+      </Link>
+    </Button>
+  );
+
+  return (
+    <div
+      ref={swipeContainerRef}
+      className="flex h-full min-h-0 w-full flex-1 flex-col gap-4 p-4 sm:p-6 md:gap-0"
+      style={{
+        paddingTop: electron ? "3.75rem" : "1rem",
+      }}
+    >
+      {/* Mobile header */}
+      <div className="flex shrink-0 items-center gap-3 md:hidden">
+        {mobileBackButton}
+        <Typography
+          as="h1"
+          variant="body-large-default"
+          className="flex-1 truncate text-center"
+          style={{ color: "var(--content-tertiary)", lineHeight: 1.4 }}
+        >
+          {title}
+        </Typography>
+        <div className="h-10 w-10 shrink-0" aria-hidden="true" />
+      </div>
+
+      {electron ? (
+        <div className="flex shrink-0 flex-col gap-2 pb-4 empty:hidden">
+          <StatusBanner placement="electron" className="px-0 pt-0" />
+          <RuntimeUpgradeBanner placement="electron" className="px-0 pt-0" />
+        </div>
+      ) : null}
+
+      {/* Card chrome — desktop only */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:rounded-[12px] md:border md:border-[var(--border-base)] md:bg-[var(--surface-overlay)]">
+        {/* Desktop header */}
+        <div className="hidden shrink-0 items-center justify-between gap-4 px-6 py-5 md:flex">
+          <div className="flex min-w-0 items-center gap-3">
+            {desktopBackButton}
+            <h1
+              className="text-title-large truncate"
+              style={{
+                color: "var(--content-emphasised)",
+                lineHeight: 1.2,
+              }}
+            >
+              {title}
+            </h1>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">{actions}</div>
+        </div>
+
+        {/* Body — sidebar + content */}
+        <div className="flex min-h-0 flex-1 overflow-hidden">
+          {!isMobile ? (
+            <aside
+              className="w-64 shrink-0 overflow-y-auto"
+              aria-label={t("sidebarShell.navigationAria", { title })}
+            >
+              {sidebar}
+            </aside>
+          ) : null}
+
+          {showsMobileMenu ? (
+            /* `overflow-x-hidden`: `overflow-y: auto` alone computes
+               `overflow-x: auto`, so any child overflowing horizontally makes
+               the whole page pannable sideways on touch devices. */
+            <div className="flex min-w-0 min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden pb-6">
+              {sidebar}
+            </div>
+          ) : null}
+
+          {contentMounted ? (
+            <main
+              ref={contentRef}
+              className={`min-w-0 min-h-0 flex-1 flex-col gap-4 overflow-y-auto overflow-x-hidden pb-6 md:px-6 md:pt-0 ${
+                showsMobileMenu ? "hidden" : "flex"
+              }`}
+            >
+              {children}
+            </main>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,1601 @@
+// Hand-maintained mirror of the LLM provider/model catalog for the web app.
+//
+// Source of truth: assistant/src/providers/model-catalog.ts, which
+// generates meta/llm-provider-catalog.json via
+//   cd assistant && bun run sync:llm-catalog
+// This file mirrors the subset the web UI needs (no pricing/vision/caching
+// fields).
+//
+// Parity is enforced by llm-model-catalog.test.ts: update the daemon
+// catalog first, run the sync, then mirror the change here.
+
+export interface LlmCatalogModel {
+  id: string;
+  displayName: string;
+  contextWindowTokens: number;
+  defaultContextWindowTokens: number;
+  maxOutputTokens: number;
+  /**
+   * The model line this entry belongs to, when the catalog carries more than
+   * one version of it ("claude-opus", "gemini-flash"). Members of a line are
+   * authored newest first, so a picker can offer the newest and fold the rest
+   * away. The slug is the same under every provider that hosts the model,
+   * which is what lets a cross-provider list fold them together; a model with
+   * no older siblings carries none.
+   */
+  family?: string;
+  /**
+   * The organisation that made the model, never the one serving it. Set only
+   * where the two differ, which is every model listed first by a provider
+   * that hosts other people's work: Kimi is Moonshot's whoever runs it. A
+   * model listed first by the organisation that made it carries none, and
+   * falls back to that provider's own name.
+   */
+  vendor?: string;
+  supportsThinking?: boolean;
+  adaptiveThinkingOnly?: boolean;
+  thinkingFloor?: "minimal" | "low";
+  /**
+   * Whether the model produces free-form chat text. Omit (or true) for
+   * ordinary chat models. False for structured-decision models that stay
+   * out of conversation pickers. They can still back a saved profile and a
+   * call-site pin.
+   */
+  supportsText?: boolean;
+  longContextPricingThresholdTokens?: number;
+  /** When set, the model is hidden unless that assistant flag is on. */
+  featureFlag?: string;
+}
+
+export const MODELS_BY_PROVIDER = {
+  anthropic: [
+    {
+      id: "claude-fable-5-1",
+      displayName: "Claude Fable 5.1",
+      family: "claude-fable",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "claude-fable-5",
+      displayName: "Claude Fable 5",
+      family: "claude-fable",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "claude-opus-5-5",
+      displayName: "Claude Opus 5.5",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "claude-opus-5",
+      displayName: "Claude Opus 5",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "claude-opus-4-8",
+      displayName: "Claude Opus 4.8",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "claude-opus-4-7",
+      displayName: "Claude Opus 4.7",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "claude-opus-4-6",
+      displayName: "Claude Opus 4.6",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "claude-sonnet-5-5",
+      displayName: "Claude Sonnet 5.5",
+      family: "claude-sonnet",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "claude-sonnet-5",
+      displayName: "Claude Sonnet 5",
+      family: "claude-sonnet",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "claude-sonnet-4-6",
+      displayName: "Claude Sonnet 4.6",
+      family: "claude-sonnet",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 64_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "claude-sonnet-4-5-20250929",
+      displayName: "Claude Sonnet 4.5",
+      family: "claude-sonnet",
+      contextWindowTokens: 200_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 64_000,
+      supportsThinking: true,
+    },
+    {
+      id: "claude-opus-4-5-20251101",
+      displayName: "Claude Opus 4.5",
+      family: "claude-opus",
+      contextWindowTokens: 200_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 64_000,
+      supportsThinking: true,
+    },
+    {
+      id: "claude-haiku-4-5-20251001",
+      displayName: "Claude Haiku 4.5",
+      contextWindowTokens: 200_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 64_000,
+      supportsThinking: true,
+    },
+  ],
+  openai: [
+    {
+      id: "gpt-6-astra",
+      displayName: "GPT-6 Astra",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "gpt-6-sol",
+      displayName: "GPT-6 Sol",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "gpt-6-luna",
+      displayName: "GPT-6 Luna",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "gpt-5.6-sol",
+      displayName: "GPT-5.6 Sol",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "gpt-5.6-terra",
+      displayName: "GPT-5.6 Terra",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "gpt-5.6-luna",
+      displayName: "GPT-5.6 Luna",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "gpt-5.5",
+      displayName: "GPT-5.5",
+      family: "gpt-5",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "gpt-5.5-pro",
+      displayName: "GPT-5.5 Pro",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "gpt-5.4",
+      displayName: "GPT-5.4",
+      family: "gpt-5",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "gpt-5.2",
+      displayName: "GPT-5.2",
+      family: "gpt-5",
+      contextWindowTokens: 400_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+    },
+    {
+      id: "gpt-5.4-mini",
+      displayName: "GPT-5.4 Mini",
+      contextWindowTokens: 400_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+    },
+    {
+      id: "gpt-5.4-nano",
+      displayName: "GPT-5.4 Nano",
+      contextWindowTokens: 400_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+    },
+  ],
+  gemini: [
+    {
+      id: "gemini-3.8-flash",
+      displayName: "Gemini 3.8 Flash",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 65_536,
+      supportsThinking: true,
+      thinkingFloor: "low",
+    },
+    {
+      id: "gemini-3.7-flash",
+      displayName: "Gemini 3.7 Flash",
+      family: "gemini-flash",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 65_536,
+      supportsThinking: true,
+      thinkingFloor: "low",
+    },
+    {
+      id: "gemini-3.6-flash",
+      displayName: "Gemini 3.6 Flash",
+      family: "gemini-flash",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 65_536,
+      supportsThinking: true,
+    },
+    {
+      id: "gemini-3.5-flash",
+      displayName: "Gemini 3.5 Flash",
+      family: "gemini-flash",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 65_536,
+      supportsThinking: true,
+    },
+    {
+      id: "gemini-3.5-flash-lite",
+      displayName: "Gemini 3.5 Flash-Lite",
+      family: "gemini-flash-lite",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 65_536,
+      supportsThinking: true,
+    },
+    {
+      id: "gemini-3.1-pro-preview",
+      displayName: "Gemini 3.1 Pro Preview",
+      family: "gemini-pro",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 65_536,
+      supportsThinking: true,
+      thinkingFloor: "low",
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "gemini-3.1-pro-preview-customtools",
+      displayName: "Gemini 3.1 Pro Preview (Custom Tools)",
+      family: "gemini-pro",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 65_536,
+      supportsThinking: true,
+      thinkingFloor: "low",
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "gemini-3-flash-preview",
+      displayName: "Gemini 3 Flash Preview",
+      family: "gemini-flash",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 65_536,
+      supportsThinking: true,
+    },
+    {
+      id: "gemini-3.1-flash-lite-preview",
+      displayName: "Gemini 3.1 Flash-Lite Preview",
+      family: "gemini-flash-lite",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 65_536,
+      supportsThinking: true,
+    },
+    {
+      id: "gemini-3.1-flash-lite",
+      displayName: "Gemini 3.1 Flash-Lite",
+      family: "gemini-flash-lite",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 65_536,
+      supportsThinking: true,
+    },
+    {
+      id: "gemini-2.5-flash",
+      displayName: "Gemini 2.5 Flash",
+      family: "gemini-flash",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 65_536,
+      supportsThinking: true,
+    },
+    {
+      id: "gemini-2.5-flash-lite",
+      displayName: "Gemini 2.5 Flash Lite",
+      family: "gemini-flash-lite",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 65_536,
+    },
+    {
+      id: "gemini-2.5-pro",
+      displayName: "Gemini 2.5 Pro",
+      family: "gemini-pro",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 65_536,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+  ],
+  ollama: [
+    {
+      id: "llama3.2",
+      displayName: "Llama 3.2",
+      vendor: "meta",
+      contextWindowTokens: 128_000,
+      defaultContextWindowTokens: 128_000,
+      maxOutputTokens: 4_096,
+    },
+    {
+      id: "mistral",
+      displayName: "Mistral",
+      vendor: "mistral",
+      contextWindowTokens: 32_768,
+      defaultContextWindowTokens: 32_768,
+      maxOutputTokens: 4_096,
+    },
+  ],
+  fireworks: [
+    {
+      id: "accounts/fireworks/models/kimi-k3",
+      displayName: "Kimi K3",
+      vendor: "moonshot",
+      family: "kimi-k",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 131_072,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+    },
+    {
+      id: "accounts/fireworks/models/glm-5p3",
+      displayName: "GLM 5.3",
+      vendor: "zhipu",
+      family: "glm",
+      contextWindowTokens: 1_040_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 131_072,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+    },
+    {
+      id: "accounts/fireworks/models/glm-5p3-flash",
+      displayName: "GLM 5.3 Flash",
+      vendor: "zhipu",
+      contextWindowTokens: 1_040_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 131_072,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+    },
+    // Kimi K2.5 (kimi-k2p5) is intentionally absent: Fireworks serves it
+    // on-demand/dedicated only, so serverless calls 404.
+    {
+      id: "accounts/fireworks/models/minimax-m3",
+      displayName: "MiniMax M3",
+      vendor: "minimax",
+      family: "minimax-m",
+      contextWindowTokens: 524_288,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 512_000,
+      supportsThinking: true,
+    },
+    {
+      id: "accounts/fireworks/models/deepseek-v4p1-flash",
+      displayName: "DeepSeek V4.1 Flash",
+      vendor: "deepseek",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 131_072,
+      supportsThinking: true,
+    },
+  ],
+  together: [
+    {
+      id: "MiniMaxAI/MiniMax-M3",
+      displayName: "MiniMax M3",
+      vendor: "minimax",
+      family: "minimax-m",
+      contextWindowTokens: 524_288,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 512_000,
+      supportsThinking: true,
+    },
+  ],
+  openrouter: [
+    {
+      id: "anthropic/claude-fable-5.1",
+      displayName: "Claude Fable 5.1",
+      family: "claude-fable",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-fable-5",
+      displayName: "Claude Fable 5",
+      family: "claude-fable",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-opus-5.5",
+      displayName: "Claude Opus 5.5",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-opus-5",
+      displayName: "Claude Opus 5",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-opus-4.8",
+      displayName: "Claude Opus 4.8",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-opus-4.7",
+      displayName: "Claude Opus 4.7",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-opus-4.6",
+      displayName: "Claude Opus 4.6",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-sonnet-5.5",
+      displayName: "Claude Sonnet 5.5",
+      family: "claude-sonnet",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-sonnet-5",
+      displayName: "Claude Sonnet 5",
+      family: "claude-sonnet",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-sonnet-4.6",
+      displayName: "Claude Sonnet 4.6",
+      family: "claude-sonnet",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 64_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-sonnet-4.5",
+      displayName: "Claude Sonnet 4.5",
+      family: "claude-sonnet",
+      contextWindowTokens: 200_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 64_000,
+      supportsThinking: true,
+    },
+    {
+      id: "anthropic/claude-opus-4.5",
+      displayName: "Claude Opus 4.5",
+      family: "claude-opus",
+      contextWindowTokens: 200_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 64_000,
+      supportsThinking: true,
+    },
+    {
+      id: "anthropic/claude-haiku-4.5",
+      displayName: "Claude Haiku 4.5",
+      contextWindowTokens: 200_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 64_000,
+      supportsThinking: true,
+    },
+    {
+      id: "openai/gpt-6-astra",
+      displayName: "GPT-6 Astra",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "openai/gpt-6-astra-pro",
+      displayName: "GPT-6 Astra Pro",
+      vendor: "openai",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "openai/gpt-6-sol",
+      displayName: "GPT-6 Sol",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "openai/gpt-6-sol-pro",
+      displayName: "GPT-6 Sol Pro",
+      vendor: "openai",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "openai/gpt-6-luna",
+      displayName: "GPT-6 Luna",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "openai/gpt-6-luna-pro",
+      displayName: "GPT-6 Luna Pro",
+      vendor: "openai",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "openai/gpt-5.6-sol",
+      displayName: "GPT-5.6 Sol",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "openai/gpt-5.6-sol-pro",
+      displayName: "GPT-5.6 Sol Pro",
+      vendor: "openai",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "openai/gpt-5.6-terra",
+      displayName: "GPT-5.6 Terra",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "openai/gpt-5.6-terra-pro",
+      displayName: "GPT-5.6 Terra Pro",
+      vendor: "openai",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "openai/gpt-5.6-luna",
+      displayName: "GPT-5.6 Luna",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "openai/gpt-5.6-luna-pro",
+      displayName: "GPT-5.6 Luna Pro",
+      vendor: "openai",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "x-ai/grok-4.6",
+      displayName: "Grok 4.6",
+      vendor: "xai",
+      family: "grok",
+      contextWindowTokens: 500_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 30_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "x-ai/grok-4.5",
+      displayName: "Grok 4.5",
+      vendor: "xai",
+      family: "grok",
+      contextWindowTokens: 500_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 30_000,
+      supportsThinking: true,
+    },
+    {
+      id: "x-ai/grok-4.3",
+      displayName: "Grok 4.3",
+      vendor: "xai",
+      family: "grok",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 16_000,
+      supportsThinking: true,
+    },
+    {
+      id: "x-ai/grok-4.20",
+      displayName: "Grok 4.20",
+      vendor: "xai",
+      family: "grok",
+      contextWindowTokens: 2_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 16_000,
+      supportsThinking: true,
+    },
+    {
+      id: "deepseek/deepseek-v4-pro",
+      displayName: "DeepSeek V4 Pro",
+      vendor: "deepseek",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 384_000,
+      supportsThinking: true,
+    },
+    {
+      id: "deepseek/deepseek-v4-flash",
+      displayName: "DeepSeek V4 Flash",
+      vendor: "deepseek",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 384_000,
+      supportsThinking: true,
+    },
+    {
+      id: "deepseek/deepseek-r1-0528",
+      displayName: "DeepSeek R1",
+      vendor: "deepseek",
+      contextWindowTokens: 163_840,
+      defaultContextWindowTokens: 163_840,
+      maxOutputTokens: 32_000,
+      supportsThinking: true,
+    },
+    {
+      id: "deepseek/deepseek-chat-v3-0324",
+      displayName: "DeepSeek V3",
+      vendor: "deepseek",
+      contextWindowTokens: 163_840,
+      defaultContextWindowTokens: 163_840,
+      maxOutputTokens: 32_000,
+    },
+    {
+      id: "qwen/qwen3.5-plus-02-15",
+      displayName: "Qwen 3.5 Plus",
+      vendor: "alibaba",
+      contextWindowTokens: 131_072,
+      defaultContextWindowTokens: 131_072,
+      maxOutputTokens: 8_192,
+      supportsThinking: true,
+    },
+    {
+      id: "qwen/qwen3.5-397b-a17b",
+      displayName: "Qwen 3.5 397B",
+      vendor: "alibaba",
+      contextWindowTokens: 131_072,
+      defaultContextWindowTokens: 131_072,
+      maxOutputTokens: 8_192,
+      supportsThinking: true,
+    },
+    {
+      id: "qwen/qwen3.5-flash-02-23",
+      displayName: "Qwen 3.5 Flash",
+      vendor: "alibaba",
+      contextWindowTokens: 131_072,
+      defaultContextWindowTokens: 131_072,
+      maxOutputTokens: 8_192,
+    },
+    {
+      id: "qwen/qwen3-coder-next",
+      displayName: "Qwen 3 Coder",
+      vendor: "alibaba",
+      contextWindowTokens: 131_072,
+      defaultContextWindowTokens: 131_072,
+      maxOutputTokens: 8_192,
+    },
+    {
+      id: "moonshotai/kimi-k3",
+      displayName: "Kimi K3",
+      vendor: "moonshot",
+      family: "kimi-k",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 131_072,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+    },
+    {
+      id: "moonshotai/kimi-k2.6",
+      displayName: "Kimi K2.6",
+      vendor: "moonshot",
+      family: "kimi-k",
+      contextWindowTokens: 262_144,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 32_768,
+      supportsThinking: true,
+    },
+    {
+      id: "moonshotai/kimi-k2.5",
+      displayName: "Kimi K2.5",
+      vendor: "moonshot",
+      family: "kimi-k",
+      contextWindowTokens: 256_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 32_768,
+    },
+    {
+      id: "minimax/minimax-m3",
+      displayName: "MiniMax M3",
+      vendor: "minimax",
+      family: "minimax-m",
+      contextWindowTokens: 524_288,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 512_000,
+      supportsThinking: true,
+    },
+    {
+      id: "minimax/minimax-m2.7",
+      displayName: "MiniMax M2.7",
+      vendor: "minimax",
+      family: "minimax-m",
+      contextWindowTokens: 196_608,
+      defaultContextWindowTokens: 196_608,
+      maxOutputTokens: 131_072,
+      supportsThinking: true,
+    },
+    {
+      id: "minimax/minimax-m2.5",
+      displayName: "MiniMax M2.5",
+      vendor: "minimax",
+      family: "minimax-m",
+      contextWindowTokens: 196_608,
+      defaultContextWindowTokens: 196_608,
+      maxOutputTokens: 196_608,
+      supportsThinking: true,
+    },
+    {
+      id: "minimax/minimax-m2.1",
+      displayName: "MiniMax M2.1",
+      vendor: "minimax",
+      family: "minimax-m",
+      contextWindowTokens: 196_608,
+      defaultContextWindowTokens: 196_608,
+      maxOutputTokens: 196_608,
+      supportsThinking: true,
+    },
+    {
+      id: "minimax/minimax-m2",
+      displayName: "MiniMax M2",
+      vendor: "minimax",
+      family: "minimax-m",
+      contextWindowTokens: 196_608,
+      defaultContextWindowTokens: 196_608,
+      maxOutputTokens: 196_608,
+      supportsThinking: true,
+    },
+    {
+      id: "minimax/minimax-m2-her",
+      displayName: "MiniMax M2-her",
+      vendor: "minimax",
+      contextWindowTokens: 65_536,
+      defaultContextWindowTokens: 65_536,
+      maxOutputTokens: 2_048,
+    },
+    {
+      id: "minimax/minimax-m1",
+      displayName: "MiniMax M1",
+      vendor: "minimax",
+      family: "minimax-m",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 40_000,
+      supportsThinking: true,
+    },
+    {
+      id: "minimax/minimax-01",
+      displayName: "MiniMax-01",
+      vendor: "minimax",
+      family: "minimax-m",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 1_000_000,
+    },
+    {
+      id: "z-ai/glm-5.3",
+      displayName: "GLM 5.3",
+      vendor: "zhipu",
+      family: "glm",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 131_072,
+      supportsThinking: true,
+    },
+    {
+      id: "z-ai/glm-5.3-flash",
+      displayName: "GLM 5.3 Flash",
+      vendor: "zhipu",
+      contextWindowTokens: 1_310_720,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 131_072,
+      supportsThinking: true,
+    },
+    {
+      id: "z-ai/glm-5.2",
+      displayName: "GLM 5.2",
+      vendor: "zhipu",
+      family: "glm",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 131_072,
+      supportsThinking: true,
+    },
+    {
+      id: "mistralai/mistral-medium-3",
+      displayName: "Mistral Medium 3",
+      vendor: "mistral",
+      contextWindowTokens: 131_072,
+      defaultContextWindowTokens: 131_072,
+      maxOutputTokens: 16_000,
+    },
+    {
+      id: "mistralai/mistral-small-2603",
+      displayName: "Mistral Small 4",
+      vendor: "mistral",
+      contextWindowTokens: 131_072,
+      defaultContextWindowTokens: 131_072,
+      maxOutputTokens: 16_000,
+    },
+    {
+      id: "meta-llama/llama-4-maverick",
+      displayName: "Llama 4 Maverick",
+      vendor: "meta",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 16_000,
+    },
+    {
+      id: "meta-llama/llama-4-scout",
+      displayName: "Llama 4 Scout",
+      vendor: "meta",
+      contextWindowTokens: 327_680,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 16_000,
+    },
+    {
+      id: "amazon/nova-pro-v1",
+      displayName: "Amazon Nova Pro",
+      vendor: "amazon",
+      contextWindowTokens: 300_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 5_000,
+    },
+  ],
+  "vercel-ai-gateway": [
+    {
+      id: "anthropic/claude-fable-5.1",
+      displayName: "Claude Fable 5.1",
+      family: "claude-fable",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-fable-5",
+      displayName: "Claude Fable 5",
+      family: "claude-fable",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-opus-5.5",
+      displayName: "Claude Opus 5.5",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-opus-5",
+      displayName: "Claude Opus 5",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-opus-4.8",
+      displayName: "Claude Opus 4.8",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-opus-4.6",
+      displayName: "Claude Opus 4.6",
+      family: "claude-opus",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-sonnet-5.5",
+      displayName: "Claude Sonnet 5.5",
+      family: "claude-sonnet",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      adaptiveThinkingOnly: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-sonnet-5",
+      displayName: "Claude Sonnet 5",
+      family: "claude-sonnet",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-sonnet-4.6",
+      displayName: "Claude Sonnet 4.6",
+      family: "claude-sonnet",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 64_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 200_000,
+    },
+    {
+      id: "anthropic/claude-haiku-4.5",
+      displayName: "Claude Haiku 4.5",
+      contextWindowTokens: 200_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 64_000,
+      supportsThinking: true,
+    },
+    {
+      id: "openai/gpt-5.5",
+      displayName: "GPT-5.5",
+      family: "gpt-5",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "openai/gpt-5.5-pro",
+      displayName: "GPT-5.5 Pro",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 128_000,
+      supportsThinking: true,
+      longContextPricingThresholdTokens: 272_000,
+    },
+    {
+      id: "xai/grok-4.3",
+      displayName: "Grok 4.3",
+      vendor: "xai",
+      family: "grok",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 16_000,
+      supportsThinking: true,
+    },
+    {
+      id: "moonshotai/kimi-k2.6",
+      displayName: "Kimi K2.6",
+      vendor: "moonshot",
+      family: "kimi-k",
+      contextWindowTokens: 262_144,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 32_768,
+      supportsThinking: true,
+    },
+    {
+      id: "deepseek/deepseek-v4-flash",
+      displayName: "DeepSeek V4 Flash",
+      vendor: "deepseek",
+      contextWindowTokens: 1_048_576,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 384_000,
+      supportsThinking: true,
+    },
+  ],
+  minimax: [
+    {
+      id: "MiniMax-M3",
+      displayName: "MiniMax M3",
+      vendor: "minimax",
+      family: "minimax-m",
+      contextWindowTokens: 1_000_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 512_000,
+      supportsThinking: true,
+    },
+    {
+      id: "MiniMax-M2.7",
+      displayName: "MiniMax M2.7",
+      vendor: "minimax",
+      family: "minimax-m",
+      contextWindowTokens: 200_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 16_384,
+      supportsThinking: true,
+    },
+  ],
+  atlascloud: [
+    {
+      id: "deepseek-ai/deepseek-v4-pro",
+      displayName: "DeepSeek V4 Pro",
+      vendor: "deepseek",
+      contextWindowTokens: 128_000,
+      defaultContextWindowTokens: 128_000,
+      maxOutputTokens: 8_192,
+      supportsThinking: true,
+    },
+  ],
+  litellm: [],
+  opencode: [],
+  baseten: [
+    {
+      id: "thinkingmachines/inkling",
+      displayName: "Inkling",
+      vendor: "thinking-machines",
+      contextWindowTokens: 262_144,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 32_768,
+      supportsThinking: true,
+    },
+  ],
+  ionet: [
+    {
+      id: "meta-llama/Llama-3.3-70B-Instruct",
+      displayName: "Llama 3.3 70B Instruct",
+      vendor: "meta",
+      contextWindowTokens: 128_000,
+      defaultContextWindowTokens: 128_000,
+      maxOutputTokens: 4_096,
+    },
+    {
+      id: "openai/gpt-oss-20b",
+      displayName: "GPT-OSS 20B",
+      vendor: "openai",
+      contextWindowTokens: 64_000,
+      defaultContextWindowTokens: 64_000,
+      maxOutputTokens: 32_768,
+      supportsThinking: true,
+    },
+  ],
+  poolside: [
+    {
+      id: "poolside/laguna-s-2.1",
+      displayName: "Laguna S 2.1",
+      contextWindowTokens: 1_050_000,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 131_072,
+      supportsThinking: true,
+    },
+    {
+      id: "poolside/laguna-xs-2.1",
+      displayName: "Laguna XS 2.1",
+      contextWindowTokens: 262_144,
+      defaultContextWindowTokens: 200_000,
+      maxOutputTokens: 32_768,
+      supportsThinking: true,
+    },
+  ],
+  typesafe: [
+    {
+      id: "jev-latest",
+      displayName: "Jev",
+      contextWindowTokens: 32_000,
+      defaultContextWindowTokens: 32_000,
+      maxOutputTokens: 4_096,
+      supportsText: false,
+    },
+  ],
+  vellum: [
+    {
+      id: "qwen/qwen3-8b",
+      displayName: "Qwen3 8B",
+      vendor: "alibaba",
+      contextWindowTokens: 32_768,
+      defaultContextWindowTokens: 32_768,
+      maxOutputTokens: 32_768,
+      featureFlag: "vellum-hosted-inference",
+    },
+  ],
+  "openai-compatible": [],
+} as const satisfies Record<string, readonly LlmCatalogModel[]>;
+
+export type LlmProviderId = keyof typeof MODELS_BY_PROVIDER;
+
+export const DEFAULT_MODEL_BY_PROVIDER: Record<LlmProviderId, string> = {
+  anthropic: "claude-opus-4-8",
+  openai: "gpt-5.5",
+  gemini: "gemini-2.5-flash",
+  ollama: "llama3.2",
+  fireworks: "accounts/fireworks/models/deepseek-v4p1-flash",
+  together: "MiniMaxAI/MiniMax-M3",
+  openrouter: "x-ai/grok-4.20",
+  "vercel-ai-gateway": "anthropic/claude-sonnet-4.6",
+  minimax: "MiniMax-M2.7",
+  atlascloud: "deepseek-ai/deepseek-v4-pro",
+  litellm: "",
+  opencode: "",
+  baseten: "thinkingmachines/inkling",
+  ionet: "meta-llama/Llama-3.3-70B-Instruct",
+  poolside: "poolside/laguna-s-2.1",
+  typesafe: "jev-latest",
+  vellum: "qwen/qwen3-8b",
+  "openai-compatible": "",
+};
+
+/**
+ * Provider id → human-readable label. Covers every provider in the
+ * daemon catalog. Consumers should fall back to the raw id on miss:
+ *   PROVIDER_DISPLAY_NAMES[id] ?? id
+ */
+export const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  // Routing identities that cards and pickers render as providers.
+  // `vellum` is also the catalog owner of Vellum-hosted GPU models.
+  vellum: "Vellum",
+  chatgpt: "ChatGPT Subscription",
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  gemini: "Google Gemini",
+  ollama: "Ollama",
+  fireworks: "Fireworks",
+  together: "Together AI",
+  openrouter: "OpenRouter",
+  "vercel-ai-gateway": "Vercel AI Gateway",
+  "openai-compatible": "OpenAI-compatible",
+  minimax: "MiniMax",
+  atlascloud: "Atlas Cloud",
+  litellm: "LiteLLM",
+  opencode: "OpenCode",
+  baseten: "Baseten",
+  ionet: "IO Intelligence",
+  poolside: "Poolside",
+  typesafe: "TypeSafe",
+};
+
+/**
+ * Vendor slug to human-readable label, for the organisations that make models
+ * without hosting them. A slug shared with a provider id (`minimax`, `openai`)
+ * names the same organisation in both places, so a picker that groups by
+ * vendor folds the two together rather than drawing the name twice.
+ */
+export const VENDOR_DISPLAY_NAMES: Record<string, string> = {
+  alibaba: "Alibaba",
+  amazon: "Amazon",
+  deepseek: "DeepSeek",
+  meta: "Meta",
+  minimax: "MiniMax",
+  mistral: "Mistral AI",
+  moonshot: "Moonshot AI",
+  openai: "OpenAI",
+  "thinking-machines": "Thinking Machines",
+  xai: "xAI",
+  zhipu: "Z.ai",
+};
+
+/**
+ * The label for a vendor slug, falling back to the provider of the same name
+ * for a first-party organisation the catalog already names.
+ */
+export function vendorDisplayName(vendor: string): string {
+  return (
+    VENDOR_DISPLAY_NAMES[vendor] ?? PROVIDER_DISPLAY_NAMES[vendor] ?? vendor
+  );
+}
+
+/**
+ * Whether each provider supports Vellum-managed (`platform`) auth.
+ * Covers every provider in the daemon catalog so the connection
+ * editor can filter the auth-type dropdown for providers like
+ * Fireworks and OpenRouter that have no managed proxy route.
+ * Missing entries are treated as `false`.
+ */
+export const PROVIDER_SUPPORTS_PLATFORM_AUTH: Record<string, boolean> = {
+  anthropic: true,
+  openai: true,
+  gemini: true,
+  ollama: false,
+  fireworks: true,
+  together: true,
+  openrouter: false,
+  "vercel-ai-gateway": false,
+  "openai-compatible": false,
+  minimax: false,
+  atlascloud: false,
+  litellm: false,
+  opencode: false,
+  baseten: false,
+  ionet: false,
+  poolside: false,
+  typesafe: true,
+  vellum: true,
+};
+
+export const MANAGED_MODELS = MODELS_BY_PROVIDER.anthropic;
+
+/**
+ * Providers the Vellum-managed entry can route to. Single source of truth for
+ * the web (the settings-domain MANAGED_ROUTABLE_PROVIDERS set derives from
+ * it); mirrors the daemon's managed-routable set in
+ * assistant/src/providers/platform-proxy/constants.ts.
+ */
+export const VELLUM_SERVED_PROVIDERS = [
+  "anthropic",
+  "openai",
+  "gemini",
+  "fireworks",
+  "together",
+  "typesafe",
+  "vellum",
+] as const;
+
+/**
+ * The Vellum entry's model list: the union of the managed-routable providers'
+ * catalogs, deduplicated by id in VELLUM_SERVED_PROVIDERS order. Users pick
+ * "Vellum" + a model; which upstream serves it is an implementation detail.
+ */
+const VELLUM_MODELS: readonly LlmCatalogModel[] = (() => {
+  const seenIds = new Set<string>();
+  const seenLabels = new Set<string>();
+  const union: LlmCatalogModel[] = [];
+  for (const provider of VELLUM_SERVED_PROVIDERS) {
+    for (const model of MODELS_BY_PROVIDER[provider]) {
+      // Dedupe by display label as well as id: two upstreams can host the
+      // same model under different ids (e.g. MiniMax M3 on Fireworks and
+      // Together), and the provider-agnostic picker renders labels only —
+      // duplicate labels would be indistinguishable options. First provider
+      // in VELLUM_SERVED_PROVIDERS order wins.
+      if (seenIds.has(model.id) || seenLabels.has(model.displayName)) {
+        continue;
+      }
+      seenIds.add(model.id);
+      seenLabels.add(model.displayName);
+      union.push(model);
+    }
+  }
+  return union;
+})();
+
+/**
+ * The managed upstream that serves a model picked under the Vellum entry —
+ * the first VELLUM_SERVED_PROVIDERS member whose catalog lists the id. Used
+ * at profile-save time to derive the wire-shape provider for
+ * provider_connection: "vellum" profiles.
+ */
+/**
+ * Decode a `<provider>/<model>` Vellum routing string (mirrors the daemon's
+ * parseVellumModel): the prefix names the upstream, the remainder is the
+ * upstream's native model id. Null for anything else.
+ */
+export function parseVellumRoutedModel(modelId: string): {
+  provider: (typeof VELLUM_SERVED_PROVIDERS)[number];
+  model: string;
+} | null {
+  const slash = modelId.indexOf("/");
+  if (slash <= 0) {
+    return null;
+  }
+  const prefix = modelId.slice(0, slash);
+  const provider = VELLUM_SERVED_PROVIDERS.find((p) => p === prefix);
+  const model = modelId.slice(slash + 1);
+  return provider && model ? { provider, model } : null;
+}
+
+export function getManagedUpstreamForModel(
+  modelId: string,
+): (typeof VELLUM_SERVED_PROVIDERS)[number] | undefined {
+  const routed = parseVellumRoutedModel(modelId);
+  if (routed) {
+    return routed.provider;
+  }
+  return VELLUM_SERVED_PROVIDERS.find((provider) =>
+    MODELS_BY_PROVIDER[provider].some((m) => m.id === modelId),
+  );
+}
+
+// Keep in sync with CODEX_SUBSCRIPTION_MODEL_IDS in
+// assistant/src/providers/openai/codex-models.ts. Lives in the catalog so
+// the "chatgpt" identity's model list resolves here like every provider's;
+// the settings domain re-exports it from codex-subscription-models.
+export const CODEX_SUBSCRIPTION_MODEL_IDS: ReadonlySet<string> = new Set([
+  "gpt-6-astra",
+  "gpt-6-sol",
+  "gpt-6-luna",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.5",
+]);
+
+export const HOSTED_INFERENCE_CATALOG_FLAG = "vellum-hosted-inference";
+
+export function catalogEnabledFlags(args: {
+  hostedInference?: boolean;
+}): Record<string, boolean> {
+  return {
+    [HOSTED_INFERENCE_CATALOG_FLAG]: args.hostedInference === true,
+  };
+}
+
+export function isCatalogModelVisible(
+  model: Pick<LlmCatalogModel, "featureFlag">,
+  enabledFlags: Readonly<Record<string, boolean>>,
+): boolean {
+  if (!model.featureFlag) {
+    return true;
+  }
+  return enabledFlags[model.featureFlag] === true;
+}
+
+export function getVisibleModelsForProvider(
+  provider: string,
+  enabledFlags: Readonly<Record<string, boolean>>,
+): readonly LlmCatalogModel[] {
+  return getModelsForProvider(provider).filter((model) =>
+    isCatalogModelVisible(model, enabledFlags),
+  );
+}
+
+/**
+ * Whether a catalog model produces free-form chat text. Unlisted providers
+ * and model ids default to true so custom endpoints and unknown snapshots
+ * stay usable as conversation models.
+ */
+export function catalogModelSupportsText(
+  provider: string | null | undefined,
+  modelId: string | null | undefined,
+): boolean {
+  if (!provider || !modelId) {
+    return true;
+  }
+  const model = getModelsForProvider(provider).find((m) => m.id === modelId);
+  return model?.supportsText !== false;
+}
+
+/** Visible catalog models that can back a conversation pin. */
+export function getTextGenerationModelsForProvider(
+  provider: string,
+  enabledFlags: Readonly<Record<string, boolean>>,
+): readonly LlmCatalogModel[] {
+  return getVisibleModelsForProvider(provider, enabledFlags).filter(
+    (model) => model.supportsText !== false,
+  );
+}
+
+/**
+ * Whether a provider has at least one chat-text model. Empty catalogs
+ * (custom endpoints) default to true because their models are user-defined.
+ */
+export function providerOffersTextGeneration(provider: string): boolean {
+  const models = getModelsForProvider(provider);
+  if (models.length === 0) {
+    return true;
+  }
+  return models.some((model) => model.supportsText !== false);
+}
+
+export function getModelsForProvider(
+  provider: string,
+): readonly LlmCatalogModel[] {
+  if (provider === "vellum") {
+    return VELLUM_MODELS;
+  }
+  // The "chatgpt" routing identity has no catalog of its own: it serves the
+  // OpenAI catalog restricted to what the Codex subscription endpoint
+  // accepts.
+  if (provider === "chatgpt") {
+    return MODELS_BY_PROVIDER.openai.filter((m) =>
+      CODEX_SUBSCRIPTION_MODEL_IDS.has(m.id),
+    );
+  }
+  return MODELS_BY_PROVIDER[provider as LlmProviderId] ?? [];
+}
+
+export function getDefaultModelForProvider(
+  provider: string,
+): string | undefined {
+  // Matches the Balanced default profile's model on the chatgpt column so
+  // users see one consistent "default" for the subscription.
+  if (provider === "chatgpt") {
+    return "gpt-5.6-luna";
+  }
+  // The Vellum picker serves the union of managed catalogs. The GPU
+  // catalog's defaultModel is not the Vellum connection default.
+  if (provider === "vellum") {
+    return undefined;
+  }
+  return DEFAULT_MODEL_BY_PROVIDER[provider as LlmProviderId];
+}
+
+export function providerSupportsPlatformAuth(provider: string): boolean {
+  return PROVIDER_SUPPORTS_PLATFORM_AUTH[provider] === true;
+}

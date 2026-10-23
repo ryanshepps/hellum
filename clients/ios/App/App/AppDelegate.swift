@@ -1,0 +1,380 @@
+import UIKit
+import Capacitor
+
+@UIApplicationMain
+class AppDelegate: UIResponder, UIApplicationDelegate {
+
+    var window: UIWindow?
+
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        // Categories persist across launches, so remote pushes can show the
+        // action after the first open even when JS has not yet registered.
+        NotificationCategories.register()
+
+        // A QR scan that launches the terminated app delivers the connect URL
+        // here as well as through `application(_:open:)`. Parse it into a
+        // pending confirmation only; persistence waits on an explicit Connect.
+        // A launch URL came from outside the process, so it may not carry the
+        // in-process provenance marker; strip before storing so the dedupe
+        // below compares like with like, and drop a URL that cannot be
+        // stripped. See `CommandURLProvenance`.
+        if let rawURL = launchOptions?[.url] as? URL,
+           let url = CommandURLProvenance.stripped(rawURL) {
+            if !handleConnectDeepLink(url) {
+                // Every *other* custom-scheme launch URL (a `voice` or `thread`
+                // link from the Live Activity or Safari; App Intents never
+                // arrive this way, they run in-process) is stashed as a
+                // *backstop*, not as the delivery. See `launchURL` for why it
+                // is both kept and deduped.
+                launchURL = url
+                pendingCommandURL = url
+            }
+        }
+        return true
+    }
+
+    func applicationWillResignActive(_ application: UIApplication) {}
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        // Launch-URL dedupe is scoped to the launch. Re-opening the identical
+        // URL later requires leaving this app first, so anything arriving after
+        // a background transition is a genuinely new open, never the launch
+        // URL arriving twice.
+        launchURL = nil
+        launchURLWasReplayed = false
+    }
+    func applicationWillEnterForeground(_ application: UIApplication) {}
+    func applicationDidBecomeActive(_ application: UIApplication) {}
+    /// A backgrounded voice session keeps the app alive (the `audio` background
+    /// mode), so swiping it away in the app switcher terminates a *running*
+    /// process and lands here. Its Live Activity outlives the process unless it
+    /// is ended, which would strand an island the user cannot dismiss.
+    func applicationWillTerminate(_ application: UIApplication) {
+        VoiceLiveActivityPlugin.endRunningActivityBeforeTermination()
+    }
+
+    func application(_ app: UIApplication, open rawURL: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        // This and `launchOptions[.url]` are the only two ways a custom-scheme
+        // URL enters from outside the process, so this is where an external
+        // open loses any claim to intent provenance, and where one that cannot
+        // be stripped is refused rather than forwarded. See
+        // `CommandURLProvenance`.
+        guard let url = CommandURLProvenance.stripped(rawURL) else {
+            return false
+        }
+        if handleConnectDeepLink(url) {
+            return true
+        }
+        if swallowIfLaunchURLAlreadyDelivered(url) {
+            return true
+        }
+        return ApplicationDelegateProxy.shared.application(app, open: url, options: options)
+    }
+
+    func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void) -> Bool {
+        // Universal Links — navigate the Capacitor webview to the incoming URL
+        // so that deep links (e.g. ?app=X#/pr/...) open in-app instead of Safari.
+        if userActivity.activityType == NSUserActivityTypeBrowsingWeb,
+           let url = userActivity.webpageURL {
+            navigateWebView(to: url)
+        }
+        return ApplicationDelegateProxy.shared.application(application, continue: userActivity, restorationHandler: restorationHandler)
+    }
+
+    // MARK: - APNs Token Forwarding
+
+    func application(
+      _ application: UIApplication,
+      didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+      NotificationCenter.default.post(
+        name: .capacitorDidRegisterForRemoteNotifications,
+        object: deviceToken
+      )
+    }
+
+    func application(
+      _ application: UIApplication,
+      didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+      NotificationCenter.default.post(
+        name: .capacitorDidFailToRegisterForRemoteNotifications,
+        object: error
+      )
+    }
+
+    // MARK: - Self-hosted connect deep link
+
+    /// A parsed connect deep link waiting for explicit confirmation, then for
+    /// the bridge web view to come up.
+    private var pendingConnect: (base: URL, pairURL: URL, name: String?)?
+    private var connectConfirmAlert: UIAlertController?
+
+    /// Handle `<scheme>://connect?url=<https-base>&code=<device-code>` (with an
+    /// optional `name=<label>`), the custom-scheme QR path that pairs the shell
+    /// to a self-hosted assistant. The `url` parameter is the server base (host,
+    /// optionally with a path prefix like `/assistant-123` for Velay-style
+    /// hosting); it is both persisted and the value the pair-page URL is derived
+    /// from, so there is one source of truth.
+    ///
+    /// One handler serves both entry points: a warm open via
+    /// `application(_:open:)` and a cold launch via `launchOptions[.url]`. The
+    /// `connect` host distinguishes it from the OAuth-completion deep link (host
+    /// `oauth-complete`), which Capacitor's `appUrlOpen` routes.
+    ///
+    /// The link is parsed into pending in-memory state only. Persistence and
+    /// pair-page navigation wait on an explicit Connect confirmation so a
+    /// hostile QR or custom-scheme open cannot silently retarget the shell.
+    /// Returns `true` for any `connect` link (handled or ignored) so it isn't
+    /// also routed to the OAuth handler; `false` for everything else.
+    private func handleConnectDeepLink(_ url: URL) -> Bool {
+        guard url.host?.lowercased() == "connect" else {
+            return false
+        }
+        guard let connect = AppDelegate.parseConnectDeepLink(url) else {
+            NSLog("[connect] Ignoring malformed connect deep link")
+            return true
+        }
+
+        pendingConnect = connect
+        deliverPendingConnectNavigation()
+        return true
+    }
+
+    /// Show connect confirmation once a presenter exists, then load the pair
+    /// page after Connect. Safe to call before the view controller is created
+    /// (a cold launch defers to the first `viewDidAppear`).
+    func deliverPendingConnectNavigation() {
+        guard let connect = pendingConnect,
+              let presenter = currentBridgeViewController(),
+              presenter.webView != nil
+        else {
+            return
+        }
+        if connectConfirmAlert != nil {
+            return
+        }
+        let host = connect.base.host ?? connect.base.absoluteString
+        let scheme = connect.base.scheme ?? "https"
+        let alert = UIAlertController(
+            title: "Connect to this assistant?",
+            message: "\(scheme)://\(host) will become this app's server. Nothing is saved until you confirm.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+            guard let self else { return }
+            self.connectConfirmAlert = nil
+            self.pendingConnect = nil
+        })
+        alert.addAction(UIAlertAction(title: "Connect", style: .default) { [weak self] _ in
+            guard let self else { return }
+            self.connectConfirmAlert = nil
+            self.finishConfirmedConnect()
+        })
+        connectConfirmAlert = alert
+        presenter.present(alert, animated: true)
+    }
+
+    private func finishConfirmedConnect() {
+        guard let connect = pendingConnect else {
+            return
+        }
+        guard let bridgeVC = currentBridgeViewController(),
+              let webView = bridgeVC.webView
+        else {
+            return
+        }
+        SelfHostedServer.store(connect.base)
+        SelfHostedServer.append(url: connect.base, name: connect.name)
+        pendingConnect = nil
+        (bridgeVC as? MyViewController)?.bindServerTrackingToConfiguredOrigin()
+        webView.load(URLRequest(url: connect.pairURL))
+    }
+
+    /// Parse `<scheme>://connect?url=&code=` into the validated https server
+    /// base, the pair-page URL to load, and the optional `name` label for the
+    /// remembered-server list. Returns `nil` for a malformed or non-https link.
+    ///
+    /// `name` alone tolerates form encoding: a raw `+` (a space from a sender
+    /// that form-encoded the query) decodes to a space, while an encoded
+    /// `%2B` stays a literal plus. `url` and `code` are machine-generated and
+    /// never form-encoded, so they take the strict percent decode.
+    private static func parseConnectDeepLink(_ url: URL) -> (base: URL, pairURL: URL, name: String?)? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let serverParam = components.queryItems?.first(where: { $0.name == "url" })?.value,
+              let code = components.queryItems?.first(where: { $0.name == "code" })?.value,
+              !code.isEmpty,
+              let base = SelfHostedServer.validate(serverParam),
+              let pairURL = pairPageURL(forBase: base, deviceCode: code)
+        else {
+            return nil
+        }
+        let name = components.percentEncodedQueryItems?
+            .first(where: { $0.name == "name" })?.value?
+            .replacingOccurrences(of: "+", with: "%20")
+            .removingPercentEncoding
+        return (base, pairURL, name)
+    }
+
+    /// Build the standalone SPA pairing route that completes the pre-approved
+    /// device-code exchange, `<base>/assistant/pair#device_code=<code>`.
+    ///
+    /// `/assistant/pair` is appended to the base's existing path so a hosting
+    /// prefix survives (base `https://host/assistant-123` →
+    /// `https://host/assistant-123/assistant/pair`); `appendingPathComponent`
+    /// also normalizes a trailing slash on the base.
+    private static func pairPageURL(forBase base: URL, deviceCode: String) -> URL? {
+        let pairBase = base.appendingPathComponent("assistant").appendingPathComponent("pair")
+        guard var components = URLComponents(url: pairBase, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.query = nil
+        let encodedCode = deviceCode.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? deviceCode
+        components.percentEncodedFragment = "device_code=\(encodedCode)"
+        return components.url
+    }
+
+    // MARK: - Command deep links
+
+    /// A `<scheme>://voice?mode=…` or `<scheme>://thread/…` command (or any
+    /// other non-`connect` launch URL) waiting for the bridge web view to
+    /// come up, mirroring `pendingConnect` above. Only the most recent
+    /// one is kept: a superseded command is stale by definition.
+    private var pendingCommandURL: URL?
+
+    /// The URL this process was launched with (`launchOptions[.url]`), while it
+    /// is still eligible to arrive a second time through
+    /// `application(_:open:)`.
+    ///
+    /// UIKit delivers a cold-launch URL through **both** routes on a non-scene
+    /// app: `launchOptions[.url]` here, *and* `application(_:open:options:)`,
+    /// which "is not called if your implementations return false from both the
+    /// `application(_:willFinishLaunchingWithOptions:)` and
+    /// `application(_:didFinishLaunchingWithOptions:)` methods"
+    /// (https://developer.apple.com/documentation/uikit/uiapplicationdelegate/application(_:open:options:)).
+    /// This delegate implements only the latter and returns `true`
+    /// unconditionally, so the `open:` call always comes — which is why a stock
+    /// Capacitor app, whose delegate handles URLs only in `application(_:open:)`,
+    /// receives `appUrlOpen` from a terminated state at all.
+    ///
+    /// The launch stash is kept anyway, because the `open:` route has a race of
+    /// its own: `ApplicationDelegateProxy` delivers by posting
+    /// `.capacitorOpenURL`, and `AppPlugin` only subscribes in its `load()`, so
+    /// a URL that arrives before the bridge finishes registering plugins has no
+    /// observer and is dropped. Nothing in the web layer calls
+    /// `App.getLaunchUrl()`, Capacitor's usual escape hatch for exactly that.
+    ///
+    /// So: `open:` is the delivery, the stash is the backstop, and this holds
+    /// the identity that lets whichever one loses the race stay silent.
+    private var launchURL: URL?
+
+    /// Whether the backstop replayed ``launchURL`` before `application(_:open:)`
+    /// got to it, so the `open:` call that follows is recognized as the same
+    /// delivery rather than a second one.
+    private var launchURLWasReplayed = false
+
+    /// Reconcile an `application(_:open:)` call against the launch URL,
+    /// answering whether it is a second delivery of something the web layer
+    /// already has and should be dropped here.
+    ///
+    /// Three cases, and only the launch URL reaches any of them:
+    ///
+    /// 1. The backstop already replayed it — swallow, the web layer has it.
+    /// 2. The bridge is up, so this forward will be observed. Drop the backstop
+    ///    and deliver here.
+    /// 3. The bridge is not up yet: `ApplicationDelegateProxy` posts
+    ///    `.capacitorOpenURL` to an `AppPlugin` that has not subscribed, so this
+    ///    forward goes nowhere. Keep the backstop — it is the only delivery
+    ///    left. The forward still happens, harmlessly, and sets the proxy's
+    ///    `lastURL` for `App.getLaunchUrl()`.
+    ///
+    /// The bridge check is `webView != nil`, which is exactly what the replay
+    /// waits for: `CAPBridgeViewController` builds the web view and registers
+    /// plugins in one synchronous `viewDidLoad`, so from the outside the two are
+    /// the same fact.
+    private func swallowIfLaunchURLAlreadyDelivered(_ url: URL) -> Bool {
+        guard url == launchURL else { return false }
+        if launchURLWasReplayed {
+            launchURL = nil
+            launchURLWasReplayed = false
+            return true
+        }
+        guard currentBridgeViewController()?.webView != nil else {
+            return false
+        }
+        launchURL = nil
+        pendingCommandURL = nil
+        return false
+    }
+
+    /// Hand a command URL to the web layer, deferring until the bridge web
+    /// view exists.
+    ///
+    /// Called only by the App Intents (the voice intents via
+    /// `VoiceModeDeepLink.route()`, `SendMessageToChatIntent` via
+    /// `ThreadDeepLink.route()`, and `OpenCameraIntent` / `OpenNewChatIntent`
+    /// via `CommandDeepLink.route(host:)`), which run in-process and therefore
+    /// never pass through `application(_:open:)`. A widget tap is no exception:
+    /// those intents declare `openAppWhenRun`, so the system performs them in
+    /// the app process rather than in the appex. That exclusivity is
+    /// load-bearing: it is what lets this method vouch for the URL by adding
+    /// the provenance marker the external entry points strip (see
+    /// `CommandURLProvenance`).
+    /// Do not route anything that arrived from outside the process through
+    /// here; the terminated-launch path in `didFinishLaunchingWithOptions`
+    /// deliberately stashes into `pendingCommandURL` directly instead.
+    func deliverCommandURL(_ url: URL) {
+        pendingCommandURL = CommandURLProvenance.marked(url)
+        deliverPendingCommandURL()
+    }
+
+    /// Replay a stashed command once the bridge web view is live. Safe to
+    /// call before the view controller exists (a cold launch defers to the first
+    /// `viewDidAppear`) and idempotent once delivered.
+    ///
+    /// Delivery goes through `ApplicationDelegateProxy`, the exact channel a
+    /// warm `application(_:open:)` uses, so the URL surfaces to JS as Capacitor's
+    /// `appUrlOpen` and `capacitor-deep-links.ts` handles it with no new web
+    /// code. `AppPlugin` posts that event with `retainUntilConsumed: true`, so a
+    /// command delivered before the SPA has registered its listener is replayed
+    /// rather than lost.
+    ///
+    /// Exactly one delivery of a launch URL, whichever route wins the race —
+    /// see ``launchURL``.
+    func deliverPendingCommandURL() {
+        guard let url = pendingCommandURL,
+              currentBridgeViewController()?.webView != nil
+        else {
+            return
+        }
+        pendingCommandURL = nil
+        if url == launchURL {
+            launchURLWasReplayed = true
+        }
+        _ = ApplicationDelegateProxy.shared.application(
+            UIApplication.shared,
+            open: url,
+            options: [:]
+        )
+    }
+
+    // MARK: - Web view navigation
+
+    /// The Capacitor bridge view controller — the window root, or embedded in a
+    /// navigation controller, or a direct child of the root.
+    private func currentBridgeViewController() -> CAPBridgeViewController? {
+        guard let rootVC = window?.rootViewController else { return nil }
+        if let bridgeVC = rootVC as? CAPBridgeViewController {
+            return bridgeVC
+        }
+        if let nav = rootVC as? UINavigationController,
+           let bridgeVC = nav.viewControllers.first as? CAPBridgeViewController {
+            return bridgeVC
+        }
+        return rootVC.children.compactMap { $0 as? CAPBridgeViewController }.first
+    }
+
+    /// Navigate the bridge's WKWebView to the given URL.
+    private func navigateWebView(to url: URL) {
+        currentBridgeViewController()?.webView?.load(URLRequest(url: url))
+    }
+}

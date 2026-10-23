@@ -1,0 +1,27 @@
+{
+  "name": "@vellumai/local-mode",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/lockfile-contract.ts",
+    "./teleport-backup-policy": "./src/teleport-backup-policy.ts"
+  },
+  "scripts": {
+    "typecheck": "bunx tsc --noEmit",
+    "test": "bun test src/"
+  },
+  "dependencies": {
+    "@vellumai/avatar-manifest": "workspace:*",
+    "@vellumai/environments": "workspace:*",
+    "@vellumai/service-contracts": "workspace:*",
+    "nanoid": "5.1.7",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.11",
+    "typescript": "5.9.3"
+  }
+}

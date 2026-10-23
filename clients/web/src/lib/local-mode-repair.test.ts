@@ -1,0 +1,512 @@
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+
+import { useLockfileStore } from "@/stores/lockfile-store";
+import type { Lockfile, LockfileAssistant } from "@/runtime/local-mode-host";
+
+// The wrapper under test orchestrates the real connect primitive, so we drive
+// its external seams rather than the primitive itself: the local guardian-token
+// read, the paired gateway proxy, and the wake repair call. Everything else in
+// the primitive (gateway token exchange, self-hosted connection write) is
+// stubbed to no-op so a successful prime resolves cleanly.
+const host = await import("@/runtime/local-mode-host");
+
+let primeShouldSucceed: () => boolean;
+let fetchGuardianTokenHost = mock(async (_id: string) => "tok");
+let wakeLocalAssistantHost = mock(async (_id: string) => ({ ok: true }));
+
+mock.module("@/runtime/local-mode-host", () => ({
+  ...host,
+  fetchGuardianTokenHost: (id: string) => fetchGuardianTokenHost(id),
+  wakeLocalAssistantHost: (id: string) => wakeLocalAssistantHost(id),
+  // The post-wake reload reads back the lockfile; serve the in-store copy so the
+  // retry resolves the selected assistant rather than hitting the real host.
+  loadLockfileHost: async () =>
+    useLockfileStore.getState().lockfile ?? {
+      assistants: [],
+      activeAssistant: null,
+    },
+}));
+
+// Spread the real module so `GatewayTokenError` (used by the connect wrapper's
+// ride-out classifier via `instanceof`) is the genuine class; override only the
+// transport-shaped functions. `ensureGatewayToken` is indirected through a
+// mutable impl so a test can inject a transient gateway-startup failure.
+const realGatewaySession = await import("@/lib/auth/gateway-session");
+const { GatewayTokenError } = realGatewaySession;
+let ensureGatewayTokenImpl: () => Promise<void> = async () => {};
+
+mock.module("@/lib/auth/gateway-session", () => ({
+  ...realGatewaySession,
+  clearGatewayToken: () => {},
+  ensureGatewayToken: () => ensureGatewayTokenImpl(),
+  getGatewayToken: () => "gateway-tok",
+  // Mirror the real chain (token URL derives from the assistant's gateway port)
+  // so a portless entry yields no URL until wake records one.
+  getLocalTokenUrl: (a?: LockfileAssistant) => {
+    const port = a?.resources?.gatewayPort;
+    return port == null ? undefined : `http://127.0.0.1:${port}/token`;
+  },
+}));
+
+mock.module("@/lib/self-hosted/connection", () => ({
+  setSelfHostedConnection: () => {},
+}));
+
+const { GuardianTokenError } = host;
+const {
+  primeLocalGatewayConnectionWithRepair,
+  primeLocalGatewayConnectionWithStartupRetry,
+  LOCAL_GATEWAY_STARTUP_RETRY,
+} = await import("@/lib/local-mode");
+
+// Keep the ride-out loops fast: many attempts, no real wait between them.
+LOCAL_GATEWAY_STARTUP_RETRY.intervalMs = 0;
+
+const localAssistant: LockfileAssistant = {
+  assistantId: "local-a",
+  cloud: "local",
+  resources: { gatewayPort: 7830 },
+} as LockfileAssistant;
+
+function selectLocalAssistant(): void {
+  const lockfile: Lockfile = {
+    assistants: [localAssistant],
+    activeAssistant: "local-a",
+  };
+  useLockfileStore.setState({ lockfile });
+  localStorage.setItem("vellum:local:selected-assistant", "local-a");
+}
+
+beforeEach(() => {
+  primeShouldSucceed = () => true;
+  ensureGatewayTokenImpl = async () => {};
+  fetchGuardianTokenHost = mock(async (_id: string) => {
+    if (!primeShouldSucceed()) {
+      throw new GuardianTokenError(404, "token gone");
+    }
+    return "tok";
+  });
+  wakeLocalAssistantHost = mock(async (_id: string) => ({ ok: true }));
+  selectLocalAssistant();
+});
+
+afterEach(() => {
+  useLockfileStore.setState({ lockfile: null });
+  localStorage.clear();
+  process.env.VITE_PLATFORM_MODE = "true";
+});
+
+describe("primeLocalGatewayConnectionWithRepair", () => {
+  test("a clean first attempt never wakes the assistant", async () => {
+    await primeLocalGatewayConnectionWithRepair();
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+  });
+
+  test("a repairable failure wakes once, then retries and succeeds", async () => {
+    let attempts = 0;
+    // Fail the first prime (missing token), succeed once wake has run.
+    primeShouldSucceed = () => attempts++ > 0;
+
+    await primeLocalGatewayConnectionWithRepair();
+
+    expect(wakeLocalAssistantHost).toHaveBeenCalledTimes(1);
+    expect(wakeLocalAssistantHost).toHaveBeenCalledWith("local-a");
+    // One failing attempt + one succeeding retry.
+    expect(fetchGuardianTokenHost).toHaveBeenCalledTimes(2);
+  });
+
+  test("a mint 401 that later succeeds reconnects without waking", async () => {
+    // Login Item cold boot: the gateway opens traffic before its guardian
+    // binding backfill lands, so the mint answers 401 for a while. Waiting
+    // heals it; a plain wake cannot re-lease the mint and would restart an
+    // already-starting gateway.
+    process.env.VITE_PLATFORM_MODE = "";
+    let mintAttempts = 0;
+    ensureGatewayTokenImpl = async () => {
+      if (mintAttempts++ < 2) {
+        throw new GatewayTokenError(401, "Gateway token request failed: 401");
+      }
+    };
+
+    await primeLocalGatewayConnectionWithRepair();
+
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+    expect(mintAttempts).toBe(3);
+  });
+
+  test("a mint 401 that survives the ride-out surfaces without waking", async () => {
+    process.env.VITE_PLATFORM_MODE = "";
+    let mintAttempts = 0;
+    ensureGatewayTokenImpl = async () => {
+      mintAttempts++;
+      throw new GatewayTokenError(401, "Gateway token request failed: 401");
+    };
+
+    const err = await primeLocalGatewayConnectionWithRepair().catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(GatewayTokenError);
+    expect((err as InstanceType<typeof GatewayTokenError>).status).toBe(401);
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+    expect(mintAttempts).toBe(LOCAL_GATEWAY_STARTUP_RETRY.attempts);
+  });
+
+  test("a transport error that later succeeds reconnects without waking", async () => {
+    process.env.VITE_PLATFORM_MODE = "";
+    let mintAttempts = 0;
+    ensureGatewayTokenImpl = async () => {
+      if (mintAttempts++ < 2) {
+        throw new TypeError("Failed to fetch");
+      }
+    };
+
+    await primeLocalGatewayConnectionWithRepair();
+
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+    expect(mintAttempts).toBe(3);
+  });
+
+  test("a transport error that survives the ride-out wakes once, then reconnects", async () => {
+    process.env.VITE_PLATFORM_MODE = "";
+    let mintAttempts = 0;
+    ensureGatewayTokenImpl = async () => {
+      mintAttempts++;
+      if (mintAttempts <= LOCAL_GATEWAY_STARTUP_RETRY.attempts) {
+        throw new TypeError("Failed to fetch");
+      }
+    };
+
+    await primeLocalGatewayConnectionWithRepair();
+
+    expect(wakeLocalAssistantHost).toHaveBeenCalledTimes(1);
+    expect(mintAttempts).toBe(LOCAL_GATEWAY_STARTUP_RETRY.attempts + 1);
+  });
+
+  test("a still-failing retry surfaces the original error and wakes only once", async () => {
+    primeShouldSucceed = () => false;
+
+    const err = await primeLocalGatewayConnectionWithRepair().catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(GuardianTokenError);
+    expect(wakeLocalAssistantHost).toHaveBeenCalledTimes(1);
+  });
+
+  test("a failed wake surfaces the original error without retrying", async () => {
+    primeShouldSucceed = () => false;
+    wakeLocalAssistantHost = mock(async () => ({
+      ok: false,
+      error: "no sibling env",
+    }));
+
+    const err = await primeLocalGatewayConnectionWithRepair().catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(GuardianTokenError);
+    // The first prime failed and wake failed — the connection is never retried.
+    expect(fetchGuardianTokenHost).toHaveBeenCalledTimes(1);
+  });
+
+  test("a repairable failure for a paired target never wakes and rethrows", async () => {
+    // Wake is cloud:"local"-only (it refuses paired entries), so a paired
+    // connect failure must propagate immediately instead of spawning a wake
+    // that is guaranteed to refuse.
+    process.env.VITE_PLATFORM_MODE = "";
+    const paired: LockfileAssistant = {
+      assistantId: "paired-a",
+      cloud: "paired",
+      runtimeUrl: "https://gw.example.com",
+    } as LockfileAssistant;
+    useLockfileStore.setState({
+      lockfile: { assistants: [paired], activeAssistant: "paired-a" },
+    });
+    localStorage.setItem("vellum:local:selected-assistant", "paired-a");
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = mock(
+      async () => new Response("token gone", { status: 404 }),
+    ) as unknown as typeof fetch;
+    const err = await primeLocalGatewayConnectionWithRepair()
+      .catch((e: unknown) => e)
+      .finally(() => {
+        globalThis.fetch = realFetch;
+      });
+
+    expect(err).toBeInstanceOf(GuardianTokenError);
+    expect(fetchGuardianTokenHost).not.toHaveBeenCalled();
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+  });
+
+  test("a non-repairable 403 surfaces immediately and never wakes", async () => {
+    fetchGuardianTokenHost = mock(async () => {
+      throw new GuardianTokenError(403, "forbidden");
+    });
+
+    const err = await primeLocalGatewayConnectionWithRepair().catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(GuardianTokenError);
+    expect((err as InstanceType<typeof GuardianTokenError>).status).toBe(403);
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+  });
+
+  test("recovers a portless legacy assistant: wakes, reloads the port, then retries", async () => {
+    // The Swift→Electron import case: a legacy entry reaches the renderer with
+    // no recorded gateway port, so the first prime can't resolve a gateway.
+    process.env.VITE_PLATFORM_MODE = "";
+    const portless: LockfileAssistant = {
+      assistantId: "local-a",
+      cloud: "local",
+    } as LockfileAssistant;
+    useLockfileStore.setState({
+      lockfile: { assistants: [portless], activeAssistant: "local-a" },
+    });
+
+    // Wake establishes the daemon + gateway and records the port; model that by
+    // writing the resolved entry back to the store the post-wake reload reads.
+    wakeLocalAssistantHost = mock(async (_id: string) => {
+      useLockfileStore.setState({
+        lockfile: {
+          assistants: [
+            {
+              ...portless,
+              resources: { gatewayPort: 7830, daemonPort: 7831 },
+            },
+          ],
+          activeAssistant: "local-a",
+        },
+      });
+      return { ok: true };
+    });
+
+    await primeLocalGatewayConnectionWithRepair();
+
+    expect(wakeLocalAssistantHost).toHaveBeenCalledTimes(1);
+    expect(wakeLocalAssistantHost).toHaveBeenCalledWith("local-a");
+    // The first attempt fails at gateway resolution, before any token fetch; the
+    // guardian token is fetched only on the retry, once the port resolves.
+    expect(fetchGuardianTokenHost).toHaveBeenCalledTimes(1);
+  });
+
+  test("rides out a wake-restarted gateway that is still starting, then reconnects", async () => {
+    // First prime fails (repairable) → wake restarts the gateway → the post-wake
+    // prime races the gateway coming back up: the mint answers 503 "starting"
+    // once before it succeeds. The ride-out retries instead of dead-ending.
+    let attempts = 0;
+    primeShouldSucceed = () => attempts++ > 0;
+    let mintAttempts = 0;
+    ensureGatewayTokenImpl = async () => {
+      if (mintAttempts++ === 0) {
+        throw new GatewayTokenError(503, "Gateway token request failed: 503");
+      }
+    };
+
+    await primeLocalGatewayConnectionWithRepair();
+
+    expect(wakeLocalAssistantHost).toHaveBeenCalledTimes(1);
+    // One pre-wake fetch that fails, then two post-wake fetches: the first mints
+    // a 503 and is ridden out, the second succeeds.
+    expect(fetchGuardianTokenHost).toHaveBeenCalledTimes(3);
+  });
+
+  test("a wake-restarted gateway stuck starting surfaces the last error after the budget", async () => {
+    // Wake succeeds but the gateway never finishes starting — the ride-out
+    // exhausts its budget and the last transient error propagates so the recovery
+    // controls still surface.
+    let attempts = 0;
+    primeShouldSucceed = () => attempts++ > 0;
+    ensureGatewayTokenImpl = async () => {
+      throw new GatewayTokenError(503, "Gateway token request failed: 503");
+    };
+
+    const err = await primeLocalGatewayConnectionWithRepair().catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(GatewayTokenError);
+    expect((err as InstanceType<typeof GatewayTokenError>).status).toBe(503);
+    expect(wakeLocalAssistantHost).toHaveBeenCalledTimes(1);
+  });
+
+  test("rides out a post-wake guardian refresh 503, then reconnects", async () => {
+    // The reopen-the-app symptom: with the gateway down, refresh reports 503.
+    // Wake restarts the gateway, but the refresh that follows can still land
+    // before it answers. Riding that 5xx out keeps a plain reopen from
+    // dead-ending on the recovery dialog.
+    let fetches = 0;
+    fetchGuardianTokenHost = mock(async (_id: string) => {
+      fetches++;
+      if (fetches <= 2) {
+        throw new GuardianTokenError(503, "Assistant gateway is unreachable");
+      }
+      return "tok";
+    });
+
+    await primeLocalGatewayConnectionWithRepair();
+
+    expect(wakeLocalAssistantHost).toHaveBeenCalledTimes(1);
+    // One pre-wake fetch, one post-wake fetch ridden out, then the success.
+    expect(fetches).toBe(3);
+  });
+
+  test("a post-wake guardian 401 surfaces immediately as a spent credential", async () => {
+    fetchGuardianTokenHost = mock(async () => {
+      throw new GuardianTokenError(401, "Failed to refresh guardian token");
+    });
+
+    const err = await primeLocalGatewayConnectionWithRepair().catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(GuardianTokenError);
+    expect((err as InstanceType<typeof GuardianTokenError>).status).toBe(401);
+    expect(wakeLocalAssistantHost).toHaveBeenCalledTimes(1);
+    // One pre-wake fetch plus one terminal post-wake fetch.
+    expect(fetchGuardianTokenHost).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("primeLocalGatewayConnectionWithStartupRetry", () => {
+  test("rides out a still-starting gateway (503) without waking, then connects", async () => {
+    process.env.VITE_PLATFORM_MODE = "";
+    let mintAttempts = 0;
+    ensureGatewayTokenImpl = async () => {
+      if (mintAttempts++ < 2) {
+        throw new GatewayTokenError(503, "Gateway token request failed: 503");
+      }
+    };
+
+    await primeLocalGatewayConnectionWithStartupRetry();
+
+    // Boot must never spawn an assistant process: the plain prime rides out
+    // the window.
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+    expect(mintAttempts).toBe(3);
+  });
+
+  test("rides out the reported reboot 401 without waking, then connects", async () => {
+    // The reported symptom: after a reboot the gateway opens traffic before its
+    // guardian-binding backfill lands, so the mint answers a transient 401 for a
+    // few seconds. Boot must ride that out (never waking) so the persisted local
+    // assistant restores itself instead of bouncing to the recovery controls.
+    process.env.VITE_PLATFORM_MODE = "";
+    let mintAttempts = 0;
+    ensureGatewayTokenImpl = async () => {
+      if (mintAttempts++ < 2) {
+        throw new GatewayTokenError(401, "Gateway token request failed: 401");
+      }
+    };
+
+    await primeLocalGatewayConnectionWithStartupRetry();
+
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+    expect(mintAttempts).toBe(3);
+  });
+
+  test("does not ride out a 403 boundary refusal, surfaces immediately", async () => {
+    process.env.VITE_PLATFORM_MODE = "";
+    let mintAttempts = 0;
+    ensureGatewayTokenImpl = async () => {
+      mintAttempts++;
+      throw new GatewayTokenError(403, "Forbidden");
+    };
+
+    const err = await primeLocalGatewayConnectionWithStartupRetry().catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(GatewayTokenError);
+    expect((err as InstanceType<typeof GatewayTokenError>).status).toBe(403);
+    // A loopback-boundary refusal is terminal. No repair can change it.
+    expect(mintAttempts).toBe(1);
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+  });
+
+  test("rides out a transport error (Login Item port not bound yet) without waking, then connects", async () => {
+    process.env.VITE_PLATFORM_MODE = "";
+    let mintAttempts = 0;
+    ensureGatewayTokenImpl = async () => {
+      if (mintAttempts++ < 2) {
+        throw new TypeError("Failed to fetch");
+      }
+    };
+
+    await primeLocalGatewayConnectionWithStartupRetry();
+
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+    expect(mintAttempts).toBe(3);
+  });
+
+  test("a gateway that never answers spends the transport budget, then falls through without waking", async () => {
+    // A thrown transport error is how both a starting Login Item and a stopped
+    // assistant look. Boot rides the budget (never waking) so a starting
+    // gateway can bind its port. A stopped assistant still reaches the chooser
+    // after the budget, where connect-with-repair may wake it.
+    process.env.VITE_PLATFORM_MODE = "";
+    let mintAttempts = 0;
+    ensureGatewayTokenImpl = async () => {
+      mintAttempts++;
+      throw new TypeError("Failed to fetch");
+    };
+
+    const err = await primeLocalGatewayConnectionWithStartupRetry().catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(TypeError);
+    expect(mintAttempts).toBe(LOCAL_GATEWAY_STARTUP_RETRY.attempts);
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+  });
+
+  test("does not ride out a missing guardian token, surfaces immediately", async () => {
+    process.env.VITE_PLATFORM_MODE = "";
+    fetchGuardianTokenHost = mock(async () => {
+      throw new GuardianTokenError(404, "token gone");
+    });
+
+    const err = await primeLocalGatewayConnectionWithStartupRetry().catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(GuardianTokenError);
+    expect((err as InstanceType<typeof GuardianTokenError>).status).toBe(404);
+    expect(fetchGuardianTokenHost).toHaveBeenCalledTimes(1);
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+  });
+
+  test("does not ride out a guardian 500 (malformed file, spawn, or timeout)", async () => {
+    process.env.VITE_PLATFORM_MODE = "";
+    fetchGuardianTokenHost = mock(async () => {
+      throw new GuardianTokenError(500, "Guardian token refresh timed out");
+    });
+
+    const err = await primeLocalGatewayConnectionWithStartupRetry().catch(
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(GuardianTokenError);
+    expect((err as InstanceType<typeof GuardianTokenError>).status).toBe(500);
+    expect(fetchGuardianTokenHost).toHaveBeenCalledTimes(1);
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+  });
+
+  test("rides out a guardian refresh 503 without waking, then connects", async () => {
+    process.env.VITE_PLATFORM_MODE = "";
+    let fetches = 0;
+    fetchGuardianTokenHost = mock(async (_id: string) => {
+      fetches++;
+      if (fetches < 3) {
+        throw new GuardianTokenError(503, "Assistant gateway is unreachable");
+      }
+      return "tok";
+    });
+
+    await primeLocalGatewayConnectionWithStartupRetry();
+
+    expect(wakeLocalAssistantHost).not.toHaveBeenCalled();
+    expect(fetches).toBe(3);
+  });
+});

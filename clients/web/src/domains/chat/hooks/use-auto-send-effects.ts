@@ -1,0 +1,184 @@
+/**
+ * Consolidates the three auto-send paths that fire on mount/navigation:
+ *
+ * 1. **URL prompt**: `?prompt=<text>` is consumed once an active
+ *    conversation exists. Navigations the app issued itself carry the
+ *    `autoSendPromptState` marker (see `utils/auto-send-prompt.ts`) and send
+ *    immediately (quick input, document feedback, the app-viewer relay). A URL
+ *    without it (a link the user clicked from an email, a marketing page, or
+ *    anywhere outside the SPA) is untrusted text, so it only pre-fills the
+ *    composer and the user decides whether to send. One-shot callers have the
+ *    `prompt` stripped from the URL after dispatch so a refresh can't replay
+ *    it; relay callers keep theirs to re-fire on a new token.
+ *
+ * 2. **Pre-chat reachability probe** — when a pending onboarding message
+ *    exists in sessionStorage, kicks off a background reachability probe
+ *    immediately instead of waiting for a 502 from the conversation list
+ *    query to publish `assistant.unreachable`.
+ *
+ * 3. **Onboarding initial message** — once the daemon reports "ready",
+ *    reads the staged pre-chat context from sessionStorage and auto-sends
+ *    the initial message. Consumed exactly once per mount.
+ */
+
+import { useEffect, useLayoutEffect, useRef } from "react";
+
+import type { SetURLSearchParams } from "react-router";
+
+import type {
+  ReachabilityProbeOptions,
+  ReachabilityState,
+} from "@/assistant/use-assistant-reachability";
+import { hasAutoSendPromptState } from "@/utils/auto-send-prompt";
+
+export interface UseAutoSendEffectsOptions {
+  assistantId: string | null;
+  activeConversationId: string | null;
+  searchParams: URLSearchParams;
+  setSearchParams: SetURLSearchParams;
+  navigationState?: unknown;
+  sendMessage: (
+    content: string,
+    attachments?: never[],
+    opts?: { hidden?: boolean; scripted?: boolean },
+  ) => Promise<void>;
+  /**
+   * Stage `content` in the composer for the user to send. Used for a
+   * `?prompt=` that arrived without the in-app auto-send marker.
+   */
+  prefillComposer: (content: string) => void;
+  reachabilityPhase: ReachabilityState["phase"];
+  reachabilityProbe: (options?: ReachabilityProbeOptions) => void;
+  /** Reads the staged pre-chat initial message from sessionStorage. */
+  getPendingInitialMessage: () => string | undefined;
+  /**
+   * Whether the staged pre-chat initial message should be sent hidden — driving
+   * the assistant's reply but rendering no user bubble (used by the
+   * research-onboarding "Let's chat" handoff for a proactive greeting).
+   */
+  getPendingInitialMessageHidden?: () => boolean;
+}
+
+export function useAutoSendEffects({
+  assistantId,
+  activeConversationId,
+  searchParams,
+  setSearchParams,
+  navigationState,
+  sendMessage,
+  prefillComposer,
+  reachabilityPhase,
+  reachabilityProbe,
+  getPendingInitialMessage,
+  getPendingInitialMessageHidden,
+}: UseAutoSendEffectsOptions): void {
+  const getPendingInitialMessageRef = useRef(getPendingInitialMessage);
+  useLayoutEffect(() => {
+    getPendingInitialMessageRef.current = getPendingInitialMessage;
+  });
+  const getPendingInitialMessageHiddenRef = useRef(
+    getPendingInitialMessageHidden,
+  );
+  useLayoutEffect(() => {
+    getPendingInitialMessageHiddenRef.current = getPendingInitialMessageHidden;
+  });
+  // 1. URL ?prompt=: auto-send for in-app navigations, pre-fill otherwise.
+  // Keyed by conversationId + prompt so the same text sent to different
+  // draft conversations (e.g. repeated quick-input submissions) isn't deduped.
+  const promptConsumedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prompt = searchParams.get("prompt");
+    if (!prompt || !activeConversationId) {
+      return;
+    }
+    // A relay token makes each dispatch unique so repeated identical prompts
+    // re-fire; one-shot callers (deep links, doc feedback) omit it and dedupe
+    // on the prompt text.
+    const relayToken = searchParams.get("relay");
+    const key = `${activeConversationId}:${relayToken ?? prompt}`;
+    if (promptConsumedRef.current === key) {
+      return;
+    }
+    promptConsumedRef.current = key;
+    // Only a navigation the app issued may send on the user's behalf. A URL
+    // opened from outside the SPA carries no history state, so its prompt is
+    // staged in the composer and the user presses send (or doesn't).
+    const autoSend = hasAutoSendPromptState(navigationState);
+    if (autoSend) {
+      void sendMessage(prompt);
+    } else {
+      prefillComposer(prompt);
+    }
+    // One-shot callers (no relay token) dedupe only on this component ref,
+    // which resets on refresh/remount — so a deep link like the Day-2 check-in
+    // (`?prompt=…&vref=…`) would replay on reload. Strip the prompt once
+    // dispatched so the dispatch is durably once-only. In-app relay callers
+    // intentionally re-fire (each new token is a fresh dispatch), so their URL
+    // stays intact; a relay token on an external link earns nothing.
+    if (!relayToken || !autoSend) {
+      setSearchParams(
+        (prev) => {
+          prev.delete("prompt");
+          prev.delete("relay");
+          return prev;
+        },
+        {
+          replace: true,
+          ...(navigationState !== undefined ? { state: navigationState } : {}),
+        },
+      );
+    }
+  }, [
+    searchParams,
+    setSearchParams,
+    activeConversationId,
+    sendMessage,
+    prefillComposer,
+    navigationState,
+  ]);
+
+  // 2. Pre-chat reachability probe — eagerly start the probe cycle.
+  useEffect(() => {
+    if (!assistantId) {
+      return;
+    }
+    if (!getPendingInitialMessageRef.current()) {
+      return;
+    }
+    if (reachabilityPhase === "idle") {
+      reachabilityProbe({ mode: "background" });
+    }
+  }, [assistantId, reachabilityPhase, reachabilityProbe]);
+
+  // 3. Onboarding initial message — fires once when daemon is reachable.
+  const initialMessageConsumedRef = useRef(false);
+  useEffect(() => {
+    if (
+      initialMessageConsumedRef.current ||
+      !assistantId ||
+      !activeConversationId
+    ) {
+      return;
+    }
+    if (reachabilityPhase !== "ready") {
+      return;
+    }
+    const message = getPendingInitialMessageRef.current();
+    if (!message) {
+      return;
+    }
+    initialMessageConsumedRef.current = true;
+    const hidden = getPendingInitialMessageHiddenRef.current?.() ?? false;
+    // Every message that reaches here is auto-sent by an onboarding flow, not
+    // typed: the research prompt, the "Let's chat" kickoff greeting, or the
+    // legacy pre-chat bootstrap. Marked unconditionally rather than keyed off
+    // `hidden`, because the two are independent: the research prompt is
+    // visible AND scripted.
+    //
+    // Note this is the pre-chat staged message only. The `?prompt=` auto-send
+    // above is deliberately NOT marked: those are user-initiated (quick input,
+    // a check-in CTA the user clicked), and the analytics classifier does not
+    // treat them as scripted either.
+    void sendMessage(message, [], { hidden, scripted: true });
+  }, [activeConversationId, assistantId, reachabilityPhase, sendMessage]);
+}

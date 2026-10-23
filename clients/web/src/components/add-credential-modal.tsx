@@ -1,0 +1,235 @@
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
+
+import { useActiveAssistantId } from "@/assistant/use-active-assistant-id";
+import { useCredentialsSetPostMutation } from "@/generated/daemon/@tanstack/react-query.gen";
+import { useTranslation } from "@/i18n";
+import { Button } from "@vellumai/design-library/components/button";
+import { Input } from "@vellumai/design-library/components/input";
+import { Modal } from "@vellumai/design-library/components/modal";
+import { toast } from "@vellumai/design-library/components/toast";
+
+/**
+ * Cache key of the credentials list shown on Settings → Credentials. The
+ * modal invalidates it after every save; other credential mutations (e.g.
+ * delete) invalidate it from their own call sites.
+ */
+export function credentialsListQueryKey(assistantId: string) {
+  return ["credentials-list", assistantId] as const;
+}
+
+/** Identity of a credential that was just saved to the vault. */
+export interface SavedCredentialMeta {
+  service: string;
+  field: string;
+  label?: string;
+}
+
+/** Optional values the form is seeded with each time the modal opens. */
+export interface AddCredentialInitialValues {
+  service?: string;
+  field?: string;
+  label?: string;
+  value?: string;
+}
+
+export interface AddCredentialModalProps {
+  open: boolean;
+  /** Called when the modal closes — dismissal, Cancel, or a completed save. */
+  onClose: () => void;
+  /** Called after the credential is persisted to the vault. */
+  onSaved?: (meta: SavedCredentialMeta) => void;
+  initialValues?: AddCredentialInitialValues;
+  /** Success toast copy; defaults to a generic "Credential saved." */
+  successToastMessage?: string;
+}
+
+/**
+ * Modal form that stores a credential (service / field / secret value /
+ * optional label) in the assistant's credential vault via the credentials-set
+ * endpoint. Owns validation, the save mutation, success/error toasts, and the
+ * credentials-list cache invalidation so every call site shares identical
+ * behavior; callers hook flow-specific follow-ups (e.g. rewriting a chat
+ * draft) into `onSaved`.
+ */
+export function AddCredentialModal({
+  open,
+  onClose,
+  onSaved,
+  initialValues,
+  successToastMessage,
+}: AddCredentialModalProps) {
+  const { t } = useTranslation();
+  const assistantId = useActiveAssistantId();
+  const queryClient = useQueryClient();
+
+  const [service, setService] = useState(initialValues?.service ?? "");
+  const [field, setField] = useState(initialValues?.field ?? "");
+  const [value, setValue] = useState(initialValues?.value ?? "");
+  const [label, setLabel] = useState(initialValues?.label ?? "");
+
+  // Re-seed the form each time the modal opens so a prior open's draft never
+  // leaks into a new one and fresh initialValues take effect. The ref keeps
+  // the effect keyed on `open` alone — callers may pass a new initialValues
+  // object every render, and re-running on that would clobber user typing.
+  const initialValuesRef = useRef(initialValues);
+  useLayoutEffect(() => {
+    initialValuesRef.current = initialValues;
+  }, [initialValues]);
+  useEffect(() => {
+    if (open) {
+      const seed = initialValuesRef.current;
+      setService(seed?.service ?? "");
+      setField(seed?.field ?? "");
+      setValue(seed?.value ?? "");
+      setLabel(seed?.label ?? "");
+    }
+  }, [open]);
+
+  const setMutation = useCredentialsSetPostMutation({
+    onError: (err) => {
+      toast.error(err.message || t("addCredentialModal.saveFailed"));
+    },
+  });
+  const saving = setMutation.isPending;
+
+  // Clear the fields on close so the secret doesn't linger in state while
+  // the modal sits closed-but-mounted in the tree.
+  const resetAndClose = () => {
+    setService("");
+    setField("");
+    setValue("");
+    setLabel("");
+    onClose();
+  };
+
+  const handleSave = (e: FormEvent) => {
+    e.preventDefault();
+    const trimmedService = service.trim();
+    const trimmedField = field.trim();
+    // The secret value is stored verbatim — some secrets legitimately carry
+    // leading/trailing whitespace, and the CLI set path stores them unchanged.
+    // Trimming is used only to reject effectively-empty input.
+    if (!trimmedService || !trimmedField || !value.trim()) {
+      return;
+    }
+    const trimmedLabel = label.trim() || undefined;
+    setMutation.mutate(
+      {
+        path: { assistant_id: assistantId },
+        body: {
+          service: trimmedService,
+          field: trimmedField,
+          value,
+          label: trimmedLabel,
+        },
+      },
+      {
+        onSuccess: () => {
+          void queryClient.invalidateQueries({
+            queryKey: credentialsListQueryKey(assistantId),
+          });
+          toast.success(
+            successToastMessage ?? t("addCredentialModal.credentialSaved"),
+          );
+          onSaved?.({
+            service: trimmedService,
+            field: trimmedField,
+            label: trimmedLabel,
+          });
+          resetAndClose();
+        },
+      },
+    );
+  };
+
+  return (
+    <Modal.Root
+      open={open}
+      onOpenChange={(nextOpen) => {
+        // Ignore dismissal (Escape / backdrop) while a save is in flight so a
+        // slow or failing mutation can't discard the entered secret, which
+        // the user may not be able to recover. The form clears only once the
+        // mutation settles (resetAndClose runs on success and on explicit
+        // Cancel, which is itself disabled while saving).
+        if (!nextOpen && !saving) {
+          resetAndClose();
+        }
+      }}
+    >
+      <Modal.Content size="sm">
+        <form onSubmit={handleSave}>
+          <Modal.Header>
+            <Modal.Title>{t("addCredentialModal.title")}</Modal.Title>
+            <Modal.Description>
+              {t("addCredentialModal.description")}
+            </Modal.Description>
+          </Modal.Header>
+          <Modal.Body className="flex flex-col gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <Input
+                label={t("addCredentialModal.serviceLabel")}
+                type="text"
+                value={service}
+                onChange={(e) => setService(e.target.value)}
+                placeholder={t("addCredentialModal.servicePlaceholder")}
+                autoFocus
+                fullWidth
+              />
+              <Input
+                label={t("addCredentialModal.fieldLabel")}
+                type="text"
+                value={field}
+                onChange={(e) => setField(e.target.value)}
+                placeholder={t("addCredentialModal.fieldPlaceholder")}
+                fullWidth
+              />
+            </div>
+            <Input
+              label={t("addCredentialModal.valueLabel")}
+              type="password"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder={t("addCredentialModal.valuePlaceholder")}
+              fullWidth
+            />
+            <Input
+              label={t("addCredentialModal.labelOptional")}
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={t("addCredentialModal.labelPlaceholder")}
+              fullWidth
+            />
+          </Modal.Body>
+          <Modal.Footer>
+            <Button
+              type="button"
+              variant="outlined"
+              onClick={resetAndClose}
+              disabled={saving}
+            >
+              {t("addCredentialModal.cancel")}
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={
+                saving || !service.trim() || !field.trim() || !value.trim()
+              }
+              loading={saving}
+            >
+              {t("addCredentialModal.save")}
+            </Button>
+          </Modal.Footer>
+        </form>
+      </Modal.Content>
+    </Modal.Root>
+  );
+}

@@ -1,0 +1,228 @@
+import { cva, type VariantProps } from "class-variance-authority";
+import { type ComponentProps, type ReactNode, useId } from "react";
+
+import { Field } from "./field";
+import { cn } from "../utils/cn";
+
+/**
+ * Shared text-input primitive backing both `Input` (single-line) and
+ * `Textarea` (multi-line). Visual parity with the macOS design system input:
+ * an `--surface-active` fill, a `--border-base` hairline that shifts to
+ * `--border-element` on focus (or `--system-negative-strong` on error), and
+ * `--content-default` text with a `--content-tertiary` placeholder.
+ *
+ * All colors resolve via CSS variable tokens, so the field inherits the
+ * app's light/dark theming automatically.
+ */
+const fieldVariants = cva(
+  [
+    "block w-full rounded-md border bg-[var(--field-bg)]",
+    "text-body-medium-lighter text-[var(--content-default)]",
+    "placeholder:text-[var(--content-tertiary)]",
+    "transition-[border-color,background-color] duration-150 ease-out",
+    "outline-none",
+    "disabled:cursor-not-allowed disabled:opacity-60",
+  ].join(" "),
+  {
+    variants: {
+      invalid: {
+        true: [
+          "border-[var(--system-negative-strong)]",
+          "focus-visible:border-[var(--system-negative-strong)]",
+        ].join(" "),
+        false: [
+          "border-[var(--field-border)]",
+          "focus-visible:border-[var(--border-active)]",
+        ].join(" "),
+      },
+      density: {
+        input: "h-8 px-2 py-1.5",
+        textarea: "min-h-[72px] px-3 py-2 resize-y",
+      },
+      hasLeftIcon: { true: "", false: "" },
+      hasRightIcon: { true: "", false: "" },
+    },
+    compoundVariants: [
+      { density: "input", hasLeftIcon: true, class: "pl-8" },
+      { density: "input", hasRightIcon: true, class: "pr-8" },
+    ],
+    defaultVariants: {
+      invalid: false,
+      density: "input",
+      hasLeftIcon: false,
+      hasRightIcon: false,
+    },
+  },
+);
+
+type FieldVariantProps = VariantProps<typeof fieldVariants>;
+
+// ---------------------------------------------------------------------------
+// Input (single-line)
+// ---------------------------------------------------------------------------
+
+export interface InputProps extends Omit<ComponentProps<"input">, "size"> {
+  label?: ReactNode;
+  helperText?: ReactNode;
+  errorText?: ReactNode;
+  leftIcon?: ReactNode;
+  rightIcon?: ReactNode;
+  fullWidth?: boolean;
+  wrapperClassName?: string;
+}
+
+function Input({
+  label,
+  helperText,
+  errorText,
+  leftIcon,
+  rightIcon,
+  fullWidth = false,
+  wrapperClassName,
+  className,
+  id,
+  disabled,
+  ref,
+  "aria-invalid": ariaInvalid,
+  "aria-describedby": ariaDescribedBy,
+  ...rest
+}: InputProps) {
+  const reactId = useId();
+  const inputId = id ?? `input-${reactId}`;
+  const isInvalid = errorText != null || ariaInvalid === true;
+  const describedBy = errorText
+    ? `${inputId}-error`
+    : helperText
+      ? `${inputId}-helper`
+      : undefined;
+
+  return (
+    <Field
+      id={inputId}
+      label={label}
+      helperText={helperText}
+      errorText={errorText}
+      fullWidth={fullWidth}
+      disabled={disabled === true}
+      className={wrapperClassName}
+    >
+      <div className="relative flex items-center">
+        {leftIcon ? (
+          <span
+            aria-hidden
+            data-testid="input-left-icon"
+            className="pointer-events-none absolute left-2 flex items-center text-[var(--content-tertiary)]"
+          >
+            {leftIcon}
+          </span>
+        ) : null}
+        <input
+          {...rest}
+          ref={ref}
+          id={inputId}
+          disabled={disabled}
+          aria-invalid={isInvalid || undefined}
+          aria-describedby={ariaDescribedBy ?? describedBy}
+          data-slot="input"
+          className={cn(
+            fieldVariants({
+              invalid: isInvalid,
+              density: "input",
+              hasLeftIcon: leftIcon != null,
+              hasRightIcon: rightIcon != null,
+            }),
+            // A number input's spin buttons are UA chrome: the box behind the
+            // chevrons is painted by the browser widget and no pseudo-element
+            // lets us clear it (Firefox exposes none at all). Suppressing the
+            // widget is the only way to be rid of it, so number fields render
+            // as plain text fields. Scoped by `[type=number]` so no other
+            // input's native affordances are touched.
+            "[&[type=number]]:[appearance:textfield]",
+            "[&[type=number]::-webkit-outer-spin-button]:[appearance:none]",
+            "[&[type=number]::-webkit-inner-spin-button]:[appearance:none]",
+            "[&[type=number]::-webkit-inner-spin-button]:m-0",
+            className,
+          )}
+        />
+        {rightIcon ? (
+          <span
+            aria-hidden
+            data-testid="input-right-icon"
+            className="pointer-events-none absolute right-2 flex items-center text-[var(--content-tertiary)]"
+          >
+            {rightIcon}
+          </span>
+        ) : null}
+      </div>
+    </Field>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Textarea (multi-line)
+// ---------------------------------------------------------------------------
+
+export interface TextareaProps extends ComponentProps<"textarea"> {
+  label?: ReactNode;
+  helperText?: ReactNode;
+  errorText?: ReactNode;
+  fullWidth?: boolean;
+  wrapperClassName?: string;
+}
+
+function Textarea({
+  label,
+  helperText,
+  errorText,
+  fullWidth = false,
+  wrapperClassName,
+  className,
+  id,
+  disabled,
+  ref,
+  "aria-invalid": ariaInvalid,
+  "aria-describedby": ariaDescribedBy,
+  ...rest
+}: TextareaProps) {
+  const reactId = useId();
+  const textareaId = id ?? `textarea-${reactId}`;
+  const isInvalid = errorText != null || ariaInvalid === true;
+  const describedBy = errorText
+    ? `${textareaId}-error`
+    : helperText
+      ? `${textareaId}-helper`
+      : undefined;
+
+  return (
+    <Field
+      id={textareaId}
+      label={label}
+      helperText={helperText}
+      errorText={errorText}
+      fullWidth={fullWidth}
+      disabled={disabled === true}
+      className={wrapperClassName}
+    >
+      <textarea
+        {...rest}
+        ref={ref}
+        id={textareaId}
+        disabled={disabled}
+        aria-invalid={isInvalid || undefined}
+        aria-describedby={ariaDescribedBy ?? describedBy}
+        data-slot="textarea"
+        className={cn(
+          fieldVariants({
+            invalid: isInvalid,
+            density: "textarea",
+            hasLeftIcon: false,
+            hasRightIcon: false,
+          }),
+          className,
+        )}
+      />
+    </Field>
+  );
+}
+
+export { Input, Textarea, fieldVariants, type FieldVariantProps };

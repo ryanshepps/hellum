@@ -1,0 +1,276 @@
+/**
+ * Regression tests for the "Connect Claude Code" prompt lifecycle.
+ *
+ * The prompt for a missing-token `acp_spawn` failure lives in the interaction
+ * store. It is raised from the LIVE `tool_result` stream handler and — so it
+ * survives a page reload / SSE reconnect — re-derived on a `/messages` reseed
+ * from the failed tool call's persisted `errorCode` marker (via
+ * `extractWirePendingAcpConnect`, exercised in `utils/chat.test.ts`). Two
+ * invariants are pinned here: (1) the rolling-snapshot reducer
+ * (`appendEventToMessages`) must NEVER touch the interaction store — folding
+ * the event tail on reseed can't clear the live prompt mid-turn or raise a
+ * duplicate; rehydration is the reseed hook's job, not the reducer's. (2) A
+ * dismissed failure must not nag from history: `dismissAcpConnect` records the
+ * tool-use id and `showAcpConnect` no-ops any later restore of it, which is
+ * what makes reseed-rehydration of the permanent `errorCode` marker safe. A
+ * user Dismiss also persists that id so a reload or conversation switch cannot
+ * raise the same spawn again.
+ */
+
+import { afterEach, describe, expect, test } from "bun:test";
+
+import { useInteractionStore } from "@/domains/chat/interaction-store";
+import {
+  addDismissedAcpConnectId,
+  loadDismissedAcpConnectIds,
+} from "@/domains/chat/utils/dismissed-acp-connect-storage";
+import { handleToolResult } from "@/domains/chat/utils/stream-handlers/tool-call-handlers";
+import { appendEventToMessages } from "@/domains/chat/transcript/rolling-snapshot";
+import { makeCtx } from "@/domains/chat/utils/stream-handlers/test-helpers";
+import { clearUserScopedOverrides } from "@/utils/typed-storage";
+import type { DisplayMessage } from "@/domains/chat/types/types";
+import type { AssistantEvent } from "@/types/event-types";
+import type { ToolResultEvent } from "@vellumai/assistant-api";
+
+const MISSING_TOKEN = "acp_claude_oauth_missing";
+
+/** A missing-token `acp_spawn` failure event, as the daemon emits it live. */
+function missingTokenToolResult(
+  overrides: Partial<ToolResultEvent> = {},
+): ToolResultEvent {
+  return {
+    type: "tool_result",
+    toolUseId: "tc-1",
+    result: "claude-agent-acp requires CLAUDE_CODE_OAUTH_TOKEN.",
+    isError: true,
+    errorCode: MISSING_TOKEN,
+    ...overrides,
+  } as ToolResultEvent;
+}
+
+afterEach(() => {
+  // resetAll intentionally preserves the Connect prompt (it must survive
+  // conversation switches), so test isolation clears it explicitly.
+  useInteractionStore.getState().resetAll();
+  useInteractionStore.setState({
+    pendingAcpConnect: null,
+    dismissedAcpConnectToolUseIds: new Set<string>(),
+  });
+  localStorage.clear();
+  clearUserScopedOverrides();
+});
+
+describe("acp connect prompt — store lifecycle", () => {
+  test("showAcpConnect sets, dismissAcpConnect clears", () => {
+    useInteractionStore.getState().showAcpConnect({ toolUseId: "tc-9" });
+    expect(useInteractionStore.getState().pendingAcpConnect).toEqual({
+      toolUseId: "tc-9",
+    });
+
+    useInteractionStore.getState().dismissAcpConnect();
+    expect(useInteractionStore.getState().pendingAcpConnect).toBeNull();
+    expect(loadDismissedAcpConnectIds().size).toBe(0);
+  });
+
+  test("a dismissed failure is not resurrected by a later restore (no history nag)", () => {
+    // Card shown, then retired (auto-continue after connect, or the
+    // already-connected self-heal).
+    useInteractionStore.getState().showAcpConnect({ toolUseId: "tc-1" });
+    useInteractionStore.getState().dismissAcpConnect();
+    expect(useInteractionStore.getState().pendingAcpConnect).toBeNull();
+
+    // A reseed re-derives the SAME failed spawn from its persisted marker and
+    // calls showAcpConnect again — it must no-op, or the card would nag on
+    // every turn until Claude is connected.
+    useInteractionStore.getState().showAcpConnect({ toolUseId: "tc-1" });
+    expect(useInteractionStore.getState().pendingAcpConnect).toBeNull();
+  });
+
+  test("a genuinely new failure still shows after a different one was dismissed", () => {
+    useInteractionStore.getState().showAcpConnect({ toolUseId: "tc-1" });
+    useInteractionStore.getState().dismissAcpConnect();
+
+    // A new spawn failure carries a fresh tool-use id → never suppressed.
+    useInteractionStore.getState().showAcpConnect({ toolUseId: "tc-2" });
+    expect(useInteractionStore.getState().pendingAcpConnect).toEqual({
+      toolUseId: "tc-2",
+    });
+  });
+
+  test("an auth_required prompt survives resetAll (switch away and back keeps the card)", () => {
+    // The parent-turn guidance pointing at the card is persisted transcript
+    // text, but the post-spawn prompt itself has no history marker to rebuild
+    // from. Ordinary conversation switching calls resetAll; losing the prompt
+    // here would leave the guidance pointing at a card that no longer exists.
+    // Display stays conversation-scoped by the tool-use anchor, so surviving
+    // navigation leaks nothing into other conversations.
+    useInteractionStore.getState().showAcpConnect({
+      toolUseId: "tc-auth-1",
+      reason: "auth_required",
+    });
+    useInteractionStore.getState().resetAll();
+
+    expect(useInteractionStore.getState().pendingAcpConnect).toEqual({
+      toolUseId: "tc-auth-1",
+      reason: "auth_required",
+    });
+  });
+
+  test("a dismissed prompt stays dismissed across resetAll", () => {
+    useInteractionStore.getState().showAcpConnect({
+      toolUseId: "tc-auth-2",
+      reason: "auth_required",
+    });
+    useInteractionStore.getState().dismissAcpConnect();
+    useInteractionStore.getState().resetAll();
+
+    expect(useInteractionStore.getState().pendingAcpConnect).toBeNull();
+  });
+
+  test("resetAll clears the dismissed set (a returned-to conversation can show again)", () => {
+    useInteractionStore.getState().showAcpConnect({ toolUseId: "tc-1" });
+    useInteractionStore.getState().dismissAcpConnect();
+    useInteractionStore.getState().resetAll();
+
+    // After a conversation switch the session-only suppression is cleared, so
+    // a cold reseed of the same conversation restores the card unless the
+    // user persisted the dismissal.
+    useInteractionStore.getState().showAcpConnect({ toolUseId: "tc-1" });
+    expect(useInteractionStore.getState().pendingAcpConnect).toEqual({
+      toolUseId: "tc-1",
+    });
+  });
+
+  test("a persisted user dismiss survives resetAll and a cold store (reload)", () => {
+    useInteractionStore.getState().showAcpConnect({
+      toolUseId: "tc-persist-reload",
+    });
+    useInteractionStore.getState().dismissAcpConnect({ persist: true });
+    expect(loadDismissedAcpConnectIds().has("tc-persist-reload")).toBe(true);
+
+    useInteractionStore.getState().resetAll();
+    useInteractionStore.getState().showAcpConnect({
+      toolUseId: "tc-persist-reload",
+    });
+    expect(useInteractionStore.getState().pendingAcpConnect).toBeNull();
+
+    // Empty store is a full reload: no in-memory dismissed set, only storage.
+    useInteractionStore.setState({
+      pendingAcpConnect: null,
+      dismissedAcpConnectToolUseIds: new Set<string>(),
+    });
+    useInteractionStore.getState().showAcpConnect({
+      toolUseId: "tc-persist-reload",
+    });
+    expect(useInteractionStore.getState().pendingAcpConnect).toBeNull();
+  });
+
+  test("a persisted dismiss does not suppress a different failed spawn", () => {
+    useInteractionStore.getState().showAcpConnect({
+      toolUseId: "tc-persist-old",
+    });
+    useInteractionStore.getState().dismissAcpConnect({ persist: true });
+
+    useInteractionStore.setState({
+      pendingAcpConnect: null,
+      dismissedAcpConnectToolUseIds: new Set<string>(),
+    });
+    useInteractionStore.getState().showAcpConnect({
+      toolUseId: "tc-persist-new",
+    });
+    expect(useInteractionStore.getState().pendingAcpConnect).toEqual({
+      toolUseId: "tc-persist-new",
+    });
+  });
+
+  test("a live failure supersedes a persisted dismiss of the same spawn", () => {
+    addDismissedAcpConnectId("tc-persist-resumed");
+    useInteractionStore.setState({
+      pendingAcpConnect: null,
+      dismissedAcpConnectToolUseIds: new Set<string>(),
+    });
+
+    useInteractionStore.getState().showAcpConnect(
+      {
+        toolUseId: "tc-persist-resumed",
+        reason: "auth_required",
+        conversationId: "conv-1",
+      },
+      { supersedesDismissal: true },
+    );
+
+    expect(useInteractionStore.getState().pendingAcpConnect?.toolUseId).toBe(
+      "tc-persist-resumed",
+    );
+    expect(loadDismissedAcpConnectIds().has("tc-persist-resumed")).toBe(false);
+  });
+});
+
+describe("acp connect prompt — raised live, never by reseed", () => {
+  test("the live tool_result handler raises the prompt anchored to the tool call", () => {
+    handleToolResult(missingTokenToolResult(), makeCtx());
+    expect(useInteractionStore.getState().pendingAcpConnect).toEqual({
+      toolUseId: "tc-1",
+    });
+  });
+
+  test("a pre-spawn rejected-credential failure raises the prompt marked auth_required", () => {
+    // A stored-but-rejected token cannot self-heal on a token-presence check,
+    // so the reason must survive into the store.
+    handleToolResult(
+      missingTokenToolResult({ errorCode: "acp_claude_auth_required" }),
+      makeCtx(),
+    );
+    expect(useInteractionStore.getState().pendingAcpConnect).toEqual({
+      toolUseId: "tc-1",
+      reason: "auth_required",
+    });
+  });
+
+  test("a non-missing-token failure does not raise the prompt", () => {
+    handleToolResult(
+      missingTokenToolResult({ errorCode: "some_other_error" }),
+      makeCtx(),
+    );
+    expect(useInteractionStore.getState().pendingAcpConnect).toBeNull();
+  });
+
+  test("the reseed reducer never touches the store, so a live prompt survives reseed", () => {
+    // Live failure raises the prompt.
+    handleToolResult(missingTokenToolResult(), makeCtx());
+    expect(useInteractionStore.getState().pendingAcpConnect).not.toBeNull();
+
+    // A `/messages` reseed replays the event tail through the reducer. Folding
+    // the SAME missing-token tool_result through `appendEventToMessages` (the
+    // reducer path) must NOT touch the interaction store — otherwise it would
+    // clear the live prompt mid-turn or raise a duplicate. Rehydration on a
+    // cold reload is the reseed hook's job (`extractWirePendingAcpConnect`),
+    // not the reducer's.
+    const messages: DisplayMessage[] = [];
+    appendEventToMessages(
+      messages,
+      missingTokenToolResult() as unknown as AssistantEvent,
+      1,
+    );
+
+    // Prompt still exactly as the live handler left it — the reducer didn't
+    // clear it (survives mid-turn) and didn't re-raise it (no duplicate).
+    expect(useInteractionStore.getState().pendingAcpConnect).toEqual({
+      toolUseId: "tc-1",
+    });
+  });
+
+  test("reducer replay alone (fresh store) leaves the prompt unset — rehydration is the reseed hook's job", () => {
+    // The reducer path never sets the prompt. On a real reload the reseed hook
+    // (`extractWirePendingAcpConnect`, covered in utils/chat.test.ts) restores
+    // it from the persisted marker; the reducer alone must stay a no-op so the
+    // two paths don't double-raise.
+    expect(useInteractionStore.getState().pendingAcpConnect).toBeNull();
+    appendEventToMessages(
+      [],
+      missingTokenToolResult() as unknown as AssistantEvent,
+      1,
+    );
+    expect(useInteractionStore.getState().pendingAcpConnect).toBeNull();
+  });
+});

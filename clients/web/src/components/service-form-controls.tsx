@@ -1,0 +1,82 @@
+/**
+ * Form controls shared by every provider-configuration form: the Save and
+ * Reset actions, and the "where do I get a key" guide that sits above them.
+ *
+ * Domain-agnostic on purpose — the settings AI page and the live-voice
+ * first-run card both render provider forms built from these.
+ */
+
+import { ExternalLink, Info } from "lucide-react";
+
+import { Button } from "@vellumai/design-library/components/button";
+
+import { ExternalAnchor } from "@/components/external-anchor";
+import { useTranslation } from "@/i18n";
+import type { ProviderCredentialsGuide } from "@/lib/provider-catalogs";
+
+/**
+ * A provider form's save state, published to a parent that renders the Save
+ * action itself. Lets one Save commit several forms — the live-voice first-run
+ * card drives its speech-to-text and text-to-speech forms from a single button.
+ *
+ * `save` resolves `true` when the write succeeded, so the parent can decide
+ * what to do next (navigate away only on success, keeping a rejected key on
+ * screen). Forms report their own failures.
+ */
+export interface ProviderFormSaveHandle {
+  hasChanges: boolean;
+  saving: boolean;
+  save: () => Promise<boolean>;
+}
+
+interface SaveButtonProps {
+  onClick: () => void;
+  disabled?: boolean;
+}
+
+interface ResetButtonProps {
+  onClick: () => void;
+  filled?: boolean;
+}
+
+interface CredentialsGuideProps {
+  guide: ProviderCredentialsGuide;
+}
+
+export function SaveButton({ onClick, disabled }: SaveButtonProps) {
+  const { t } = useTranslation();
+  return (
+    <Button onClick={onClick} disabled={disabled}>
+      {t("serviceFormControls.save")}
+    </Button>
+  );
+}
+
+export function ResetButton({ onClick, filled = false }: ResetButtonProps) {
+  const { t } = useTranslation();
+  return (
+    <Button variant={filled ? "danger" : "dangerGhost"} onClick={onClick}>
+      {t("serviceFormControls.reset")}
+    </Button>
+  );
+}
+
+export function CredentialsGuide({ guide }: CredentialsGuideProps) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-3 text-body-small-default text-[var(--content-tertiary)]">
+      <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--system-positive-strong)]" />
+      <div className="flex flex-col gap-1">
+        <span>{guide.description}</span>
+        <ExternalAnchor
+          href={guide.url}
+          tone="default"
+          className="inline-flex items-center gap-1"
+          glyph={false}
+        >
+          {guide.linkLabel}
+          <ExternalLink className="h-3 w-3" />
+        </ExternalAnchor>
+      </div>
+    </div>
+  );
+}

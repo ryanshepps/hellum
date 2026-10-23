@@ -1,0 +1,125 @@
+/**
+ * Root provider composition for the web SPA.
+ *
+ * Wraps the app in auth-scoped → org-scoped QueryClients so that
+ * switching users or orgs yields a fresh React Query cache instead of
+ * leaking stale data.
+ *
+ * Third-party library providers (React Query, Radix Tooltip) belong here.
+ * Ordinary app state still lives in Zustand stores — see `src/stores/`.
+ *
+ * Narrow exception: cross-domain "lifted controller" providers like
+ * `ProfileQuickAddProvider` also mount here. It owns UI (the profile
+ * quick-add modal) that must be reachable from multiple domains without any
+ * one of them importing another (which `local/no-cross-domain-imports`
+ * forbids), and it must sit inside the request-scoped `QueryClient` because
+ * it runs a `useQuery`. Lifting it to this top-level composition is the only
+ * place that satisfies both constraints — so it lives here rather than in a
+ * store. Do not treat this as license to move general app state out of
+ * Zustand.
+ *
+ * Reference: https://tanstack.com/query/latest/docs/framework/react/guides/important-defaults
+ */
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { TooltipProvider } from "@vellumai/design-library";
+import { Toaster } from "@vellumai/design-library/components/toast";
+import { useEffect, useState, type ReactNode } from "react";
+
+import { ProfileQuickAddProvider } from "@/components/profile-quick-add-provider";
+import { useNativeLaunchScreenReady } from "@/hooks/use-native-launch-screen-ready";
+import { installAssetQueryDiagnostics } from "@/lib/asset-query-diagnostics";
+import { installQueryPressureProbe } from "@/lib/commit-pressure";
+import {
+  useAuthStore,
+  useIsAuthenticated,
+  useIsSessionInitializing,
+} from "@/stores/auth-store";
+import { useRequestScopeKey } from "@/stores/request-scope";
+import { queryRetryDelay, shouldRetryQuery } from "@/utils/query-retry";
+
+function createQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        staleTime: 10_000,
+        // Never retry 429/4xx — retrying a rate-limited request turns a
+        // transient burst into a self-sustaining storm against the daemon's
+        // request limiter. Per-query `retry` options still override this.
+        retry: shouldRetryQuery,
+        retryDelay: queryRetryDelay,
+      },
+    },
+  });
+}
+
+function AuthScopedQueryClientProvider({ children }: { children: ReactNode }) {
+  const [queryClient] = useState(() => createQueryClient());
+  return (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+}
+
+function RequestScopedQueryClientProvider({
+  children,
+  scopeKey,
+}: {
+  children: ReactNode;
+  scopeKey: string;
+}) {
+  const [queryClient] = useState(() => createQueryClient());
+  const isSessionInitializing = useIsSessionInitializing();
+  // Query notifications re-render through `useSyncExternalStore`, so they are
+  // part of the same commit traffic as the chat route's timer-driven updates.
+  // Only this client is probed: it is the one the conversation route's queries
+  // live under, and the auth-scoped client above serves a handful of
+  // low-frequency reads.
+  useEffect(() => installQueryPressureProbe(queryClient), [queryClient]);
+  useEffect(() => {
+    if (isSessionInitializing) {
+      return;
+    }
+    return installAssetQueryDiagnostics(queryClient, scopeKey);
+  }, [isSessionInitializing, queryClient, scopeKey]);
+  return (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+}
+
+function ScopeKeyedQueryClientProvider({ children }: { children: ReactNode }) {
+  // The key recomputes whenever the identity behind the cache moves, so a
+  // response is never read as the answer for an identity that replaced it.
+  // Read through the shared scope hook, so a consumer that compares a result
+  // against the scope it was produced under cannot drift from this boundary.
+  const scopeKey = useRequestScopeKey();
+
+  return (
+    <RequestScopedQueryClientProvider key={scopeKey} scopeKey={scopeKey}>
+      <ProfileQuickAddProvider>{children}</ProfileQuickAddProvider>
+    </RequestScopedQueryClientProvider>
+  );
+}
+
+export function AppProviders({ children }: { children: ReactNode }) {
+  useNativeLaunchScreenReady();
+  const isAuthenticated = useIsAuthenticated();
+  const user = useAuthStore.use.user();
+  const authScopeKey = isAuthenticated
+    ? `user:${user?.id ?? "unknown"}`
+    : "anonymous";
+
+  return (
+    <TooltipProvider delayDuration={200} skipDelayDuration={300}>
+      <AuthScopedQueryClientProvider key={authScopeKey}>
+        <ScopeKeyedQueryClientProvider>
+          {children}
+        </ScopeKeyedQueryClientProvider>
+      </AuthScopedQueryClientProvider>
+      {/* Single app-wide toast outlet. Sonner only renders toasts when a
+          <Toaster /> is mounted in the tree; without this every `toast.*`
+          call (profile/provider create confirmations, "Assistant retired",
+          email/save success, etc.) silently no-ops. Kept outside the
+          auth/org scope-keyed providers so it survives user/org switches. */}
+      <Toaster />
+    </TooltipProvider>
+  );
+}

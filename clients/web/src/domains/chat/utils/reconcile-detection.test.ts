@@ -1,0 +1,178 @@
+import { describe, expect, test } from "bun:test";
+
+import {
+  serverHasAssistantProgress,
+  serverSnapshotHasNewContent,
+} from "@/domains/chat/utils/reconcile-detection";
+import type { DisplayMessage } from "@/domains/chat/types/types";
+import { textBody } from "@/domains/chat/utils/message-test-helpers";
+
+function userRow(id: string, text: string): DisplayMessage {
+  return { id, role: "user", ...textBody(text) } as DisplayMessage;
+}
+function assistantRow(id: string, text: string): DisplayMessage {
+  return { id, role: "assistant", ...textBody(text) } as DisplayMessage;
+}
+function withPhoto(message: DisplayMessage, id: string): DisplayMessage {
+  return {
+    ...message,
+    attachments: [
+      {
+        id,
+        filename: "photo.png",
+        mimeType: "image/png",
+        sizeBytes: 42,
+        previewUrl: null,
+      },
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// serverSnapshotHasNewContent — the structural "is there anything new?" half.
+// ---------------------------------------------------------------------------
+
+describe("serverSnapshotHasNewContent", () => {
+  test("true when the server has a row absent from the local view", () => {
+    expect(
+      serverSnapshotHasNewContent(
+        [userRow("u1", "hi"), assistantRow("a1", "hello")],
+        [userRow("u1", "hi")],
+      ),
+    ).toBe(true);
+  });
+
+  test("true when a matched row's text has grown on the server", () => {
+    expect(
+      serverSnapshotHasNewContent(
+        [assistantRow("a1", "partial answer")],
+        [assistantRow("a1", "par")],
+      ),
+    ).toBe(true);
+  });
+
+  test("true when a matched row gains a server attachment", () => {
+    expect(
+      serverSnapshotHasNewContent(
+        [withPhoto(userRow("u1", "here's a photo:"), "attachment-1")],
+        [userRow("u1", "here's a photo:")],
+      ),
+    ).toBe(true);
+  });
+
+  test("false when the local row already has the server attachment", () => {
+    expect(
+      serverSnapshotHasNewContent(
+        [withPhoto(userRow("u1", "here's a photo:"), "attachment-1")],
+        [withPhoto(userRow("u1", "here's a photo:"), "attachment-1")],
+      ),
+    ).toBe(false);
+  });
+
+  test("true when a matched row was deleted on its channel", () => {
+    // The stored text stays as it was, so only the marker distinguishes the
+    // fetched row from the cached one.
+    expect(
+      serverSnapshotHasNewContent(
+        [{ ...assistantRow("a1", "hello"), deletedAt: 1725100001000 }],
+        [assistantRow("a1", "hello")],
+      ),
+    ).toBe(true);
+  });
+
+  test("false when the server matches the local view", () => {
+    expect(
+      serverSnapshotHasNewContent(
+        [userRow("u1", "hi"), assistantRow("a1", "hello")],
+        [userRow("u1", "hi"), assistantRow("a1", "hello")],
+      ),
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// serverHasAssistantProgress — the assistant-output half of the rescue gate.
+// ---------------------------------------------------------------------------
+
+describe("serverHasAssistantProgress", () => {
+  test("true when the server has an assistant reply the local turn lacks", () => {
+    expect(
+      serverHasAssistantProgress(
+        [userRow("u1", "question")],
+        [userRow("u1", "question"), assistantRow("a1", "answer")],
+        true,
+      ),
+    ).toBe(true);
+  });
+
+  test("false when local already shows the server's assistant content", () => {
+    // The no-false-rescue guard: an idle conversation where server and local
+    // agree must not look like a missed terminal event.
+    expect(
+      serverHasAssistantProgress(
+        [userRow("u1", "question"), assistantRow("a1", "answer")],
+        [userRow("u1", "question"), assistantRow("a1", "answer")],
+        false,
+      ),
+    ).toBe(false);
+  });
+
+  test("true when the server's assistant text is longer than the local row", () => {
+    expect(
+      serverHasAssistantProgress(
+        [userRow("u1", "q"), assistantRow("a1", "par")],
+        [userRow("u1", "q"), assistantRow("a1", "partial answer")],
+        true,
+      ),
+    ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A settled tool-gated turn must read as settled.
+// ---------------------------------------------------------------------------
+
+describe("a tool-gated turn", () => {
+  /**
+   * Live, the reply arrives as one delta per model call carrying that call's
+   * `send_user_message` messages already joined; from the server, the row
+   * projects each call into its own text block and the raw prose into
+   * thinking. Both halves of the rescue gate compare the two through
+   * `messagePlainText`, so an unequal fold would make every settled tool-gated
+   * turn look like missed server progress and re-trigger the watchdog forever.
+   */
+  const localRow: DisplayMessage = {
+    id: "a1",
+    role: "assistant",
+    ...textBody("Found it. Sending now."),
+  } as DisplayMessage;
+
+  const serverRow: DisplayMessage = {
+    id: "a1",
+    role: "assistant",
+    contentBlocks: [
+      { type: "thinking", thinking: "private working notes" },
+      { type: "text", text: "Found it." },
+      { type: "text", text: "Sending now." },
+    ],
+  } as DisplayMessage;
+
+  test("the projected server row carries nothing the local view lacks", () => {
+    expect(
+      serverSnapshotHasNewContent(
+        [userRow("u1", "q"), serverRow],
+        [userRow("u1", "q"), localRow],
+      ),
+    ).toBe(false);
+  });
+
+  test("reports no assistant progress once the turn has settled", () => {
+    expect(
+      serverHasAssistantProgress(
+        [userRow("u1", "q"), localRow],
+        [userRow("u1", "q"), serverRow],
+        false,
+      ),
+    ).toBe(false);
+  });
+});

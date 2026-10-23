@@ -1,0 +1,63 @@
+import { Sparkles, X } from "lucide-react";
+
+import { useTranslation } from "@/i18n";
+import { Button } from "@vellumai/design-library";
+
+interface ConceptGraphIntroBannerProps {
+  onDismiss: () => void;
+}
+
+/**
+ * First-run explainer overlaid on the memory graph: says what the graph is and
+ * that it keeps growing. Dismissible; dismissal is persisted per-assistant by
+ * the caller so it never returns once closed. Rendered over both the empty
+ * "no concepts yet" state (where it matters most) and a populated graph.
+ *
+ * Tagged `data-graph-control` so a pointer-down on the card doesn't start a
+ * drag-orbit on the canvas behind it.
+ */
+export function ConceptGraphIntroBanner({
+  onDismiss,
+}: ConceptGraphIntroBannerProps) {
+  const { t } = useTranslation("intelligence");
+  return (
+    <div
+      data-graph-control
+      className="pointer-events-auto flex w-full max-w-[30rem] self-center items-start gap-3 rounded-xl px-4 py-3"
+      style={{
+        backgroundColor: "var(--surface-lift)",
+        border: "1px solid var(--border-base)",
+        boxShadow: "0 4px 12px rgba(0, 0, 0, 0.25)",
+      }}
+    >
+      <span
+        className="mt-0.5 shrink-0"
+        style={{ color: "var(--primary-base)" }}
+        aria-hidden
+      >
+        <Sparkles size={18} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p
+          className="text-body-medium-default"
+          style={{ color: "var(--content-default)" }}
+        >
+          {t("conceptGraphIntroBanner.title")}
+        </p>
+        <p
+          className="mt-0.5 text-body-small-lighter"
+          style={{ color: "var(--content-tertiary)" }}
+        >
+          {t("conceptGraphIntroBanner.description")}
+        </p>
+      </div>
+      <Button
+        variant="ghost"
+        iconOnly={<X aria-hidden />}
+        onClick={onDismiss}
+        aria-label={t("conceptGraphIntroBanner.dismissAriaLabel")}
+        tintColor="var(--content-tertiary)"
+      />
+    </div>
+  );
+}

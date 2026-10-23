@@ -1,0 +1,626 @@
+import type { GlobalThresholds } from "@/lib/threshold-api";
+/**
+ * App-level Zustand store for client-side conversation state.
+ *
+ * Lives at `src/stores/` (not inside `domains/conversations/`) because
+ * the state here is consumed by every chat-adjacent domain — chat,
+ * messaging, conversations, onboarding, page routes, sync. Per
+ * `docs/CONVENTIONS.md` ("Top-level shared directories"), state used by
+ * two or more domains belongs at the top level.
+ *
+ * Server-derived state (conversations, conversation groups) lives in
+ * TanStack Query — see `@/hooks/conversation-queries.ts`.
+ * This store owns only state that has no server counterpart:
+ *
+ * - `activeConversationId` — URL/navigation-local selection
+ * - `editingConversationId` — conversation bound to the app side-by-side
+ *   layout (`mainView === "app-editing"`)
+ * - `processingConversationIds` — in-flight assistant responses
+ * - `processingSnapshots` — `latestAssistantMessageAt` snapshot taken when
+ *   each conversation id was added to `processingConversationIds`; the
+ *   attention-tracking graduation logic compares the current value against
+ *   this snapshot to detect when the assistant has finished responding.
+ *   Entries are added by `addProcessingConversationId` and cleared by every
+ *   action that removes from `processingConversationIds`, so the two
+ *   collections stay in sync.
+ * - `attentionConversationIds` — conversations with pending interactions
+ * - `draftConversationIds`: ids minted client-side that have no server row
+ *   yet, so surfaces can tell "this conversation is empty because it is brand
+ *   new" apart from "this conversation is empty because history is still
+ *   loading" (see the field doc below)
+ * - `pendingDraftProfiles` — model profiles picked in the composer for
+ *   conversations whose row isn't loaded yet (drafts, or URL-opened
+ *   conversations mid-load), keyed by conversation id (see field doc below)
+ * - `pendingDraftPlugins` — plugins picked in the composer for the same
+ *   not-yet-loaded conversations, keyed by conversation id → selected plugin
+ *   ids (see field doc below)
+ * - `draftReplacements`: draft ids the server re-keyed on their first send,
+ *   mapped to the id it assigned, so a history entry naming the retired draft
+ *   can be redirected onto the row (see field doc below)
+ *
+ * @see https://zustand.docs.pmnd.rs/guides/flux-inspired-practice
+ * @see @/hooks/conversation-queries.ts for the server-state half
+ */
+
+import { create } from "zustand";
+
+import { createSelectors } from "@/utils/create-selectors";
+
+// ---------------------------------------------------------------------------
+// Set / Map helpers — return the same reference when the mutation is a
+// no-op so Zustand's shallow equality check can bail out of unnecessary
+// re-renders.
+// ---------------------------------------------------------------------------
+
+function addToSet<T>(prev: Set<T>, key: T): Set<T> {
+  if (prev.has(key)) {
+    return prev;
+  }
+  const next = new Set(prev);
+  next.add(key);
+  return next;
+}
+
+function removeFromSet<T>(prev: Set<T>, key: T): Set<T> {
+  if (!prev.has(key)) {
+    return prev;
+  }
+  const next = new Set(prev);
+  next.delete(key);
+  return next;
+}
+
+function addOrRemoveFromSet<T>(prev: Set<T> | undefined, key: T): Set<T> {
+  const next = new Set(prev);
+  if (next.has(key)) {
+    next.delete(key);
+  } else {
+    next.add(key);
+  }
+  return next;
+}
+
+function removeMultipleFromSet<T>(prev: Set<T>, keys: T[]): Set<T> {
+  const toRemove = keys.filter((k) => prev.has(k));
+  if (toRemove.length === 0) {
+    return prev;
+  }
+  const next = new Set(prev);
+  for (const k of toRemove) {
+    next.delete(k);
+  }
+  return next;
+}
+
+function deleteFromMap<K, V>(prev: Map<K, V>, key: K): Map<K, V> {
+  if (!prev.has(key)) {
+    return prev;
+  }
+  const next = new Map(prev);
+  next.delete(key);
+  return next;
+}
+
+// ---------------------------------------------------------------------------
+// Draft-replacement storage
+//
+// `sessionStorage`, not `localStorage`: a replacement is only ever looked up
+// for a history entry in the tab that recorded it, and another tab's entries
+// would redirect a key this tab never retired.
+// ---------------------------------------------------------------------------
+
+/** The one `sessionStorage` key, exported so tests need not redeclare it. */
+export const DRAFT_REPLACEMENTS_KEY = "vellum.draftReplacements";
+
+/** Cap on recorded replacements, oldest dropped first. */
+const MAX_DRAFT_REPLACEMENTS = 50;
+
+function boundDraftReplacements(
+  replacements: Map<string, string>,
+): Map<string, string> {
+  if (replacements.size <= MAX_DRAFT_REPLACEMENTS) {
+    return replacements;
+  }
+  return new Map([...replacements].slice(-MAX_DRAFT_REPLACEMENTS));
+}
+
+/**
+ * The replacements this tab has stored, as a map of draft id to server id.
+ *
+ * Empty when the key is absent or holds anything else, and when storage
+ * refuses the read, which a private window does: a redirect that cannot be
+ * looked up is the same as one that was never recorded.
+ */
+export function readStoredDraftReplacements(): Map<string, string> {
+  if (typeof window === "undefined") {
+    return new Map();
+  }
+  try {
+    const raw = sessionStorage.getItem(DRAFT_REPLACEMENTS_KEY);
+    if (raw === null) {
+      return new Map();
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
+      return new Map();
+    }
+    const entries = Object.entries(parsed as Record<string, unknown>).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    );
+    return boundDraftReplacements(new Map(entries));
+  } catch {
+    return new Map();
+  }
+}
+
+/** Store the map, dropping the key entirely when it is empty. */
+function writeStoredDraftReplacements(replacements: Map<string, string>): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    if (replacements.size === 0) {
+      sessionStorage.removeItem(DRAFT_REPLACEMENTS_KEY);
+      return;
+    }
+    sessionStorage.setItem(
+      DRAFT_REPLACEMENTS_KEY,
+      JSON.stringify(Object.fromEntries(replacements)),
+    );
+  } catch {
+    // Storage refuses the write; the map in memory still serves this load.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// State & Actions
+// ---------------------------------------------------------------------------
+
+export interface ConversationListState {
+  activeConversationId: string | null;
+  editingConversationId: string | null;
+  processingConversationIds: Set<string>;
+  processingSnapshots: Map<string, number | undefined>;
+  attentionConversationIds: Set<string>;
+  /**
+   * Conversation ids minted by `createDraftConversationId()` that have not been
+   * resolved against the server yet. A draft key is a client invention: nothing
+   * exists under it until the first message is sent, so there is no history to
+   * wait for and no transcript skeleton to show.
+   *
+   * Registered at the mint site and cleared once a send resolves the key (see
+   * `use-send-message`). Session-scoped by design: a reload starts with an
+   * empty set, so a key that survived in the URL is treated as a real
+   * conversation and loads its history normally.
+   */
+  draftConversationIds: Set<string>;
+  /**
+   * Model profiles picked in the composer for conversations that have no server
+   * row loaded yet, keyed by conversation id → profile name. Two situations
+   * land here, both because the composer's `conversationId` prop is undefined
+   * until a row materializes:
+   *
+   * - A brand-new draft chat: the first message forwards the stash as the
+   *   minted conversation's `inferenceProfile` (see `use-send-message`).
+   * - An existing conversation opened by URL/deep link while its row is still
+   *   loading: once the row resolves, `ComposerSettingsMenu` promotes the stash
+   *   to a real per-conversation override.
+   *
+   * Stashing here — instead of writing `llm.activeProfile` — keeps an in-chat
+   * model switch on a new chat from silently overwriting the global default
+   * profile (the value the Settings "default profile" control owns). Keyed by
+   * id (a Map, not a single slot) so juggling several unsent drafts preserves
+   * each one's selection; entries are removed once applied and on reset.
+   */
+  pendingDraftProfiles: Map<string, string>;
+  pendingDraftAutonomy: Map<string, GlobalThresholds["interactive"]>;
+  initializedDraftComposerIds: Set<string>;
+  /**
+   * Plugins picked in the composer for conversations that have no server row
+   * loaded yet, keyed by conversation id → the set of selected plugin ids.
+   * Mirrors `pendingDraftProfiles`: the composer's `conversationId` prop is
+   * undefined until a row materializes, so an in-draft plugin selection is
+   * stashed here (keyed by id, a Map of Sets, so several unsent drafts each
+   * keep their own selection) and attached to the first message. Entries are
+   * removed once applied and on reset.
+   */
+  pendingDraftPlugins: Map<string, Set<string>>;
+  /**
+   * Draft ids a first send re-keyed, mapped to the id the server assigned.
+   *
+   * History entries pushed while the conversation was still a draft go on
+   * naming the draft id, and the daemon never had a row under it: selecting it
+   * lands an empty transcript on a dead key. `useConversationLoader` reads this
+   * to redirect such an entry onto its row instead.
+   *
+   * Lives as long as the tab's history does, which is why it is stored in
+   * `sessionStorage` rather than held only in memory: a reload keeps both the
+   * entry naming the draft and the marker that returns to it, so the mapping
+   * that resolves one onto the other has to outlive the load too. A new tab
+   * starts with none, and nothing here outlives the tab.
+   */
+  draftReplacements: Map<string, string>;
+}
+
+export interface ConversationListActions {
+  // --- Active / editing conversation id ---
+  setActiveConversationId: (conversationId: string | null) => void;
+  setEditingConversationId: (conversationId: string | null) => void;
+
+  // --- Processing conversation ids (and their snapshots, kept atomic) ---
+  addProcessingConversationId: (
+    conversationId: string,
+    snapshot?: number,
+  ) => void;
+  /**
+   * Idempotent "this conversation is mid-turn" mark for SSE start events.
+   * Like `addProcessingConversationId` but tolerant of repeat firings
+   * (start events fire many times per turn).
+   *
+   * Snapshot semantics: if a snapshot is supplied AND none is recorded
+   * yet, it's seeded. Subsequent calls don't overwrite — first writer
+   * wins, so the send-side `addProcessingConversationId` always takes
+   * precedence over later SSE marks. Without this seed, attention
+   * tracking compares `latestAssistantMessageAt` against `undefined`
+   * and graduates SSE-only (external-channel) turns prematurely.
+   *
+   * No-op when the id is already in the set and a snapshot is already
+   * recorded.
+   */
+  markConversationProcessing: (
+    conversationId: string,
+    snapshot?: number,
+  ) => void;
+  removeProcessingConversationId: (conversationId: string) => void;
+  removeMultipleProcessingConversationIds: (conversationIds: string[]) => void;
+  transferProcessingConversationId: (
+    oldConversationId: string,
+    newConversationId: string,
+  ) => void;
+
+  // --- Attention conversation ids ---
+  addAttentionConversationId: (conversationId: string) => void;
+  removeAttentionConversationId: (conversationId: string) => void;
+
+  // --- Draft conversation ids ---
+  registerDraftConversationId: (conversationId: string) => void;
+  /** Drop the draft mark once the key resolves server-side (no-op when absent). */
+  clearDraftConversationId: (conversationId: string) => void;
+
+  // --- Draft replacements ---
+  /**
+   * Record the id a send assigned a draft. A draft the server kept the id of
+   * records nothing: the entries naming it name a row that exists, and a
+   * self-mapping would redirect onto itself.
+   */
+  recordDraftReplacement: (draftId: string, serverId: string) => void;
+
+  // --- Pending draft profiles ---
+  setPendingDraftProfile: (conversationId: string, profile: string) => void;
+  /** Remove the stash for a single conversation id (no-op when absent). */
+  initializeDraftComposer: (id: string) => void;
+  setPendingDraftAutonomy: (
+    id: string,
+    threshold: GlobalThresholds["interactive"],
+  ) => void;
+  clearPendingDraftAutonomy: (id: string) => void;
+  clearPendingDraftProfile: (conversationId: string) => void;
+
+  // --- Pending draft plugins ---
+  setPendingDraftPlugins: (
+    conversationId: string,
+    plugins: Set<string>,
+  ) => void;
+  /** Add/remove a plugin id from the draft's set, creating it if absent. */
+  togglePendingDraftPlugin: (conversationId: string, name: string) => void;
+  /** Remove the stash for a single conversation id (no-op when absent). */
+  clearPendingDraftPlugins: (conversationId: string) => void;
+
+  // --- Compound ---
+  graduateProcessingConversationId: (
+    conversationId: string,
+    hasPendingInteraction: boolean,
+  ) => void;
+
+  // --- Reset ---
+  reset: () => void;
+}
+
+type ConversationListStore = ConversationListState & ConversationListActions;
+
+const INITIAL_STATE: ConversationListState = {
+  activeConversationId: null,
+  editingConversationId: null,
+  processingConversationIds: new Set(),
+  processingSnapshots: new Map(),
+  attentionConversationIds: new Set(),
+  draftConversationIds: new Set(),
+  pendingDraftProfiles: new Map(),
+  pendingDraftAutonomy: new Map(),
+  initializedDraftComposerIds: new Set(),
+  pendingDraftPlugins: new Map(),
+  draftReplacements: readStoredDraftReplacements(),
+};
+
+// ---------------------------------------------------------------------------
+// Store
+// ---------------------------------------------------------------------------
+
+export const useConversationStore = createSelectors(
+  create<ConversationListStore>((set, get) => ({
+    ...INITIAL_STATE,
+
+    // --- Active / editing conversation id ---
+
+    setActiveConversationId: (conversationId) => {
+      set({ activeConversationId: conversationId });
+    },
+
+    setEditingConversationId: (conversationId) => {
+      set({ editingConversationId: conversationId });
+    },
+
+    // --- Processing conversation ids ---
+
+    addProcessingConversationId: (conversationId, snapshot) => {
+      const { processingConversationIds, processingSnapshots } = get();
+      const nextSnapshots = new Map(processingSnapshots);
+      nextSnapshots.set(conversationId, snapshot);
+      set({
+        processingConversationIds: addToSet(
+          processingConversationIds,
+          conversationId,
+        ),
+        processingSnapshots: nextSnapshots,
+      });
+    },
+
+    markConversationProcessing: (conversationId, snapshot) => {
+      const { processingConversationIds, processingSnapshots } = get();
+      const alreadyInSet = processingConversationIds.has(conversationId);
+      const alreadyHasSnapshot = processingSnapshots.has(conversationId);
+      // Already fully tracked — no work.
+      if (alreadyInSet && alreadyHasSnapshot) {
+        return;
+      }
+      const nextSnapshots = alreadyHasSnapshot
+        ? processingSnapshots
+        : new Map(processingSnapshots).set(conversationId, snapshot);
+      set({
+        processingConversationIds: alreadyInSet
+          ? processingConversationIds
+          : addToSet(processingConversationIds, conversationId),
+        processingSnapshots: nextSnapshots,
+      });
+    },
+
+    removeProcessingConversationId: (conversationId) => {
+      set({
+        processingConversationIds: removeFromSet(
+          get().processingConversationIds,
+          conversationId,
+        ),
+        processingSnapshots: deleteFromMap(
+          get().processingSnapshots,
+          conversationId,
+        ),
+      });
+    },
+
+    removeMultipleProcessingConversationIds: (conversationIds) => {
+      const { processingConversationIds, processingSnapshots } = get();
+      let nextSnapshots = processingSnapshots;
+      for (const id of conversationIds) {
+        nextSnapshots = deleteFromMap(nextSnapshots, id);
+      }
+      set({
+        processingConversationIds: removeMultipleFromSet(
+          processingConversationIds,
+          conversationIds,
+        ),
+        processingSnapshots: nextSnapshots,
+      });
+    },
+
+    transferProcessingConversationId: (
+      oldConversationId,
+      newConversationId,
+    ) => {
+      const { processingConversationIds, processingSnapshots } = get();
+      if (!processingConversationIds.has(oldConversationId)) {
+        return;
+      }
+      const nextIds = new Set(processingConversationIds);
+      nextIds.delete(oldConversationId);
+      nextIds.add(newConversationId);
+      const nextSnapshots = new Map(processingSnapshots);
+      const snapshot = nextSnapshots.get(oldConversationId);
+      nextSnapshots.delete(oldConversationId);
+      nextSnapshots.set(newConversationId, snapshot);
+      set({
+        processingConversationIds: nextIds,
+        processingSnapshots: nextSnapshots,
+      });
+    },
+
+    // --- Attention conversation ids ---
+
+    addAttentionConversationId: (conversationId) => {
+      set({
+        attentionConversationIds: addToSet(
+          get().attentionConversationIds,
+          conversationId,
+        ),
+      });
+    },
+
+    removeAttentionConversationId: (conversationId) => {
+      set({
+        attentionConversationIds: removeFromSet(
+          get().attentionConversationIds,
+          conversationId,
+        ),
+      });
+    },
+
+    // --- Draft conversation ids ---
+
+    registerDraftConversationId: (conversationId) => {
+      set({
+        draftConversationIds: addToSet(
+          get().draftConversationIds,
+          conversationId,
+        ),
+      });
+    },
+
+    clearDraftConversationId: (conversationId) => {
+      set({
+        draftConversationIds: removeFromSet(
+          get().draftConversationIds,
+          conversationId,
+        ),
+      });
+    },
+
+    // --- Draft replacements ---
+
+    recordDraftReplacement: (draftId, serverId) => {
+      const current = get().draftReplacements;
+      if (draftId === serverId || current.get(draftId) === serverId) {
+        return;
+      }
+      const next = boundDraftReplacements(
+        new Map(current).set(draftId, serverId),
+      );
+      set({ draftReplacements: next });
+      writeStoredDraftReplacements(next);
+    },
+
+    // --- Pending draft profiles ---
+
+    setPendingDraftProfile: (conversationId, profile) => {
+      const current = get().pendingDraftProfiles;
+      if (current.get(conversationId) === profile) {
+        return;
+      }
+      set({
+        pendingDraftProfiles: new Map(current).set(conversationId, profile),
+      });
+    },
+
+    initializeDraftComposer: (id) => {
+      set({
+        initializedDraftComposerIds: new Set(
+          get().initializedDraftComposerIds,
+        ).add(id),
+      });
+    },
+    setPendingDraftAutonomy: (id, threshold) => {
+      if (get().pendingDraftAutonomy.get(id) === threshold) {
+        return;
+      }
+      set({
+        pendingDraftAutonomy: new Map(get().pendingDraftAutonomy).set(
+          id,
+          threshold,
+        ),
+      });
+    },
+    clearPendingDraftAutonomy: (id) => {
+      set({
+        pendingDraftAutonomy: deleteFromMap(get().pendingDraftAutonomy, id),
+      });
+    },
+
+    clearPendingDraftProfile: (conversationId) => {
+      const current = get().pendingDraftProfiles;
+      // No-op when absent so subscribers don't re-render needlessly. Scoped to
+      // a single id so a send (or promotion) that resolves after the user moved
+      // to another draft can't wipe the newer draft's selection.
+      if (!current.has(conversationId)) {
+        return;
+      }
+      const next = new Map(current);
+      next.delete(conversationId);
+      set({ pendingDraftProfiles: next });
+    },
+
+    // --- Pending draft plugins ---
+
+    setPendingDraftPlugins: (conversationId, plugins) => {
+      set({
+        pendingDraftPlugins: new Map(get().pendingDraftPlugins).set(
+          conversationId,
+          plugins,
+        ),
+      });
+    },
+
+    togglePendingDraftPlugin: (conversationId, name) => {
+      const current = get().pendingDraftPlugins;
+      const next = new Map(current);
+      next.set(
+        conversationId,
+        addOrRemoveFromSet(current.get(conversationId), name),
+      );
+      set({ pendingDraftPlugins: next });
+    },
+
+    clearPendingDraftPlugins: (conversationId) => {
+      const current = get().pendingDraftPlugins;
+      // No-op when absent so subscribers don't re-render needlessly. Scoped to
+      // a single id so a send that resolves after the user moved to another
+      // draft can't wipe the newer draft's selection.
+      if (!current.has(conversationId)) {
+        return;
+      }
+      const next = new Map(current);
+      next.delete(conversationId);
+      set({ pendingDraftPlugins: next });
+    },
+
+    // --- Compound ---
+
+    graduateProcessingConversationId: (
+      conversationId,
+      hasPendingInteraction,
+    ) => {
+      set((state) => ({
+        processingConversationIds: removeFromSet(
+          state.processingConversationIds,
+          conversationId,
+        ),
+        processingSnapshots: deleteFromMap(
+          state.processingSnapshots,
+          conversationId,
+        ),
+        attentionConversationIds: hasPendingInteraction
+          ? addToSet(state.attentionConversationIds, conversationId)
+          : state.attentionConversationIds,
+      }));
+    },
+
+    // --- Reset ---
+
+    reset: () => {
+      writeStoredDraftReplacements(new Map());
+      set({
+        ...INITIAL_STATE,
+        processingConversationIds: new Set(),
+        processingSnapshots: new Map(),
+        attentionConversationIds: new Set(),
+        draftConversationIds: new Set(),
+        pendingDraftProfiles: new Map(),
+        pendingDraftAutonomy: new Map(),
+        initializedDraftComposerIds: new Set(),
+        pendingDraftPlugins: new Map(),
+        draftReplacements: new Map(),
+      });
+    },
+  })),
+);

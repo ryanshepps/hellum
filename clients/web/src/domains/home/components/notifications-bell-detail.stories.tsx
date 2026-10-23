@@ -1,0 +1,344 @@
+/**
+ * `NotificationsBellDetail` is one notification opened inside the bell in the
+ * top bar. It is the only surface a notification's full detail has, so these
+ * stories are where every body kind is seen at its real width.
+ *
+ * The decorator stands in for the popover the bell renders this into: the
+ * same 435px box and surface as `notifications-bell.tsx`, so the footer's
+ * links are seen at the width they actually have to fit. The bell itself owns
+ * the queries, so the props here are what the real bell passes down after
+ * `useFeedItemEntityLinks` has resolved.
+ */
+import type { Meta, StoryObj } from "@storybook/react-vite";
+import { Brain, Calendar } from "lucide-react";
+
+import { NotificationsBellDetail } from "@/domains/home/components/notifications-bell-detail";
+import {
+  feedItem,
+  FIXTURE_CONVERSATION_ID,
+  FIXTURE_SECOND_CONVERSATION_ID,
+  FIXTURE_SKILL_UPDATES,
+  FIXTURE_VALID_CONVERSATIONS,
+  skillUpdateReceipt,
+} from "@/domains/home/feed-test-fixtures";
+import type { FeedItemEntityLink } from "@/domains/home/hooks/use-feed-item-entity-links";
+import type { FeedItemUpdateLinksResult } from "@/domains/home/hooks/use-feed-item-update-links";
+import { routes } from "@/utils/routes";
+
+const SKILL_LINK: FeedItemEntityLink = {
+  kind: "skill",
+  labelKey: "actions.viewSkill",
+  icon: Brain,
+  to: routes.skills.detail("approved-pr-merge-gate"),
+};
+
+const SCHEDULE_LINK: FeedItemEntityLink = {
+  kind: "schedule",
+  labelKey: "actions.viewSchedule",
+  icon: Calendar,
+  to: routes.schedules.detail("weekly-report"),
+};
+
+/** What `useFeedItemUpdateLinks` returns for any item that is not a receipt. */
+const NO_UPDATE_LINKS: FeedItemUpdateLinksResult = {
+  validSkillIds: new Set(),
+  validConversationIds: new Set(),
+  isPending: false,
+};
+
+/** Every target the receipt fixture names, once its reads have resolved. */
+const RECEIPT_LINKS: FeedItemUpdateLinksResult = {
+  validSkillIds: new Set(FIXTURE_SKILL_UPDATES.map((update) => update.skillId)),
+  validConversationIds: new Set([
+    FIXTURE_CONVERSATION_ID,
+    FIXTURE_SECOND_CONVERSATION_ID,
+  ]),
+  isPending: false,
+};
+
+const meta = {
+  title: "Home/NotificationsBellDetail",
+  component: NotificationsBellDetail,
+  parameters: { layout: "padded" },
+  args: {
+    // The bell's own content budget: six rows plus their gaps.
+    contentHeight: "400px",
+    contentMaxHeight: "calc(100dvh - 192px)",
+    validConversationIds: FIXTURE_VALID_CONVERSATIONS,
+    areConversationListsPending: false,
+    entityLinks: [],
+    areEntityLinksPending: false,
+    updateLinks: NO_UPDATE_LINKS,
+    isActionPending: false,
+    onBack: () => {},
+    onGoToConversation: () => {},
+    onNavigate: () => {},
+    onUpdateStatus: () => {},
+    onDismiss: () => {},
+    onTriggerAction: () => {},
+  },
+  decorators: [
+    (Story) => (
+      <div className="flex w-[435px] min-w-0 flex-col rounded-[var(--radius-xl)] bg-[var(--surface-lift)] shadow-[var(--shadow-popover)]">
+        <Story />
+      </div>
+    ),
+  ],
+} satisfies Meta<typeof NotificationsBellDetail>;
+
+export default meta;
+type Story = StoryObj<typeof meta>;
+
+/**
+ * A background pass rewrote a skill the user already had. The title names the
+ * skill and the body is the pass's own account of what changed, so the change
+ * can be triaged here; the footer carries a link to the skill next to the jump
+ * back to the conversation the change came from.
+ */
+export const SkillUpdated: Story = {
+  args: {
+    entityLinks: [SKILL_LINK],
+    item: feedItem({
+      id: "feed-skill-updated",
+      title: "Skill updated: Approved PR Merge Gate + Receipt",
+      summary:
+        "Added the receipt step after the merge and the check that the approval is still current before merging.",
+      category: "background",
+      urgency: "low",
+      metadata: { skillId: "approved-pr-merge-gate" },
+      conversationId: FIXTURE_CONVERSATION_ID,
+    }),
+  },
+};
+
+/**
+ * The same notification for a skill that has since been removed. The resolver
+ * drops a link whose target is gone, so the footer falls back to the
+ * conversation alone rather than offering a dead end.
+ */
+export const SkillSinceRemoved: Story = {
+  args: {
+    entityLinks: [],
+    item: feedItem({
+      id: "feed-skill-removed",
+      title: "Skill updated: Approved PR Merge Gate + Receipt",
+      summary:
+        "Added the receipt step after the merge and the check that the approval is still current before merging.",
+      category: "background",
+      urgency: "low",
+      metadata: { skillId: "approved-pr-merge-gate" },
+      conversationId: FIXTURE_CONVERSATION_ID,
+    }),
+  },
+};
+
+/** A scheduled run, the link this footer carried before skills joined it. */
+export const FromSchedule: Story = {
+  args: {
+    entityLinks: [SCHEDULE_LINK],
+    item: feedItem({
+      id: "feed-schedule",
+      title: "Weekly report is due",
+      summary:
+        "Your Monday recap is ready to send. The draft covers last week's shipped work.",
+      category: "scheduling",
+      urgency: "medium",
+      metadata: { scheduleId: "weekly-report" },
+      conversationId: FIXTURE_CONVERSATION_ID,
+    }),
+  },
+};
+
+/**
+ * Every link at once, which is where the footer's width is actually tested:
+ * three controls plus the timestamp inside a 384px popover. They wrap under
+ * the timestamp rather than widening the panel or overflowing it.
+ */
+export const EveryLink: Story = {
+  args: {
+    entityLinks: [SCHEDULE_LINK, SKILL_LINK],
+    item: feedItem({
+      id: "feed-every-link",
+      title: "Skill updated: Weekly Report Export",
+      summary:
+        'A scheduled run rewrote the skill "Weekly Report Export" from what it learned on this pass.',
+      category: "background",
+      urgency: "low",
+      metadata: {
+        scheduleId: "weekly-report",
+        skillId: "approved-pr-merge-gate",
+      },
+      conversationId: FIXTURE_CONVERSATION_ID,
+    }),
+  },
+};
+
+/**
+ * The state between opening the detail and the lists resolving. Both links
+ * hold their box invisibly, so the footer does not change shape under the
+ * cursor once validation lands, and neither is clickable meanwhile.
+ */
+export const LinksPending: Story = {
+  args: {
+    entityLinks: [SKILL_LINK],
+    areEntityLinksPending: true,
+    areConversationListsPending: true,
+    item: feedItem({
+      id: "feed-skill-pending",
+      title: "Skill updated: Approved PR Merge Gate + Receipt",
+      summary:
+        "Added the receipt step after the merge and the check that the approval is still current before merging.",
+      category: "background",
+      urgency: "low",
+      metadata: { skillId: "approved-pr-merge-gate" },
+      conversationId: FIXTURE_CONVERSATION_ID,
+    }),
+  },
+};
+
+/**
+ * A background burst rewrote several skills, one of them twice. The title
+ * counts the skills, and the body lists each with the pass's account of every
+ * rewrite; the skill names and the source conversations are links, since a
+ * footer link can only name one of each. The footer keeps the timestamp
+ * alone.
+ */
+export const SkillUpdateReceipt: Story = {
+  args: {
+    updateLinks: RECEIPT_LINKS,
+    item: skillUpdateReceipt({ id: "feed-skill-receipt" }),
+  },
+};
+
+/**
+ * The same receipt after one skill was removed and one source conversation
+ * was garbage collected: each reads as plain text, and everything else still
+ * links.
+ */
+export const SkillUpdateReceiptTargetsGone: Story = {
+  args: {
+    updateLinks: {
+      validSkillIds: new Set([
+        "approved-pr-merge-gate",
+        "weekly-report-export",
+      ]),
+      validConversationIds: new Set([FIXTURE_CONVERSATION_ID]),
+      isPending: false,
+    },
+    item: skillUpdateReceipt({ id: "feed-skill-receipt-gone" }),
+  },
+};
+
+/**
+ * A receipt whose rewrites all came from one conversation and touched one
+ * skill twice. It carries that skill and that conversation the way a single
+ * notification does, so the footer offers both links and the list repeats
+ * neither.
+ */
+export const SkillUpdateReceiptOneSource: Story = {
+  args: {
+    entityLinks: [SKILL_LINK],
+    updateLinks: RECEIPT_LINKS,
+    item: skillUpdateReceipt({
+      id: "feed-skill-receipt-one-source",
+      updates: FIXTURE_SKILL_UPDATES.filter(
+        (update) => update.skillId === "approved-pr-merge-gate",
+      ).map((update) => ({
+        ...update,
+        conversationId: FIXTURE_CONVERSATION_ID,
+      })),
+      metadata: { skillId: "approved-pr-merge-gate" },
+      conversationId: FIXTURE_CONVERSATION_ID,
+    }),
+  },
+};
+
+/**
+ * A pending guardian approval: the canonical "Needs attention" item for a
+ * request raised from a channel. The body is the guardian card with
+ * the ask and where it came from first, then the tool the request would
+ * run, then Approve/Reject against the canonical request, with the
+ * source-thread link under them.
+ */
+export const GuardianApprovalPending: Story = {
+  args: {
+    item: feedItem({
+      id: "guardian:req-approval",
+      title: "Alice asked the assistant to look up ticket ABC-123",
+      summary:
+        "Alice asked the assistant to look up ticket ABC-123 before replying in the thread.",
+      category: "security",
+      urgency: "high",
+      detailPanel: { kind: "permissionChat" },
+      conversationId: FIXTURE_CONVERSATION_ID,
+      guardianRequest: {
+        requestId: "req-approval",
+        kind: "tool_approval",
+        intent: "approval",
+        status: "pending",
+        requesterLabel: "Alice",
+        toolName: "linear_graphql",
+        sourceChannel: "slack",
+        sourceContextLabel: "Slack #user-feedback",
+        sourceUrl: "https://slack.com/archives/C0123456789/p1725100000000100",
+      },
+    }),
+  },
+};
+
+/**
+ * A pending guardian question routes to the source conversation to answer.
+ * The summary is the question with its options on their own lines, which is
+ * all the bell shows: the reply mechanics a chat channel needs are stripped
+ * before the copy reaches this surface.
+ */
+export const GuardianQuestionPending: Story = {
+  args: {
+    item: feedItem({
+      id: "guardian:req-question",
+      title: "Which venue should I book?",
+      summary:
+        "Which venue should I book for the offsite? The two on the shortlist differ on price and travel time.\n\n1. The lakeside lodge\n2. The downtown hotel\n3. Either, your call",
+      category: "security",
+      urgency: "high",
+      detailPanel: { kind: "permissionChat" },
+      conversationId: FIXTURE_CONVERSATION_ID,
+      guardianRequest: {
+        requestId: "req-question",
+        kind: "pending_question",
+        intent: "question",
+        status: "pending",
+      },
+    }),
+  },
+};
+
+/**
+ * The terminal receipt: the same item after resolution, with the outcome
+ * in place of the buttons and the row an ordinary clearable
+ * notification.
+ */
+export const GuardianApprovalResolved: Story = {
+  args: {
+    item: feedItem({
+      id: "guardian:req-resolved",
+      title: "Alice asked the assistant to look up ticket ABC-123",
+      summary:
+        "Alice asked the assistant to look up ticket ABC-123 before replying in the thread.",
+      category: "security",
+      urgency: "medium",
+      detailPanel: { kind: "permissionChat" },
+      conversationId: FIXTURE_CONVERSATION_ID,
+      guardianRequest: {
+        requestId: "req-resolved",
+        kind: "tool_approval",
+        intent: "approval",
+        status: "approved",
+        requesterLabel: "Alice",
+        toolName: "linear_graphql",
+        sourceContextLabel: "Slack #user-feedback",
+        decidedAt: "2026-08-31T13:00:00.000Z",
+      },
+    }),
+  },
+};

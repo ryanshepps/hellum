@@ -1,0 +1,251 @@
+import {
+  Bookmark,
+  Check,
+  Copy,
+  ExternalLink,
+  FileCode,
+  GitBranch,
+  ListCollapse,
+  type LucideIcon,
+  Square,
+  Volume2,
+} from "lucide-react";
+import { useCallback, useMemo } from "react";
+import { useTranslation } from "@/i18n";
+
+import type { MessageHoverActionsProps } from "@/domains/chat/components/message-hover-actions/message-hover-actions";
+import { useMessageReadAloudStore } from "@/domains/chat/message-read-aloud-store";
+import { messageCopyText } from "@/domains/chat/utils/message-plain-text";
+import {
+  useBookmarkToggle,
+  useCanBookmark,
+  useIsBookmarked,
+} from "@/hooks/use-bookmarks";
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
+import { useResolvedAssistantsStore } from "@/stores/resolved-assistants-store";
+import { BottomSheet, PanelItem } from "@vellumai/design-library";
+
+type MessageLongPressActionsProps = MessageHoverActionsProps & {
+  /** Controlled open state for the BottomSheet. */
+  open: boolean;
+  /** Called when the sheet should open or close. */
+  onOpenChange: (open: boolean) => void;
+};
+
+/**
+ * Mobile-only action sheet for a message — the BottomSheet counterpart of
+ * `MessageHoverActions`. Renders the same action set (Copy, Read aloud,
+ * Bookmark, Open in Slack, Fork from here, Summarize up to here, Inspect)
+ * as `PanelItem` rows inside a `BottomSheet`, which is inherently mobile-only
+ * (renders below 768px). Each action runs its callback and then dismisses the
+ * sheet so the action's UI feedback (modals, toasts, navigation) doesn't fire
+ * under a still-open sheet.
+ */
+export function MessageLongPressActions({
+  message,
+  showTextActions = true,
+  conversationId,
+  openInSlackUrl,
+  onFork,
+  onSummarizeUpToHere,
+  onInspect,
+  open,
+  onOpenChange,
+}: MessageLongPressActionsProps) {
+  const { t } = useTranslation("chat");
+  const canBookmark = useCanBookmark(message, conversationId);
+  const assistantId = useResolvedAssistantsStore.use.activeAssistantId();
+  const readAloudMessageId = useMessageReadAloudStore.use.messageId();
+  const readAloudStatus = useMessageReadAloudStore.use.status();
+  const isThisReading =
+    Boolean(message.id) &&
+    readAloudMessageId === message.id &&
+    readAloudStatus !== "idle";
+
+  const content = useMemo(() => messageCopyText(message), [message]);
+
+  const { copy, copied: showCopied } = useCopyToClipboard({
+    errorMessage: t("messageLongPressActions.copyFailed"),
+  });
+  const hasCopyableText = showTextActions && content.trim().length > 0;
+
+  const close = useCallback(() => onOpenChange(false), [onOpenChange]);
+
+  const handleCopy = useCallback(() => copy(content), [copy, content]);
+
+  const handleReadAloud = useCallback(() => {
+    if (!message.id) {
+      return;
+    }
+    useMessageReadAloudStore.getState().toggle({
+      messageId: message.id,
+      text: content,
+      assistantId,
+      conversationId,
+    });
+  }, [assistantId, content, conversationId, message.id]);
+
+  const buildItem = useCallback(
+    ({
+      key,
+      icon,
+      label,
+      run,
+    }: {
+      key: string;
+      icon?: LucideIcon;
+      label: string;
+      run: () => void;
+    }) => (
+      <PanelItem
+        key={key}
+        icon={icon}
+        label={label}
+        onSelect={() => {
+          run();
+          close();
+        }}
+      />
+    ),
+    [close],
+  );
+
+  const items: React.ReactNode[] = [];
+
+  if (hasCopyableText) {
+    items.push(
+      showCopied ? (
+        <PanelItem
+          key="copy"
+          icon={Check}
+          label={t("messageLongPressActions.copied")}
+        />
+      ) : (
+        buildItem({
+          key: "copy",
+          icon: Copy,
+          label: t("messageLongPressActions.copy"),
+          run: handleCopy,
+        })
+      ),
+    );
+  }
+
+  if (hasCopyableText && message.id) {
+    items.push(
+      buildItem({
+        key: "read-aloud",
+        icon: isThisReading ? Square : Volume2,
+        label: isThisReading
+          ? t("messageLongPressActions.stop")
+          : t("messageLongPressActions.readAloud"),
+        run: handleReadAloud,
+      }),
+    );
+  }
+
+  if (canBookmark && conversationId && message.id) {
+    items.push(
+      <BookmarkPanelItem
+        key="bookmark"
+        messageId={message.id}
+        conversationId={conversationId}
+        onClose={close}
+      />,
+    );
+  }
+
+  if (openInSlackUrl) {
+    items.push(
+      buildItem({
+        key: "slack",
+        icon: ExternalLink,
+        label: t("messageLongPressActions.openInSlack"),
+        run: () => {
+          window.open(openInSlackUrl, "_blank", "noopener,noreferrer");
+        },
+      }),
+    );
+  }
+
+  if (onFork) {
+    items.push(
+      buildItem({
+        key: "fork",
+        icon: GitBranch,
+        label: t("messageLongPressActions.forkFromHere"),
+        run: onFork,
+      }),
+    );
+  }
+
+  if (onSummarizeUpToHere) {
+    items.push(
+      buildItem({
+        key: "summarize",
+        icon: ListCollapse,
+        label: t("messageLongPressActions.summarizeUpToHere"),
+        run: onSummarizeUpToHere,
+      }),
+    );
+  }
+
+  if (onInspect) {
+    items.push(
+      buildItem({
+        key: "inspect",
+        icon: FileCode,
+        label: t("messageLongPressActions.inspect"),
+        run: onInspect,
+      }),
+    );
+  }
+
+  return (
+    <BottomSheet.Root open={open} onOpenChange={onOpenChange}>
+      <BottomSheet.Content aria-describedby={undefined}>
+        <BottomSheet.Header className="sr-only">
+          <BottomSheet.Title>
+            {t("messageLongPressActions.title")}
+          </BottomSheet.Title>
+        </BottomSheet.Header>
+        <BottomSheet.Body className="pt-0">{items}</BottomSheet.Body>
+      </BottomSheet.Content>
+    </BottomSheet.Root>
+  );
+}
+
+/**
+ * Bookmark toggle PanelItem for a persisted message. Split out so its
+ * TanStack Query hooks only mount for bookmarkable messages — mirroring the
+ * `MessageBookmarkButton` pattern in `MessageHoverActions`.
+ */
+function BookmarkPanelItem({
+  messageId,
+  conversationId,
+  onClose,
+}: {
+  messageId: string;
+  conversationId: string;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation("chat");
+  const isBookmarked = useIsBookmarked(messageId);
+  const toggleBookmark = useBookmarkToggle();
+  const handleToggle = useCallback(() => {
+    void toggleBookmark(messageId, conversationId, isBookmarked);
+    onClose();
+  }, [messageId, conversationId, isBookmarked, toggleBookmark, onClose]);
+
+  return (
+    <PanelItem
+      icon={Bookmark}
+      label={
+        isBookmarked
+          ? t("messageLongPressActions.removeBookmark")
+          : t("messageLongPressActions.bookmark")
+      }
+      onSelect={handleToggle}
+    />
+  );
+}

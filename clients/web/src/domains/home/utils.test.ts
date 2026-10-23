@@ -1,0 +1,341 @@
+/**
+ * Tests for the home feed's shared derivations in `utils`.
+ */
+
+import { describe, expect, test } from "bun:test";
+
+import type { FeedItem, FeedItemUpdate } from "@vellumai/assistant-api";
+
+import {
+  clearAllArgs,
+  getFeedItemScheduleId,
+  getFeedItemSkillId,
+  getFeedItemUpdates,
+  getVisibleFeedItems,
+  groupFeedItemUpdates,
+  guardianLabelKey,
+  markAllReadArgs,
+  resolveFeedItemTitle,
+  resolveThreadName,
+  sortFeedItems,
+} from "./utils";
+
+function feedItem(overrides: Partial<FeedItem> = {}): FeedItem {
+  const timestamp = new Date("2024-01-01T00:00:00.000Z").toISOString();
+  return {
+    id: "item-1",
+    type: "notification",
+    priority: 50,
+    summary: "Something happened",
+    timestamp,
+    createdAt: timestamp,
+    status: "new",
+    ...overrides,
+  };
+}
+
+describe("getFeedItemScheduleId", () => {
+  test("returns the schedule id a scheduled-run notification carries", () => {
+    const item = feedItem({ metadata: { scheduleId: "schedule-1" } });
+    expect(getFeedItemScheduleId(item)).toBe("schedule-1");
+  });
+
+  test("returns null when the item has no metadata", () => {
+    expect(getFeedItemScheduleId(feedItem())).toBeNull();
+  });
+
+  test("returns null when the metadata carries no schedule id", () => {
+    const item = feedItem({ metadata: { conversationId: "conv-1" } });
+    expect(getFeedItemScheduleId(item)).toBeNull();
+  });
+
+  test("returns null for an empty schedule id", () => {
+    const item = feedItem({ metadata: { scheduleId: "" } });
+    expect(getFeedItemScheduleId(item)).toBeNull();
+  });
+
+  test("returns null when the schedule id is not a string", () => {
+    const item = feedItem({ metadata: { scheduleId: 42 } });
+    expect(getFeedItemScheduleId(item)).toBeNull();
+  });
+
+  test("returns null when there is no item", () => {
+    expect(getFeedItemScheduleId(null)).toBeNull();
+  });
+});
+
+describe("getFeedItemSkillId", () => {
+  test("returns the skill id a background skill update carries", () => {
+    const item = feedItem({ metadata: { skillId: "weekly-export" } });
+    expect(getFeedItemSkillId(item)).toBe("weekly-export");
+  });
+
+  test("returns null when the item has no metadata", () => {
+    expect(getFeedItemSkillId(feedItem())).toBeNull();
+  });
+
+  test("returns null when the metadata carries no skill id", () => {
+    const item = feedItem({ metadata: { scheduleId: "schedule-1" } });
+    expect(getFeedItemSkillId(item)).toBeNull();
+  });
+
+  test("returns null for an empty skill id", () => {
+    const item = feedItem({ metadata: { skillId: "" } });
+    expect(getFeedItemSkillId(item)).toBeNull();
+  });
+
+  test("returns null when the skill id is not a string", () => {
+    const item = feedItem({ metadata: { skillId: 42 } });
+    expect(getFeedItemSkillId(item)).toBeNull();
+  });
+
+  test("returns null when there is no item", () => {
+    expect(getFeedItemSkillId(null)).toBeNull();
+  });
+
+  test("reads the two entity ids independently on one item", () => {
+    const item = feedItem({
+      metadata: { scheduleId: "schedule-1", skillId: "weekly-export" },
+    });
+    expect(getFeedItemScheduleId(item)).toBe("schedule-1");
+    expect(getFeedItemSkillId(item)).toBe("weekly-export");
+  });
+});
+
+describe("getFeedItemUpdates", () => {
+  const update: FeedItemUpdate = {
+    skillId: "skill-a",
+    name: "Skill A",
+    summary: "Changed a step.",
+  };
+
+  test("returns the entries of a receipt", () => {
+    const item = feedItem({
+      detailPanel: { kind: "updatesList" },
+      updates: [update],
+    });
+    expect(getFeedItemUpdates(item)).toEqual([update]);
+  });
+
+  test("returns nothing for an item whose panel is not the list", () => {
+    // The entries alone do not make a receipt: the panel kind is what the
+    // daemon sets, and an item carrying entries under another kind renders
+    // as that kind.
+    const item = feedItem({ updates: [update] });
+    expect(getFeedItemUpdates(item)).toEqual([]);
+  });
+
+  test("returns nothing for a receipt that arrived without entries", () => {
+    expect(
+      getFeedItemUpdates(feedItem({ detailPanel: { kind: "updatesList" } })),
+    ).toEqual([]);
+    expect(
+      getFeedItemUpdates(
+        feedItem({ detailPanel: { kind: "updatesList" }, updates: [] }),
+      ),
+    ).toEqual([]);
+  });
+
+  test("returns nothing when there is no item", () => {
+    expect(getFeedItemUpdates(null)).toEqual([]);
+  });
+});
+
+describe("groupFeedItemUpdates", () => {
+  test("groups by skill in first-seen order, keeping rewrite order within", () => {
+    const groups = groupFeedItemUpdates([
+      { skillId: "a", name: "A", summary: "first" },
+      { skillId: "b", name: "B", summary: "second" },
+      { skillId: "a", name: "A", summary: "third" },
+    ]);
+    expect(groups.map((group) => group.skillId)).toEqual(["a", "b"]);
+    expect(groups[0]?.updates.map((update) => update.summary)).toEqual([
+      "first",
+      "third",
+    ]);
+  });
+
+  test("groups on the id alone, so two skills sharing a name stay apart", () => {
+    const groups = groupFeedItemUpdates([
+      { skillId: "a", name: "Same", summary: "x" },
+      { skillId: "b", name: "Same", summary: "y" },
+    ]);
+    expect(groups).toHaveLength(2);
+  });
+
+  test("a skill renamed between rewrites carries its latest name", () => {
+    const groups = groupFeedItemUpdates([
+      { skillId: "a", name: "Old", summary: "x" },
+      { skillId: "a", name: "New", summary: "y" },
+    ]);
+    expect(groups).toEqual([
+      {
+        skillId: "a",
+        name: "New",
+        updates: [
+          { skillId: "a", name: "Old", summary: "x" },
+          { skillId: "a", name: "New", summary: "y" },
+        ],
+      },
+    ]);
+  });
+});
+
+describe("resolveFeedItemTitle", () => {
+  test("returns the item's own title", () => {
+    const item = feedItem({ title: "Deploy finished", summary: "**Details**" });
+    expect(resolveFeedItemTitle(item)).toBe("Deploy finished");
+  });
+
+  test("falls back to the summary as plain text when there is no title", () => {
+    const item = feedItem({ summary: "**Deploy** finished" });
+    expect(resolveFeedItemTitle(item)).toBe("Deploy finished");
+  });
+
+  test("falls back to a fixed name when the summary flattens to nothing", () => {
+    const item = feedItem({ summary: "```\nnpm run build\n```" });
+    expect(resolveFeedItemTitle(item)).toBe("Notification");
+  });
+});
+
+describe("sortFeedItems", () => {
+  test("orders items of equal priority by recency", () => {
+    const older = feedItem({ id: "older", createdAt: "2024-01-01T00:00:00Z" });
+    const newer = feedItem({ id: "newer", createdAt: "2024-01-01T00:00:01Z" });
+    expect(sortFeedItems([older, newer]).map((i) => i.id)).toEqual([
+      "newer",
+      "older",
+    ]);
+  });
+
+  test("holds the given order for items the comparator cannot separate", () => {
+    const first = feedItem({ id: "first" });
+    const second = feedItem({ id: "second" });
+    expect(sortFeedItems([first, second]).map((i) => i.id)).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(sortFeedItems([second, first]).map((i) => i.id)).toEqual([
+      "second",
+      "first",
+    ]);
+  });
+});
+
+function guardianItem(
+  status: NonNullable<FeedItem["guardianRequest"]>["status"],
+  overrides: Partial<FeedItem> = {},
+): FeedItem {
+  return feedItem({
+    id: `guardian:req-${status}`,
+    urgency: "high",
+    guardianRequest: {
+      requestId: `req-${status}`,
+      kind: "tool_approval",
+      intent: "approval",
+      status,
+    },
+    ...overrides,
+  });
+}
+
+describe("guardian feed item derivations", () => {
+  test("a pending guardian item stays visible despite high urgency", () => {
+    const pending = guardianItem("pending");
+    const plainHighUrgency = feedItem({ id: "urgent", urgency: "high" });
+    const visible = getVisibleFeedItems([pending, plainHighUrgency]);
+    expect(visible.map((i) => i.id)).toEqual([pending.id]);
+  });
+
+  test("a pending guardian item sorts ahead of higher-priority items", () => {
+    const pending = guardianItem("pending");
+    const louder = feedItem({ id: "louder", priority: 90 });
+    expect(sortFeedItems([louder, pending]).map((i) => i.id)).toEqual([
+      pending.id,
+      louder.id,
+    ]);
+  });
+
+  test("bulk payloads exclude pending guardian ids and include receipts", () => {
+    const pending = guardianItem("pending");
+    const receipt = guardianItem("approved", {
+      id: "guardian:req-approved",
+      urgency: "medium",
+    });
+    const routine = feedItem({ id: "routine" });
+    const visible = [pending, receipt, routine];
+
+    expect(clearAllArgs(visible).ids.sort()).toEqual(
+      [receipt.id, routine.id].sort(),
+    );
+    expect(markAllReadArgs(visible).ids.sort()).toEqual(
+      [receipt.id, routine.id].sort(),
+    );
+  });
+
+  test("a guardian item is named for what its state asks of the user", () => {
+    expect(guardianLabelKey(guardianItem("pending"))).toBe(
+      "category.guardianAction",
+    );
+    // Settled: nothing is needed of anyone, so it is named for what it was.
+    expect(guardianLabelKey(guardianItem("approved"))).toBe(
+      "category.guardianRequest",
+    );
+    const question = feedItem({
+      guardianRequest: {
+        requestId: "req-q",
+        kind: "pending_question",
+        intent: "question",
+        status: "pending",
+      },
+    });
+    expect(guardianLabelKey(question)).toBe("category.guardianAnswer");
+    // A question that was answered asks nothing more.
+    expect(
+      guardianLabelKey({
+        ...question,
+        guardianRequest: { ...question.guardianRequest!, status: "approved" },
+      }),
+    ).toBe("category.guardianQuestion");
+    expect(guardianLabelKey(feedItem())).toBeNull();
+  });
+});
+
+describe("resolveThreadName", () => {
+  const titles = new Map([["conv-1", "Weekly report"]]);
+
+  test("names the item's conversation when the lists carry its title", () => {
+    expect(
+      resolveThreadName(
+        feedItem({ conversationId: "conv-1", sourceLabel: "Heartbeat" }),
+        titles,
+      ),
+    ).toBe("Weekly report");
+  });
+
+  test("falls back to an informative source label", () => {
+    expect(
+      resolveThreadName(
+        feedItem({ conversationId: "conv-gone", sourceLabel: "Heartbeat" }),
+        titles,
+      ),
+    ).toBe("Heartbeat");
+    expect(
+      resolveThreadName(feedItem({ sourceLabel: "Heartbeat" }), titles),
+    ).toBe("Heartbeat");
+  });
+
+  test.each(["Conversation", "Other"])(
+    "leaves the line out for the generic %s source label",
+    (sourceLabel) => {
+      expect(resolveThreadName(feedItem({ sourceLabel }), titles)).toBeNull();
+    },
+  );
+
+  test("leaves the line out when nothing names the thread", () => {
+    expect(resolveThreadName(feedItem(), titles)).toBeNull();
+    expect(
+      resolveThreadName(feedItem({ conversationId: "conv-gone" }), titles),
+    ).toBeNull();
+  });
+});

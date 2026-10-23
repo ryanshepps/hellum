@@ -1,0 +1,732 @@
+import { useTranslation } from "@/i18n";
+/**
+ * ActiveChatView — chat orchestration, mounted only when the assistant is usable.
+ *
+ * ChatPage handles lifecycle guards (loading, error, setup, cleanup, retired)
+ * and mounts this component only when `shouldRenderChat` is true. All
+ * orchestration hooks (SSE, TanStack Query, Zustand subscriptions, keyboard
+ * listeners) live here so they don't execute during non-active states.
+ */
+
+import { lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router";
+
+import { useAssistantLifecycleStore } from "@/assistant/lifecycle-store";
+import { useAutoGreetGate } from "@/domains/chat/hooks/use-auto-greet-gate";
+import { useResolvedAssistantsStore } from "@/stores/resolved-assistants-store";
+import { useAuthStore } from "@/stores/auth-store";
+import { useConversationStore } from "@/stores/conversation-store";
+import { useActiveConversation } from "@/domains/chat/hooks/use-active-conversation";
+import { useViewerStore } from "@/stores/viewer-store";
+import { useDeployStore } from "@/stores/deploy-store";
+import {
+  closeAppRoute,
+  dropAppFromRoute,
+} from "@/utils/conversation-navigation";
+
+import { useAssistantIdentityStore } from "@/stores/assistant-identity-store";
+
+import type { DisplayMessage } from "@/domains/chat/types/types";
+import type { TranscriptHandle } from "@/domains/chat/transcript/transcript";
+import type { TranscriptItem } from "@/domains/chat/transcript/types";
+import type { UIContext } from "@/domains/chat/turn-selectors";
+import { useChatSessionStore } from "@/domains/chat/chat-session-store";
+
+import { peekPendingPreChatContext } from "@/domains/onboarding/prechat";
+
+import { LazyBoundary } from "@/components/lazy-boundary";
+import { useAssistantAvatar } from "@/hooks/use-assistant-avatar";
+import { useAssistantReachability } from "@/assistant/use-assistant-reachability";
+import { useDiskPressureMonitor } from "@/assistant/use-disk-pressure-monitor";
+import { getDiskPressureChatBlockReason } from "@/assistant/disk-pressure";
+import { useResourcePressureMonitor } from "@/assistant/use-resource-pressure-monitor";
+import { useActiveAssistantIsPlatformHosted } from "@/hooks/use-platform-gate";
+import { useComposerStore } from "@/domains/chat/composer-store";
+
+import { useConversationLoader } from "@/domains/chat/hooks/use-conversation-loader";
+import { useDraftPersistence } from "@/domains/chat/hooks/use-draft-persistence";
+import { useOnboardingOrchestrator } from "@/domains/chat/hooks/use-onboarding-orchestrator";
+
+import { useConversationSecondaryActions } from "@/domains/chat/hooks/use-conversation-secondary-actions";
+import { useAssistantCapability } from "@/hooks/use-assistant-capability";
+import { useSupportsResourcePressureStatus } from "@/lib/backwards-compat/use-supports-resource-pressure-status";
+import { useSupportsSummarizeUpToHere } from "@/lib/backwards-compat/use-supports-summarize-up-to-here";
+import { useCanUseInternalThreadActions } from "@/lib/auth/internal-thread-actions";
+import { useSendMessage } from "@/domains/chat/hooks/use-send-message";
+import { useMessageLifecycle } from "@/domains/chat/hooks/use-message-lifecycle";
+import { useActiveAppPinSync } from "@/domains/chat/hooks/use-active-app-pin-sync";
+import { useAcpAutoContinue } from "@/domains/chat/hooks/use-acp-auto-continue";
+import { useDeepLinkConsumer } from "@/domains/chat/hooks/use-deep-link-consumer";
+import { useDeepLinkThreadSend } from "@/domains/chat/hooks/use-deep-link-thread-send";
+import { usePendingEmailReferences } from "@/domains/chat/hooks/use-pending-email-references";
+import { useShareInboxSend } from "@/domains/chat/hooks/use-share-inbox-send";
+import { ACP_CONNECT_CONTINUE_PROMPT } from "@/domains/chat/utils/acp-connect";
+
+import { useChatDebugRegistration } from "@/domains/chat/hooks/use-chat-debug-registration";
+import { useAppRouteSync } from "@/domains/chat/hooks/use-app-route-sync";
+import { useDeepLinkApp } from "@/domains/chat/hooks/use-deep-link-app";
+import { useScrollToMessageParam } from "@/domains/chat/hooks/use-scroll-to-message";
+import { lifecycleService } from "@/assistant/lifecycle-service";
+import { isSending, useTurnStore } from "@/domains/chat/turn-store";
+import { useOnboardingFocusStore } from "@/stores/onboarding-focus-store";
+import { Button } from "@vellumai/design-library/components/button";
+import { ConfirmDialog } from "@vellumai/design-library/components/confirm-dialog";
+
+const DeployDialogs = lazy(() =>
+  import("@/components/deploy-dialogs").then((m) => ({
+    default: m.DeployDialogs,
+  })),
+);
+
+import { LazyAddCreditsModal } from "@/domains/chat/components/lazy-add-credits-modal";
+import { MobileChatOverlays } from "@/domains/chat/components/mobile-chat-overlays";
+import { useChatHeaderRegistration } from "@/domains/chat/hooks/use-chat-header-registration";
+import { useConversationChangeEffects } from "@/domains/chat/hooks/use-conversation-change-effects";
+import { useSubagentReconcile } from "@/domains/chat/hooks/use-subagent-reconcile";
+import { useComposerKeyboard } from "@/domains/chat/hooks/use-composer-keyboard";
+import { useAutoSendEffects } from "@/domains/chat/hooks/use-auto-send-effects";
+import { useOnboardingAttribution } from "@/hooks/use-onboarding-attribution";
+import { requestComposerFocus } from "@/domains/chat/composer-focus";
+import { usePendingDeepLinkStore } from "@/stores/pending-deep-link-store";
+
+import { ChatContentLayout } from "@/domains/chat/components/chat-content-layout";
+import type { ChatMainPanelProps } from "@/domains/chat/components/chat-route-content";
+import { useSessionDisclosureState } from "@/domains/chat/transcript/use-session-disclosure-state";
+import { useAssistantFeatureFlagStore } from "@/stores/assistant-feature-flag-store";
+
+/**
+ * Stage a `?prompt=` that arrived without in-app provenance (a clicked link)
+ * for the user to send. Goes through the deep-link inbox rather than straight
+ * into the composer store so `useDeepLinkConsumer` applies its rules: a
+ * cold-load restored draft yields to the link, live typing is never
+ * overwritten.
+ */
+function prefillComposerFromUrl(content: string): void {
+  usePendingDeepLinkStore.getState().setPendingComposerMessage(content);
+  requestComposerFocus();
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export function ActiveChatView() {
+  const { t } = useTranslation("chat");
+  const canUseInternalActions = useCanUseInternalThreadActions();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { conversationId: urlConversationId, appId: urlAppId } = useParams<{
+    conversationId?: string;
+    appId?: string;
+  }>();
+  const assistantId = useResolvedAssistantsStore.use.activeAssistantId();
+  const assistantState = useAssistantLifecycleStore.use.assistantState();
+  const turnPhase = useTurnStore.use.phase();
+
+  // -------------------------------------------------------------------------
+  // Chat session store — reactive selectors for per-conversation state
+  // -------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------
+  // Local state (not store-backed)
+  // -------------------------------------------------------------------------
+  const [refreshEpoch, setRefreshEpoch] = useState(0);
+  const [assetsRefreshKey, setAssetsRefreshKey] = useState(0);
+
+  // -------------------------------------------------------------------------
+  // Zustand store selectors
+  // -------------------------------------------------------------------------
+  const activeConversationId = useConversationStore.use.activeConversationId();
+  const sessionGroupsEnabled = useAssistantFeatureFlagStore.use.sessionGroups();
+  const sessionDisclosureState = useSessionDisclosureState(
+    activeConversationId,
+    sessionGroupsEnabled,
+  );
+  const isTokenDialogOpen = useDeployStore.use.isTokenDialogOpen();
+  const complexDeployApp = useDeployStore.use.complexDeployApp();
+
+  // Assistant identity is fetched and stored by `useAssistantIdentityInit`
+  // at the `ChatLayout` level (TanStack Query → Zustand) so the sidebar
+  // header populates on every `/assistant/*` route. ActiveChatView reads the
+  // store via atomic selectors per `docs/STATE_MANAGEMENT.md` rather
+  // than maintaining its own local copy.
+  const assistantName = useAssistantIdentityStore.use.name();
+  const authUserId = useAuthStore.use.user()?.id ?? null;
+
+  // -------------------------------------------------------------------------
+  // Pin-sync side-effect
+  // -------------------------------------------------------------------------
+  useActiveAppPinSync(
+    assistantId,
+    useCallback(
+      (appId: string) => {
+        if (useViewerStore.getState().handleAppUnpinned(appId)) {
+          // The unpin already closed the viewer, so the route sync sees nothing
+          // left to close: the app segment leaves the URL from here.
+          closeAppRoute(navigate, { replace: true });
+          return;
+        }
+        // An overlay hides the app, so only the URL is stale. Dropping the
+        // segment leaves the release to the route sync, which keeps the
+        // overlay in front. An unpin has no gesture behind it, so the entry is
+        // replaced rather than popped.
+        dropAppFromRoute(navigate, appId, { evenIfHeld: true, replace: true });
+      },
+      [navigate],
+    ),
+  );
+
+  // -------------------------------------------------------------------------
+  // Shared refs — owned here, read/written by hooks
+  // -------------------------------------------------------------------------
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const sanitizedMessagesRef = useRef<DisplayMessage[]>([]);
+  const transcriptItemsRef = useRef<TranscriptItem[]>([]);
+  // Threaded down to ChatMainPanel and bound on the `<Transcript />`
+  // instance there. Also read by useChatDebugRegistration for scroll state.
+  const transcriptRef = useRef<TranscriptHandle | null>(null);
+  // Written by ChatMainPanel every render with the exact `UIContext` it
+  // renders from; read by useChatDebugRegistration so the debug snapshot
+  // reflects on-screen state rather than a separate recomputation.
+  const uiContextRef = useRef<UIContext | null>(null);
+
+  // -------------------------------------------------------------------------
+  // Onboarding orchestrator — owns onboarding refs, flags, and effects.
+  // Refs are shared with useSendMessage + useConversationLoader below.
+  // -------------------------------------------------------------------------
+  const {
+    didOnboarding,
+    onboardingChoiceEligible,
+    onboardingConversationId,
+    pendingOnboardingContextRef,
+    onboardingDraftConversationIdRef,
+  } = useOnboardingOrchestrator();
+
+  // -------------------------------------------------------------------------
+  // Reachability
+  // -------------------------------------------------------------------------
+  const reachability = useAssistantReachability(assistantId);
+  const reachabilityReadyEpoch = useMemo(() => {
+    if (reachability.state.phase === "ready") {
+      return refreshEpoch + 1;
+    }
+    return 0;
+  }, [reachability.state.phase, refreshEpoch]);
+
+  // -------------------------------------------------------------------------
+  // Disk pressure (only relevant for platform-hosted assistants)
+  // -------------------------------------------------------------------------
+  const isPlatformHosted = useActiveAssistantIsPlatformHosted();
+  const diskPressure = useDiskPressureMonitor({
+    assistantId,
+    enabled: isPlatformHosted,
+  });
+  const diskPressureChatBlockReason = getDiskPressureChatBlockReason({
+    monitorEnabled: diskPressure.mode !== null,
+    hasResolvedStatus: diskPressure.hasResolvedStatus,
+    status: diskPressure.status,
+  });
+  // Daemons below the gate's floor lack the status route; the gate keeps
+  // the poller from 404ing against them every tick and app resume.
+  const supportsResourcePressureStatus = useSupportsResourcePressureStatus();
+  const resourcePressure = useResourcePressureMonitor({
+    assistantId,
+    enabled: isPlatformHosted && supportsResourcePressureStatus,
+  });
+
+  // -------------------------------------------------------------------------
+  // Composer store — load drafts for the active assistant on mount / switch.
+  // -------------------------------------------------------------------------
+  // Note: Not a useEffect because loadAssistantDrafts is idempotent (no-ops
+  // if already loaded for this assistant). Running during render ensures
+  // drafts are available on first paint without a flash of empty state.
+  useMemo(() => {
+    if (assistantId) {
+      // Pass the current conversation key so loadAssistantDrafts can save
+      // any unsaved composer input into the outgoing assistant's draft map.
+      const prevConvId = useChatSessionStore.getState().previousConversationId;
+      useComposerStore.getState().loadAssistantDrafts(assistantId, prevConvId);
+    }
+  }, [assistantId]);
+
+  // Keyboard focus: Electron host focus relay + typing auto-focus.
+  useComposerKeyboard(inputRef);
+
+  // -------------------------------------------------------------------------
+  // Derived state
+  // -------------------------------------------------------------------------
+  // Resolve the active row from either list cache, fetching the single row
+  // when an open background/scheduled thread is in neither — so the header,
+  // action menu, read-state, and SSE subscription have metadata without
+  // pulling the whole background backlog onto the initial-render path.
+  const activeConversation = useActiveConversation(
+    assistantId,
+    activeConversationId,
+    true,
+  );
+
+  // Avatar — called here so the cache is warm; ChatMainPanel has
+  // its own call (TanStack Query deduplicates the fetch).
+  useAssistantAvatar(assistantId);
+
+  // -------------------------------------------------------------------------
+  // Conversation loader
+  // -------------------------------------------------------------------------
+  const {
+    refreshConversations,
+    startNewConversation,
+    conversationExistsOnServer,
+    historyResult,
+  } = useConversationLoader({
+    assistantId,
+    assistantStateKind: assistantState.kind,
+    activeConversationId,
+    urlConversationId: urlConversationId ?? null,
+    searchParams,
+    activeConversation,
+    refreshEpoch,
+    reachabilityReadyEpoch,
+    onboardingDraftConversationIdRef,
+  });
+
+  // Inbound deep links: pre-fill the composer with parked `deeplink.send` /
+  // `deeplink.sendToThread` / start-voice-prompt text. Registered AFTER
+  // useConversationLoader on purpose: its consume effect and the loader's
+  // switchToConversation effect can fire in the same commit (park + navigate
+  // happen in one bus callback), and effects run in registration order — were
+  // this hook first, handleConversationSwitch would read the just-set input
+  // and misfile the parked message as the *outgoing* conversation's draft.
+  useDeepLinkConsumer();
+
+  // Persist the composer draft across reloads (debounced autosave + unload
+  // flush) and restore it on cold load. Mounted after useConversationLoader
+  // so the switchToConversation effect fires before restoreDraftIfEmpty.
+  useDraftPersistence();
+
+  // -------------------------------------------------------------------------
+  // Message lifecycle — reconciliation, stream event handling, SSE
+  // subscription, active-conversation message sync, and latest-message
+  // refresh.
+  // -------------------------------------------------------------------------
+  const {
+    startReconciliationLoop,
+    cancelReconciliation,
+    reconcileActiveConversation,
+  } = useMessageLifecycle({
+    assistantId,
+    assistantStateKind: assistantState.kind,
+    activeConversationId,
+    conversationExistsOnServer,
+    latestPageOldestTimestamp:
+      historyResult.pagination.latestPageOldestTimestamp,
+    reachability,
+    setAssetsRefreshKey,
+    observeLiveModeSession: sessionDisclosureState.observeLiveSession,
+  });
+
+  // -------------------------------------------------------------------------
+  // Send message
+  // -------------------------------------------------------------------------
+  const {
+    sendMessage,
+    handleStopGenerating,
+    queuedMessages,
+    handleCancelQueuedMessage,
+    handleCancelAllQueued,
+    handleSteerMessage,
+    handleEditQueueTail,
+  } = useSendMessage({
+    assistantId,
+    activeConversationId,
+    diskPressureChatBlockReason,
+    uiContextRef,
+    pendingOnboardingContextRef,
+    onboardingDraftConversationIdRef,
+    startReconciliationLoop,
+    cancelReconciliation,
+    refreshConversations,
+  });
+
+  // A proven iOS "Send Message to Chat" intent parks a send request rather
+  // than a pre-fill; fulfil it here once the target thread is confirmed (or
+  // demote it to a pre-fill when the target is gone). Needs the loader's
+  // existence verdict and `sendMessage`, hence this placement.
+  useDeepLinkThreadSend({
+    assistantId,
+    isAssistantActive: assistantState.kind === "active",
+    activeConversationId,
+    conversationExistsOnServer,
+    sendMessage,
+  });
+  useShareInboxSend({
+    assistantId,
+    isAssistantActive: assistantState.kind === "active",
+    activeConversationId,
+    conversationExistsOnServer,
+    sendMessage,
+  });
+  // Emails picked on the Assistant Inbox page, parked for the draft it minted;
+  // staged as composer attachments once that draft is on screen.
+  usePendingEmailReferences({ activeConversationId });
+
+  // Auto-send: URL ?prompt=, pre-chat reachability probe, onboarding message.
+  useAutoSendEffects({
+    assistantId,
+    activeConversationId,
+    searchParams,
+    setSearchParams,
+    navigationState: location.state,
+    sendMessage,
+    prefillComposer: prefillComposerFromUrl,
+    reachabilityPhase: reachability.state.phase,
+    reachabilityProbe: reachability.probe,
+    getPendingInitialMessage: () =>
+      peekPendingPreChatContext()?.initialMessage ?? undefined,
+    getPendingInitialMessageHidden: () =>
+      peekPendingPreChatContext()?.initialMessageHidden === true,
+  });
+
+  // Auto-continue after the inline "Connect Claude Code" card finishes: the card
+  // flips a store flag (it can't reach `sendMessage`), and here we turn that into
+  // a hidden continuation send so the assistant re-runs the failed spawn without
+  // the user typing "retry".
+  const sendAcpContinue = useCallback(
+    () => void sendMessage(ACP_CONNECT_CONTINUE_PROMPT, [], { hidden: true }),
+    [sendMessage],
+  );
+  useAcpAutoContinue(sendAcpContinue);
+
+  // Onboarding deep-link attribution: emit the research-onboarding check-in
+  // funnel step when the user lands here from the Day-2 calendar event's CTA.
+  useOnboardingAttribution({
+    searchParams,
+    setSearchParams,
+    userId: authUserId,
+  });
+
+  useEffect(() => {
+    if (reachability.state.phase !== "failed") {
+      return;
+    }
+    useChatSessionStore.getState().setError({
+      message: "Connection lost. Please try again.",
+    });
+  }, [reachability.state.phase]);
+
+  // Focused research-onboarding "deeper dive": the results overlay (rendered
+  // by ChatLayout, outside this component) stages a follow-up message; send it
+  // through the real pipeline once the current turn is idle, then clear it.
+  const pendingFollowupMessage =
+    useOnboardingFocusStore.use.pendingFollowupMessage();
+  useEffect(() => {
+    if (!pendingFollowupMessage) {
+      return;
+    }
+    if (isSending(useTurnStore.getState().phase)) {
+      return;
+    }
+    useOnboardingFocusStore.getState().clearFollowup();
+    void sendMessage(pendingFollowupMessage);
+  }, [pendingFollowupMessage, sendMessage]);
+
+  // Post-hatch "Connecting…" overlay lifecycle — pre-chat detector,
+  // messages-arrived clear, safety timer, conversation-switch clear.
+  const autoGreet = useAutoGreetGate(
+    activeConversationId,
+    peekPendingPreChatContext()?.initialMessage != null,
+    onboardingConversationId,
+  );
+
+  // Stash the initial message before the first send consumes it from
+  // sessionStorage, so the retry callback can re-send it.
+  const initialMessageRef = useRef(
+    peekPendingPreChatContext()?.initialMessage ?? null,
+  );
+  const handleAutoGreetRetry = useCallback(() => {
+    const message = initialMessageRef.current;
+    if (!message) {
+      lifecycleService.clearExpectingFirstMessage();
+      return;
+    }
+    if (isSending(useTurnStore.getState().phase)) {
+      return;
+    }
+    lifecycleService.markExpectingFirstMessage();
+    void sendMessage(message);
+  }, [sendMessage]);
+
+  // Legacy deep-link: ?app=<id> redirects onto the app route.
+  useDeepLinkApp(urlConversationId ?? null, searchParams);
+
+  // The app segment of the URL names an app for the viewer to show.
+  useAppRouteSync(assistantId, urlConversationId ?? null, urlAppId ?? null);
+
+  // Conversation-change side effects (dismiss prompts, reset subagent state,
+  // auto-fetch subagent details for entries reconstructed from history)
+  useConversationChangeEffects(assistantId, activeConversationId);
+
+  // Resync subagent rows from the daemon on load and after an SSE reopen, so a
+  // run that streamed nothing this session still shows up (and a stuck-running
+  // entry the daemon has forgotten settles).
+  useSubagentReconcile(
+    assistantId,
+    activeConversationId,
+    conversationExistsOnServer,
+  );
+
+  // Debug API — dev-facing surface for in-the-moment chat inspection.
+  // Unconditionally attached; negligible production overhead.
+  useChatDebugRegistration({
+    assistantId,
+    sanitizedMessagesRef,
+    transcriptItemsRef,
+    transcriptRef,
+    uiContextRef,
+    reconcileActiveConversation: () => reconcileActiveConversation("debug"),
+  });
+
+  // Deep-link: ?message=<id> scrolls to and highlights that message (e.g. the
+  // "Open" button on a saved bookmark).
+  useScrollToMessageParam({
+    transcriptRef,
+    searchParams,
+    setSearchParams,
+    conversationId: activeConversationId,
+  });
+
+  // -------------------------------------------------------------------------
+  // Conversation secondary actions (fork, inspect, copy, etc.)
+  // Primary actions (archive, pin, rename, mark-read) are owned by
+  // ChatConversationHeader in chat-layout.tsx.
+  // -------------------------------------------------------------------------
+  const {
+    handleForkConversation,
+    handleForkConversationFromMenu,
+    handleSummarizeUpToMessage,
+    handleRetryLatestTurn,
+    handleOpenInNewWindow,
+    handleInspectConversation,
+    handleInspectMessage,
+    handleCopyConversation,
+  } = useConversationSecondaryActions({
+    activeConversation: activeConversation ?? null,
+    refreshConversations,
+  });
+
+  // "Summarize up to here" confirm dialog. The hover action only records the
+  // target message; the POST fires from the dialog's confirm button — a
+  // misfired summarize mutates the assistant's live context with no undo, so
+  // it always goes through an explicit confirmation. Gated at the callback
+  // source on both the endpoint version and the internal-thread-actions
+  // audience: without either, no `onSummarizeUpToHere` is provided, so the
+  // hover button never renders and the dialog is unreachable.
+  const supportsSummarizeUpToHere = useSupportsSummarizeUpToHere();
+  const [pendingSummarizeMessageId, setPendingSummarizeMessageId] = useState<
+    string | null
+  >(null);
+  const [summarizePending, setSummarizePending] = useState(false);
+  // A pending target only counts while the viewer still qualifies, so a flag
+  // sync that revokes the gate mid-dialog closes it and takes its confirm
+  // button with it rather than leaving one summarize reachable. The derived
+  // value closes the dialog in the same render the gate drops; the effect
+  // below discards the target itself, so restoring the flag cannot resurrect
+  // a confirmation the viewer never re-opened.
+  const activeSummarizeMessageId = canUseInternalActions
+    ? pendingSummarizeMessageId
+    : null;
+  useEffect(() => {
+    if (!canUseInternalActions) {
+      setPendingSummarizeMessageId(null);
+    }
+  }, [canUseInternalActions]);
+  const handleSummarizeUpToHere = useCallback((messageId: string) => {
+    setPendingSummarizeMessageId(messageId);
+  }, []);
+  const handleConfirmSummarize = useCallback(() => {
+    if (!activeSummarizeMessageId) {
+      return;
+    }
+    setSummarizePending(true);
+    // Errors toast inside the handler; the dialog just closes.
+    void handleSummarizeUpToMessage(activeSummarizeMessageId).finally(() => {
+      setSummarizePending(false);
+      setPendingSummarizeMessageId(null);
+    });
+  }, [activeSummarizeMessageId, handleSummarizeUpToMessage]);
+  const handleCancelSummarize = useCallback(() => {
+    setPendingSummarizeMessageId(null);
+  }, []);
+
+  // "Retry" confirm dialog. Same shape as summarize: the hover action only
+  // opens the dialog; the POST fires from its confirm button — retry
+  // permanently discards the latest assistant response, so it always goes
+  // through an explicit confirmation. Capability-gated at the callback
+  // source: daemons without the retry endpoint get no `onRetryLatestTurn`,
+  // so the hover button never renders and the dialog is unreachable.
+  const supportsRetryTurn = useAssistantCapability("retryLastTurn");
+  const [retryConfirmOpen, setRetryConfirmOpen] = useState(false);
+  const [retryPending, setRetryPending] = useState(false);
+  const handleRetryLatestTurnRequested = useCallback(() => {
+    setRetryConfirmOpen(true);
+  }, []);
+  const handleConfirmRetry = useCallback(() => {
+    setRetryPending(true);
+    // Errors toast inside the handler; the dialog just closes.
+    void handleRetryLatestTurn().finally(() => {
+      setRetryPending(false);
+      setRetryConfirmOpen(false);
+    });
+  }, [handleRetryLatestTurn]);
+  const handleCancelRetry = useCallback(() => {
+    setRetryConfirmOpen(false);
+  }, []);
+
+  // Manual "Refresh" menu item — re-fetch the latest history page through the
+  // same TanStack Query invalidation the pull-to-refresh gesture uses, so the
+  // transcript reconciles through the seq frontier exactly like a page reload.
+  const invalidateHistory = historyResult.pagination.invalidate;
+  const handleRefreshLatest = useCallback(() => {
+    void invalidateHistory();
+  }, [invalidateHistory]);
+
+  // -------------------------------------------------------------------------
+  // Layout header slot registration — supplements, top bar right
+  // -------------------------------------------------------------------------
+  useChatHeaderRegistration({
+    assetsRefreshKey,
+    handleForkConversationFromMenu: canUseInternalActions
+      ? handleForkConversationFromMenu
+      : undefined,
+    handleOpenInNewWindow,
+    handleInspectConversation,
+    handleCopyConversation,
+    onRefresh: handleRefreshLatest,
+  });
+
+  // -------------------------------------------------------------------------
+  // Auto-greet connecting overlay — shows while waiting for the first
+  // message after hatching. Hooks continue running (SSE, queries) so the
+  // gate clears when the first message arrives.
+  // -------------------------------------------------------------------------
+  if (autoGreet.show) {
+    const turnActive = turnPhase !== "idle";
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-4">
+        <p className="text-[var(--text-secondary)]">
+          {autoGreet.timedOut
+            ? turnActive
+              ? t("activeChatView.stillWorking")
+              : t("activeChatView.takingLonger")
+            : t("activeChatView.startingFirst")}
+        </p>
+        {autoGreet.timedOut && !turnActive && (
+          <Button
+            variant="outlined"
+            size="regular"
+            onClick={handleAutoGreetRetry}
+          >
+            {t("activeChatView.tryAgain")}
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Props assembly — only values ChatMainPanel can't own locally
+  // -------------------------------------------------------------------------
+  const chatRouteProps: ChatMainPanelProps = {
+    // Send message (orchestration owns SSE / queue lifecycle)
+    sendMessage,
+    handleStopGenerating,
+    queuedMessages,
+    handleCancelQueuedMessage,
+    handleCancelAllQueued,
+    handleSteerMessage,
+    handleEditQueueTail,
+
+    // Conversation secondary actions
+    handleForkConversation: canUseInternalActions
+      ? handleForkConversation
+      : undefined,
+    onSummarizeUpToHere:
+      supportsSummarizeUpToHere && canUseInternalActions
+        ? handleSummarizeUpToHere
+        : undefined,
+    onRetryLatestTurn: supportsRetryTurn
+      ? handleRetryLatestTurnRequested
+      : undefined,
+    handleInspectMessage: canUseInternalActions
+      ? handleInspectMessage
+      : undefined,
+
+    // History pagination
+    historyPagination: historyResult.pagination,
+    sessionDisclosureState,
+
+    // Disk pressure (single instance — avoids duplicate polling/subscriptions)
+    diskPressure,
+
+    // Resource pressure (single instance, same reasoning as disk pressure)
+    resourcePressure,
+
+    // Upward signals
+    setRefreshEpoch,
+
+    // Shared refs
+    inputRef,
+    sanitizedMessagesRef,
+    transcriptItemsRef,
+    transcriptRef,
+    uiContextRef,
+
+    // Onboarding
+    onboardingChoiceEligible,
+    didOnboarding,
+    onboardingConversationId,
+  };
+
+  return (
+    <>
+      <ChatContentLayout {...chatRouteProps} />
+
+      {assistantId && (isTokenDialogOpen || complexDeployApp) ? (
+        <LazyBoundary>
+          <DeployDialogs
+            assistantId={assistantId}
+            assistantName={assistantName ?? undefined}
+            onStartConversation={() => startNewConversation()}
+          />
+        </LazyBoundary>
+      ) : null}
+      <ConfirmDialog
+        open={activeSummarizeMessageId !== null}
+        title={t("activeChatView.summarizeTitle")}
+        message={t("activeChatView.summarizeMessage")}
+        confirmLabel={t("activeChatView.summarizeConfirm")}
+        isPending={summarizePending}
+        onConfirm={handleConfirmSummarize}
+        onCancel={handleCancelSummarize}
+      />
+      <ConfirmDialog
+        open={retryConfirmOpen}
+        title={t("activeChatView.retryTitle")}
+        message={t("activeChatView.retryMessage")}
+        confirmLabel={t("activeChatView.retryConfirm")}
+        isPending={retryPending}
+        onConfirm={handleConfirmRetry}
+        onCancel={handleCancelRetry}
+      />
+      <MobileChatOverlays />
+      {/* Stable mount for the Add Credits checkout, so it outlives the
+          billing-state-conditional CTAs that open it. */}
+      <LazyAddCreditsModal />
+    </>
+  );
+}

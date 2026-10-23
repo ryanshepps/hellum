@@ -1,0 +1,170 @@
+/** Pure helper functions for the chat composer.
+ *
+ *  Separated from the React component (`ChatComposer`) so they can be
+ *  unit-tested without a DOM or component render cycle. */
+
+// ---------------------------------------------------------------------------
+// Keyboard policy
+// ---------------------------------------------------------------------------
+
+export interface ComposerKeyDownPolicy {
+  input: string;
+  canSendAttachments: boolean;
+  /**
+   * Whether staged context (staged quotes, a staged channel reference) makes
+   * an otherwise empty input sendable. The caller folds every staged-context
+   * source into this one flag so the Enter policy and the send button cannot
+   * disagree about what counts as content.
+   */
+  hasStagedContext?: boolean;
+  /**
+   * Whether a dictation session is recording or transcribing. Words already
+   * spoken are content the composer does not hold yet, so Enter has to reach
+   * `onSubmit` (which finishes dictation before it sends) rather than being
+   * swallowed as "nothing to send".
+   */
+  dictationInFlight?: boolean;
+  sendDisabled: boolean;
+  attachmentsUploadingCount: number;
+  cmdEnterMode: boolean;
+}
+
+/**
+ * Pure-logic mirror of the textarea `onKeyDown` policy. Returns whether the
+ * Enter keypress should submit the form. The production handler delegates to
+ * this helper to keep behavior in lockstep.
+ *
+ * Returns:
+ *   - `"ignore"`: the event is not Enter-without-shift, IME composition, or
+ *     pointer is coarse — let the browser handle the keypress.
+ *   - `"submit"`: caller should `preventDefault()` and invoke `onSubmit`.
+ *   - `"prevent"`: caller should `preventDefault()` but NOT submit (sendDisabled,
+ *     uploading attachments, or no content).
+ */
+export function shouldSubmitOnEnter(
+  event: {
+    key: string;
+    shiftKey: boolean;
+    metaKey: boolean;
+    ctrlKey: boolean;
+    isComposing: boolean;
+    keyCode: number;
+  },
+  isPointerCoarse: boolean,
+  policy: ComposerKeyDownPolicy,
+): "ignore" | "submit" | "prevent" {
+  if (event.key !== "Enter" || event.shiftKey) {
+    return "ignore";
+  }
+  // Don't intercept IME composition (CJK input confirmation)
+  if (event.isComposing || event.keyCode === 229) {
+    return "ignore";
+  }
+  // Coarse primary pointer = phone/tablet; fine = mouse/trackpad.
+  // Touch-screen laptops (Surface, etc.) report "fine" and keep desktop
+  // Enter-to-send behavior.
+  if (isPointerCoarse) {
+    return "ignore";
+  }
+  // Cmd+Enter mode: only Cmd+Enter (Mac) or Ctrl+Enter (Win/Linux) submits;
+  // bare Enter inserts a newline.
+  if (policy.cmdEnterMode) {
+    if (!event.metaKey && !event.ctrlKey) {
+      return "ignore";
+    }
+  }
+  const hasContent =
+    Boolean(policy.input.trim()) ||
+    policy.canSendAttachments ||
+    Boolean(policy.hasStagedContext) ||
+    Boolean(policy.dictationInFlight);
+  if (
+    hasContent &&
+    !policy.sendDisabled &&
+    policy.attachmentsUploadingCount === 0
+  ) {
+    return "submit";
+  }
+  return "prevent";
+}
+
+// ---------------------------------------------------------------------------
+// Ghost-suggestion overlay policy
+// ---------------------------------------------------------------------------
+
+interface GhostSuffixPolicy {
+  pointerCoarse: boolean;
+  suggestion: string | null;
+  input: string;
+  hasAttachments: boolean;
+}
+
+/**
+ * Returns the visible suffix of an autocomplete suggestion to render as
+ * ghost text behind the textarea, or `null` to render no ghost.
+ *
+ * Suppressed when the primary pointer is coarse (touch devices): the only
+ * acceptance gesture is `Tab`, which is not present on iOS/Android soft
+ * keyboards, so rendering the overlay there is purely visual noise — and
+ * because the underlying textarea is `rows={1}`, multi-line ghost text
+ * gets clipped on narrow viewports.
+ */
+export function computeGhostSuffix(policy: GhostSuffixPolicy): string | null {
+  if (policy.pointerCoarse) {
+    return null;
+  }
+  if (!policy.suggestion || policy.hasAttachments) {
+    return null;
+  }
+  if (policy.suggestion.startsWith(policy.input)) {
+    return policy.suggestion.slice(policy.input.length) || null;
+  }
+  if (!policy.input) {
+    return policy.suggestion;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Mobile draft geometry
+// ---------------------------------------------------------------------------
+
+/**
+ * Slack against subpixel rounding: a natural width is measured as a whole
+ * number of pixels while the space it has to fit in is fractional, so a draft
+ * that just fits can read a pixel wider than its own line.
+ */
+const DRAFT_FIT_TOLERANCE_PX = 1;
+
+export interface DraftLineMetrics {
+  /** Width the draft renders at when nothing wraps it. */
+  naturalWidthPx: number;
+  /** Width the draft has while the composer keeps its single inline row. */
+  inlineWidthPx: number;
+  /** Whether the draft carries a line break of its own. */
+  hasHardBreak: boolean;
+}
+
+/**
+ * Whether the draft has outgrown the one line the inline mobile row gives it.
+ *
+ * Both terms are measured against the INLINE width, never against the width
+ * the draft currently has. The stacked layout hands the text the whole card,
+ * so a draft measured there would fit on one line again, flip the row back,
+ * wrap again, and oscillate for as long as the user held that draft. Judged
+ * against a width that does not depend on which layout is up, the answer is
+ * the same in both, and the row settles.
+ */
+export function isDraftPastOneLine(metrics: DraftLineMetrics): boolean {
+  if (metrics.hasHardBreak) {
+    return true;
+  }
+  // An unmeasured row (before first layout, or a test DOM that has none) has
+  // no width for the draft to outgrow.
+  if (metrics.inlineWidthPx <= 0) {
+    return false;
+  }
+  return (
+    metrics.naturalWidthPx > metrics.inlineWidthPx + DRAFT_FIT_TOLERANCE_PX
+  );
+}

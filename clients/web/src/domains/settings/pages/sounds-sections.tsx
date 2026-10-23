@@ -1,0 +1,460 @@
+import { ChevronDown, Play, Trash2 } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
+import type { AvailableSound } from "@/lib/sounds/api";
+import {
+  defaultSoundsConfig,
+  displayLabelForFilename,
+  SOUND_EVENT_IDS,
+  type SoundEventConfig,
+  type SoundEventId,
+} from "@/lib/sounds/types";
+import { getSoundManager } from "@/lib/sounds/sound-manager";
+import { useActiveAssistantId } from "@/assistant/use-active-assistant-id";
+import {
+  soundsAvailableGetOptions,
+  soundsConfigGetOptions,
+  soundsConfigGetSetQueryData,
+  soundsConfigPutMutation,
+} from "@/generated/daemon/@tanstack/react-query.gen";
+import type { SoundsConfigGetResponse } from "@/generated/daemon/types.gen";
+import { useTranslation } from "@/i18n";
+import { Button } from "@vellumai/design-library/components/button";
+import { Card } from "@vellumai/design-library/components/card";
+import { Toggle } from "@vellumai/design-library/components/toggle";
+
+type SoundsConfig = SoundsConfigGetResponse;
+
+type SettingsTranslate = ReturnType<typeof useTranslation<"settings">>["t"];
+
+const SOUND_EVENT_LABEL_KEYS = {
+  task_complete: "soundsSections.soundEventTaskComplete",
+  needs_input: "soundsSections.soundEventNeedsInput",
+  task_failed: "soundsSections.soundEventTaskFailed",
+  notification: "soundsSections.soundEventNotification",
+  new_conversation: "soundsSections.soundEventNewConversation",
+  message_sent: "soundsSections.soundEventMessageSent",
+  character_poke: "soundsSections.soundEventCharacterPoke",
+  random: "soundsSections.soundEventRandom",
+} as const satisfies Record<
+  SoundEventId,
+  | "soundsSections.soundEventTaskComplete"
+  | "soundsSections.soundEventNeedsInput"
+  | "soundsSections.soundEventTaskFailed"
+  | "soundsSections.soundEventNotification"
+  | "soundsSections.soundEventNewConversation"
+  | "soundsSections.soundEventMessageSent"
+  | "soundsSections.soundEventCharacterPoke"
+  | "soundsSections.soundEventRandom"
+>;
+
+function soundEventDisplayName(event: SoundEventId, t: SettingsTranslate): string {
+  return t(SOUND_EVENT_LABEL_KEYS[event]);
+}
+
+function ToggleRow({
+  label,
+  description,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-1">
+      <div>
+        <div className="text-body-medium-lighter text-[var(--content-default)]">
+          {label}
+        </div>
+        {description && (
+          <div className="text-body-small-default text-[var(--content-tertiary)]">
+            {description}
+          </div>
+        )}
+      </div>
+      <Toggle
+        checked={checked}
+        disabled={disabled}
+        onChange={onChange}
+        label={label}
+      />
+    </div>
+  );
+}
+
+function Divider() {
+  return <div className="border-t border-[var(--border-base)]" />;
+}
+
+function SoundEventRow({
+  event,
+  eventConfig,
+  availableSounds,
+  globalEnabled,
+  onToggle,
+  onAddSound,
+  onRemoveSound,
+  onPreview,
+  t,
+}: {
+  event: SoundEventId;
+  eventConfig: SoundEventConfig;
+  availableSounds: AvailableSound[];
+  globalEnabled: boolean;
+  onToggle: (enabled: boolean) => void;
+  onAddSound: (filename: string) => void;
+  onRemoveSound: (filename: string) => void;
+  onPreview: (filename: string) => void;
+  t: SettingsTranslate;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const eventName = soundEventDisplayName(event, t);
+
+  const remaining = availableSounds.filter(
+    (s) => !eventConfig.sounds.includes(s.filename),
+  );
+  const allAdded = availableSounds.length > 0 && remaining.length === 0;
+
+  return (
+    <div className="py-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-body-medium-lighter text-[var(--content-default)]">
+          {eventName}
+        </span>
+        <Toggle
+          checked={eventConfig.enabled}
+          disabled={!globalEnabled}
+          onChange={onToggle}
+          label={t("soundsSections.enableEvent", { eventName })}
+        />
+      </div>
+
+      {eventConfig.enabled && (
+        <div className="mt-2 space-y-1 pl-2">
+          {eventConfig.sounds.length === 0 ? (
+            <p className="text-body-small-default text-[var(--content-tertiary)]">
+              {t("soundsSections.defaultBlip")}
+            </p>
+          ) : (
+            eventConfig.sounds.map((filename) => (
+              <div
+                key={filename}
+                className="flex items-center justify-between gap-2"
+              >
+                <span
+                  className="truncate text-body-small-default text-[var(--content-secondary)]"
+                  title={filename}
+                >
+                  {displayLabelForFilename(filename)}
+                </span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="compact"
+                    iconOnly={<Play />}
+                    iconOnlyGlyphClassName="[&_svg]:size-3"
+                    expandOnMobile={false}
+                    onClick={() => onPreview(filename)}
+                    className="h-4 w-6"
+                    aria-label={t("soundsSections.previewSoundAriaLabel", {
+                      filename,
+                    })}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="compact"
+                    iconOnly={<Trash2 />}
+                    iconOnlyGlyphClassName="[&_svg]:size-3"
+                    expandOnMobile={false}
+                    onClick={() => onRemoveSound(filename)}
+                    className="h-4 w-6"
+                    aria-label={t("soundsSections.removeSoundAriaLabel", {
+                      filename,
+                    })}
+                  />
+                </div>
+              </div>
+            ))
+          )}
+
+          {availableSounds.length === 0 ? (
+            <p className="text-body-small-default italic text-[var(--content-disabled)]">
+              {t("soundsSections.noSoundFiles")}
+            </p>
+          ) : allAdded ? (
+            <button
+              type="button"
+              disabled
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--border-base)] bg-white px-2 py-1 text-body-small-default text-[var(--content-disabled)] disabled:cursor-not-allowed dark:bg-[var(--surface-lift)] dark:text-[var(--content-tertiary)]"
+            >
+              {t("soundsSections.allSoundsAdded")}
+            </button>
+          ) : (
+            <div className="relative inline-block">
+              <button
+                type="button"
+                onClick={() => setPickerOpen((v) => !v)}
+                className="inline-flex items-center gap-1 rounded-md border border-[var(--border-base)] bg-white px-2 py-1 text-body-small-default text-[var(--content-default)] hover:bg-[var(--surface-base)] dark:bg-[var(--surface-lift)] dark:hover:bg-[var(--ghost-hover)]"
+              >
+                {t("soundsSections.addSound")}
+                <ChevronDown className="h-3 w-3" />
+              </button>
+              {pickerOpen && (
+                <div
+                  className="absolute left-0 z-10 mt-1 max-h-64 w-56 overflow-auto rounded-md border border-[var(--border-base)] bg-white p-1 shadow-lg dark:bg-[var(--surface-lift)]"
+                  onMouseLeave={() => setPickerOpen(false)}
+                >
+                  {remaining.map((s) => (
+                    <button
+                      key={s.filename}
+                      type="button"
+                      onClick={() => {
+                        onAddSound(s.filename);
+                        setPickerOpen(false);
+                      }}
+                      className="block w-full truncate rounded px-2 py-1 text-left text-body-small-default text-[var(--content-default)] hover:bg-[var(--surface-base)] dark:hover:bg-[var(--ghost-hover)]"
+                      title={s.filename}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function SoundsSections() {
+  const { t } = useTranslation("settings");
+  const queryClient = useQueryClient();
+  const assistantId = useActiveAssistantId();
+
+  const configOptions = useMemo(
+    () => soundsConfigGetOptions({ path: { assistant_id: assistantId } }),
+    [assistantId],
+  );
+  const availableOptions = useMemo(
+    () => soundsAvailableGetOptions({ path: { assistant_id: assistantId } }),
+    [assistantId],
+  );
+
+  const { data: rawConfig } = useQuery(configOptions);
+
+  const { data: availableRaw } = useQuery(availableOptions);
+
+  const config = rawConfig ?? defaultSoundsConfig();
+  const available = availableRaw?.sounds ?? [];
+
+  const sdkOptions = useMemo(
+    () => ({ path: { assistant_id: assistantId } }),
+    [assistantId],
+  );
+
+  const saveMutation = useMutation({
+    ...soundsConfigPutMutation(sdkOptions),
+    onMutate: async (variables) => {
+      await queryClient.cancelQueries({ queryKey: configOptions.queryKey });
+      const previous = queryClient.getQueryData(configOptions.queryKey);
+      soundsConfigGetSetQueryData(queryClient, sdkOptions, variables.body);
+      return { previous };
+    },
+    onError: (_error, _next, context) => {
+      if (context?.previous !== undefined) {
+        soundsConfigGetSetQueryData(queryClient, sdkOptions, context.previous);
+      }
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: configOptions.queryKey });
+    },
+  });
+
+  const updateConfig = useCallback(
+    (producer: (prev: SoundsConfig) => SoundsConfig) => {
+      const prev =
+        queryClient.getQueryData(configOptions.queryKey) ??
+        defaultSoundsConfig();
+      const next = producer(prev);
+      saveMutation.mutate({
+        path: { assistant_id: assistantId },
+        body: next,
+      });
+    },
+    [assistantId, configOptions.queryKey, queryClient, saveMutation],
+  );
+
+  const setGlobalEnabled = (enabled: boolean) => {
+    updateConfig((prev) => ({ ...prev, globalEnabled: enabled }));
+  };
+  const commitVolume = (volume: number) => {
+    updateConfig((prev) => ({ ...prev, volume }));
+  };
+
+  const [draftVolume, setDraftVolume] = useState<number | null>(null);
+  const displayVolume = draftVolume ?? config.volume;
+
+  const setEventEnabled = (event: SoundEventId, enabled: boolean) => {
+    updateConfig((prev) => ({
+      ...prev,
+      events: {
+        ...prev.events,
+        [event]: {
+          ...(prev.events[event] ?? { enabled: false, sounds: [] }),
+          enabled,
+        },
+      },
+    }));
+  };
+
+  const addSoundToEvent = (event: SoundEventId, filename: string) => {
+    updateConfig((prev) => {
+      const current = prev.events[event] ?? { enabled: true, sounds: [] };
+      if (current.sounds.includes(filename)) {
+        return prev;
+      }
+      return {
+        ...prev,
+        events: {
+          ...prev.events,
+          [event]: { ...current, sounds: [...current.sounds, filename] },
+        },
+      };
+    });
+  };
+
+  const removeSoundFromEvent = (event: SoundEventId, filename: string) => {
+    updateConfig((prev) => {
+      const current = prev.events[event];
+      if (!current) {
+        return prev;
+      }
+      return {
+        ...prev,
+        events: {
+          ...prev.events,
+          [event]: {
+            ...current,
+            sounds: current.sounds.filter((s) => s !== filename),
+          },
+        },
+      };
+    });
+  };
+
+  const previewDefault = () => {
+    void getSoundManager().previewFallbackBlip(config.volume);
+  };
+  const previewFile = (filename: string) => {
+    void getSoundManager().previewSound(filename, config.volume);
+  };
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <ToggleRow
+          label={t("soundsSections.enableSoundEffects")}
+          description={t("soundsSections.enableSoundEffectsDescription")}
+          checked={config.globalEnabled}
+          onChange={setGlobalEnabled}
+        />
+        <Divider />
+        <div className="flex items-center gap-3 py-3">
+          <span className="text-body-medium-lighter text-[var(--content-default)]">
+            {t("soundsSections.volume")}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={displayVolume}
+            onChange={(e) => setDraftVolume(parseFloat(e.target.value))}
+            onPointerUp={(e) => {
+              const next = parseFloat(e.currentTarget.value);
+              setDraftVolume(null);
+              if (next !== config.volume) {
+                commitVolume(next);
+              }
+            }}
+            onKeyUp={(e) => {
+              const next = parseFloat(e.currentTarget.value);
+              setDraftVolume(null);
+              if (next !== config.volume) {
+                commitVolume(next);
+              }
+            }}
+            onBlur={(e) => {
+              const next = parseFloat(e.currentTarget.value);
+              setDraftVolume(null);
+              if (next !== config.volume) {
+                commitVolume(next);
+              }
+            }}
+            className="h-1 w-48 cursor-pointer"
+            disabled={!config.globalEnabled}
+            aria-label={t("soundsSections.volumeAriaLabel")}
+          />
+          <span className="tabular-nums text-body-small-default text-[var(--content-tertiary)]">
+            {Math.round(displayVolume * 100)}%
+          </span>
+        </div>
+        <Divider />
+        <div className="flex items-center justify-between py-3">
+          <span className="text-body-medium-lighter text-[var(--content-default)]">
+            {t("soundsSections.previewDefaultBlip")}
+          </span>
+          <button
+            type="button"
+            onClick={previewDefault}
+            disabled={!config.globalEnabled}
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-[var(--border-base)] bg-white px-3 py-1.5 text-body-medium-lighter text-[var(--content-default)] transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50 dark:bg-[var(--surface-lift)] dark:hover:bg-[var(--ghost-hover)]"
+          >
+            <Play className="h-3.5 w-3.5" />
+            {t("soundsSections.preview")}
+          </button>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="pb-2">
+          <h3 className="text-title-small text-[var(--content-default)]">
+            {t("soundsSections.soundEventsTitle")}
+          </h3>
+          <p className="text-body-small-lighter text-[var(--content-tertiary)]">
+            {t("soundsSections.soundEventsDescription")}
+          </p>
+        </div>
+        <div className="divide-y divide-[var(--border-base)]">
+          {SOUND_EVENT_IDS.map((event) => (
+            <SoundEventRow
+              key={event}
+              event={event}
+              eventConfig={
+                config.events[event] ?? { enabled: false, sounds: [] }
+              }
+              availableSounds={available}
+              globalEnabled={config.globalEnabled}
+              onToggle={(enabled) => setEventEnabled(event, enabled)}
+              onAddSound={(filename) => addSoundToEvent(event, filename)}
+              onRemoveSound={(filename) =>
+                removeSoundFromEvent(event, filename)
+              }
+              onPreview={(filename) => previewFile(filename)}
+              t={t}
+            />
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}

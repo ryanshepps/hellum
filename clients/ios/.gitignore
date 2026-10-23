@@ -1,0 +1,34 @@
+App/build
+App/Pods
+App/output
+App/App/public
+DerivedData
+xcuserdata
+
+# Xcode's build products for the local `CapApp-SPM` package: compiled
+# frameworks, dSYMs, and their binaries, tens of megabytes of them.
+#
+# `App/build` above does not cover this path. That pattern is anchored, so it
+# matches one level only, and these land a level deeper in
+# `App/CapApp-SPM/build`. The package's own `CapApp-SPM/.gitignore` is
+# SwiftPM's default: it ignores `/.build` rather than the `build/` Xcode
+# writes for a package built inside an Xcode project, and `cap sync ios`
+# regenerates that file, so the rule lives here where nothing rewrites it.
+App/CapApp-SPM/build
+
+# Cordova plugins for Capacitor
+capacitor-cordova-ios-plugins
+
+# Generated Config files
+App/App/capacitor.config.json
+App/App/config.xml
+
+# Generated Xcode project. `App.xcodeproj/` is regenerated from
+# `App/project.yml` on every CI run via `xcodegen generate` (see
+# `.github/workflows/release-ios.yaml`). Local devs run
+# `xcodegen generate` after `cap sync ios` and before
+# `open App.xcodeproj` — see `clients/ios/README.md`. Nothing inside this
+# tree should ever be committed; the SPM lockfile that Xcode normally
+# writes here is unnecessary because `CapApp-SPM/Package.swift`
+# already pins `capacitor-swift-pm` with `exact:`.
+App/App.xcodeproj/

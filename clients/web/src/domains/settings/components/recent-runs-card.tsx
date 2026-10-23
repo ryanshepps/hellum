@@ -1,0 +1,191 @@
+import { ChevronRight } from "lucide-react";
+import { useState } from "react";
+import { useNavigate } from "react-router";
+
+import { DetailShellLoading, DetailShellNotice } from "@/components/detail-shell";
+import { InsetDetailCard } from "@/components/inset-detail-card";
+import { StatusDot } from "@/domains/settings/components/schedule-shared-ui";
+import type { ScheduleRun } from "@/domains/settings/types/schedules";
+import {
+  formatDuration,
+  formatScheduleCost,
+  formatTimestamp,
+  getOpenableScheduleRunConversationId,
+  hasRunText,
+} from "@/domains/settings/utils/schedule-formatters";
+import { useTranslation } from "@/i18n";
+import { navigateToConversation } from "@/utils/conversation-navigation";
+import { Button } from "@vellumai/design-library/components/button";
+import { PanelItem } from "@vellumai/design-library/components/panel-item";
+
+interface RecentRunsCardProps {
+  runs: ScheduleRun[] | undefined;
+  isLoading: boolean;
+  emptyMessage?: string;
+  /** Whether older runs exist beyond the loaded pages. */
+  hasMore?: boolean;
+  /** Whether an older page is currently being fetched. */
+  isLoadingMore?: boolean;
+  /** Fetch the next (older) page of runs. */
+  onLoadMore?: () => void;
+}
+
+export function RecentRunsCard({
+  runs,
+  isLoading,
+  emptyMessage,
+  hasMore = false,
+  isLoadingMore = false,
+  onLoadMore,
+}: RecentRunsCardProps) {
+  const { t } = useTranslation("settings");
+  const navigate = useNavigate();
+  const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+  const resolvedEmptyMessage =
+    emptyMessage ?? t("recentRunsCard.emptyDefault");
+
+  // Rendered in the empty state too: a page can filter down to nothing
+  // (e.g. bookkeeping-only pages from daemons that still send them) while
+  // older pages hold real runs, so pagination must stay reachable.
+  const loadMoreControl =
+    hasMore && onLoadMore ? (
+      <div className="flex justify-center pt-3">
+        <Button
+          variant="outlined"
+          size="compact"
+          onClick={onLoadMore}
+          disabled={isLoadingMore}
+          loading={isLoadingMore}
+        >
+          {isLoadingMore
+            ? t("recentRunsCard.loadingMore")
+            : t("recentRunsCard.loadMore")}
+        </Button>
+      </div>
+    ) : null;
+
+  return (
+    <InsetDetailCard title={t("recentRunsCard.title")}>
+      {isLoading ? (
+        <DetailShellLoading placement="section" />
+      ) : !runs || runs.length === 0 ? (
+        <>
+          <DetailShellNotice placement="section">
+            {resolvedEmptyMessage}
+          </DetailShellNotice>
+          {loadMoreControl}
+        </>
+      ) : (
+        <div className="divide-y divide-[var(--border-base)]">
+          {runs.map((run, index) => {
+            const conversationId = getOpenableScheduleRunConversationId(run);
+            const hasOutput = hasRunText(run.output);
+            const hasError = hasRunText(run.error);
+            // Runs that never executed (skipped by a guard, missed while the
+            // daemon was down) have no duration or cost; their detail line is
+            // the reason text instead, so no expandable details either.
+            const isUnexecuted =
+              run.status === "skipped" || run.status === "missed";
+            const hasLocalDetails =
+              !conversationId && !isUnexecuted && (hasOutput || hasError);
+            const isExpanded = expandedRunId === run.id;
+            const detailsId = `schedule-run-details-${index}`;
+            return (
+              <div key={run.id}>
+                <PanelItem
+                  label={
+                    <span className="flex min-w-0 flex-1 items-center gap-3">
+                      <StatusDot status={run.status} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-body-medium-lighter text-[var(--content-default)]">
+                          {/* Runs with a title (memory retrospectives) lead
+                              with it — it names the reviewed conversation —
+                              and keep the timestamp on the detail line. */}
+                          {hasRunText(run.title)
+                            ? run.title
+                            : formatTimestamp(run.startedAt)}
+                        </span>
+                        <span className="block text-body-small-default text-[var(--content-tertiary)]">
+                          {hasRunText(run.title)
+                            ? `${formatTimestamp(run.startedAt)} · `
+                            : ""}
+                          {isUnexecuted ? (
+                            <>
+                              {hasOutput
+                                ? run.output
+                                : run.status === "missed"
+                                  ? t("recentRunsCard.missed")
+                                  : t("recentRunsCard.skipped")}
+                            </>
+                          ) : (
+                            <>
+                              {formatDuration(run.durationMs)} ·{" "}
+                              {formatScheduleCost(run.estimatedCostUsd)}
+                            </>
+                          )}
+                          {run.status === "error" && run.error && (
+                            <span className="ml-2 text-[var(--system-negative-strong)]">
+                              {run.error.slice(0, 80)}
+                              {run.error.length > 80 ? "…" : ""}
+                            </span>
+                          )}
+                        </span>
+                      </span>
+                      {conversationId || hasLocalDetails ? (
+                        <ChevronRight
+                          className={`h-4 w-4 shrink-0 text-[var(--content-tertiary)] transition-transform ${
+                            isExpanded ? "rotate-90" : ""
+                          }`}
+                        />
+                      ) : null}
+                    </span>
+                  }
+                  onSelect={
+                    conversationId
+                      ? () => navigateToConversation(navigate, conversationId)
+                      : hasLocalDetails
+                        ? () => setExpandedRunId(isExpanded ? null : run.id)
+                        : undefined
+                  }
+                  aria-label={t("recentRunsCard.runAtAria", {
+                    time: formatTimestamp(run.startedAt),
+                  })}
+                  aria-expanded={hasLocalDetails ? isExpanded : undefined}
+                  aria-controls={hasLocalDetails ? detailsId : undefined}
+                  className="h-auto py-2.5 gap-3 -mx-2 px-2"
+                />
+                {hasLocalDetails && isExpanded ? (
+                  <div id={detailsId} className="px-2 pb-3">
+                    <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-3">
+                      {hasOutput ? (
+                        <div>
+                          <div className="mb-1 text-body-small-default text-[var(--content-secondary)]">
+                            {t("recentRunsCard.output")}
+                          </div>
+                          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-body-small-default font-mono text-[var(--content-default)]">
+                            {run.output}
+                          </pre>
+                        </div>
+                      ) : null}
+                      {hasError ? (
+                        <div>
+                          <div className="mb-1 text-body-small-default text-[var(--content-secondary)]">
+                            {t("recentRunsCard.error")}
+                          </div>
+                          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-body-small-default font-mono text-[var(--system-negative-strong)]">
+                            {run.error}
+                          </pre>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+          {loadMoreControl}
+        </div>
+      )}
+    </InsetDetailCard>
+  );
+}

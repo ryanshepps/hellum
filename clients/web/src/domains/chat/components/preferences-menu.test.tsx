@@ -1,0 +1,850 @@
+/**
+ * Tests for `PreferencesMenu`.
+ *
+ * Uses `renderToStaticMarkup` (SSR) so only the trigger and top-level
+ * structure are exercisable — Radix Popover/BottomSheet content is not
+ * rendered when `open={false}`. Interactive content tests (menu items,
+ * admin visibility, credits row) would require a DOM environment with
+ * React Testing Library.
+ */
+
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
+import { createElement, Fragment } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+
+import { SideMenu } from "@vellumai/design-library";
+
+import type { PreferencesUsage } from "@/domains/chat/hooks/use-preferences-usage";
+import { MIN_VERSION } from "@/lib/backwards-compat/use-supports-activation-progress";
+import type { AuthUser } from "@/stores/auth-store";
+import { useAssistantIdentityStore } from "@/stores/assistant-identity-store";
+import { useClientFeatureFlagStore } from "@/stores/client-feature-flag-store";
+import { useResolvedAssistantsStore } from "@/stores/resolved-assistants-store";
+import {
+  restoreStubbedModules,
+  stubModule,
+} from "@/utils/module-mock.test-helper";
+import { routes } from "@/utils/routes";
+
+const isTouchMobileRef = { value: false };
+const nativeAndroidRef = { value: false };
+
+// Every module below is replaced through `stubModule`, which spreads the real
+// one and registers the undo `afterAll` runs: `mock.module` is process-global
+// in bun, so a partial shape erases a module's other exports for whatever file
+// loads it next, and a replacement left standing outlives this file.
+afterAll(restoreStubbedModules);
+
+stubModule(
+  "@/hooks/use-touch-mobile",
+  await import("@/hooks/use-touch-mobile"),
+  {
+    useTouchMobile: () => isTouchMobileRef.value,
+  },
+);
+
+stubModule(
+  "@/runtime/platform-detection",
+  await import("@/runtime/platform-detection"),
+  { useIsNativeAndroid: () => nativeAndroidRef.value },
+);
+
+stubModule(
+  "@/hooks/use-platform-gate",
+  await import("@/hooks/use-platform-gate"),
+  {
+    usePlatformGate: () => "full",
+    useActiveAssistantIsPlatformHosted: () => true,
+  },
+);
+
+// Whether the org store can supply the `Vellum-Organization-Id` header, which
+// is the half of the billing gate a test can switch off from here.
+const orgReadyRef = { value: true };
+stubModule(
+  "@/hooks/use-is-org-ready",
+  await import("@/hooks/use-is-org-ready"),
+  {
+    useIsOrgReady: () => orgReadyRef.value,
+  },
+);
+
+// The BYOK gate pulls the daemon generated client (and its real
+// `queryOptions` import) into the graph; this suite's partial
+// `@tanstack/react-query` mock cannot host that, and the menu only reads
+// `enabled`/`balance`, which the gate never touches.
+stubModule(
+  "@/hooks/use-byok-credit-banner-gate",
+  await import("@/hooks/use-byok-credit-banner-gate"),
+  {
+    useByokCreditRouteVerdict: () => ({
+      suppress: false,
+      settled: true,
+      routeBurnsManaged: false,
+    }),
+  },
+);
+
+const authRef: {
+  isAuthenticated: boolean;
+  user: AuthUser;
+  logout: () => Promise<void>;
+} = {
+  isAuthenticated: true,
+  user: {
+    kind: "platform",
+    id: "u1",
+    email: "user@example.com",
+    isStaff: false,
+    username: null,
+    firstName: "",
+    lastName: "",
+  },
+  logout: async () => {},
+};
+
+const authStoreModule = await import("@/stores/auth-store");
+// The menu reads two selectors and `getState()`; the rest of the zustand
+// surface has no consumer here, so the stub asserts the store's type rather
+// than reproducing it.
+const authStoreStub = Object.assign(() => null, {
+  use: {
+    user: () => authRef.user,
+    logout: () => authRef.logout,
+  },
+  getState: () => authRef,
+}) as unknown as typeof authStoreModule.useAuthStore;
+stubModule("@/stores/auth-store", authStoreModule, {
+  useAuthStore: authStoreStub,
+  useIsAuthenticated: () => authRef.isAuthenticated,
+});
+
+// The real client flag store: a plain zustand store with no transport of its
+// own, and the only version that carries the string-flag surface the
+// activation arm is read through. A stub here would also replace it for every
+// test file sharing this process.
+const assistantFeatureFlagStoreModule =
+  await import("@/stores/assistant-feature-flag-store");
+// Nothing the menu renders reads a flag off this store, so the stub answers
+// with an empty surface and asserts the store's type.
+const featureFlagStoreStub = Object.assign(() => null, {
+  use: {},
+  getState: () => ({}),
+}) as unknown as typeof assistantFeatureFlagStoreModule.useAssistantFeatureFlagStore;
+stubModule(
+  "@/stores/assistant-feature-flag-store",
+  assistantFeatureFlagStoreModule,
+  { useAssistantFeatureFlagStore: featureFlagStoreStub },
+);
+
+const billingRef = {
+  data: undefined as
+    | { effective_balance: string; available_usage_balance?: string }
+    | undefined,
+};
+
+/**
+ * What the daemon's activation progress read answers with. `null` is the read
+ * that has not landed, which is every test that does not care about it.
+ */
+const activationProgressRef: { data: unknown } = { data: undefined };
+
+/** The `_id` the generated factory puts at the head of a query key. */
+function queryId(options: unknown): string | undefined {
+  const key = (options as { queryKey?: Array<{ _id?: string }> } | undefined)
+    ?.queryKey;
+  return key?.[0]?._id;
+}
+
+// Spread the real module so shared utilities that import other exports
+// (e.g. `isCancelledError` via `captureError`) keep resolving; only the
+// hook under test's read is overridden. The menu makes two reads, so the
+// stub answers by query key rather than handing both the same body.
+const reactQueryModule = await import("@tanstack/react-query");
+stubModule("@tanstack/react-query", reactQueryModule, {
+  // The menu reads `data`, `isLoading` and `isError` only, so the answer is
+  // asserted against `useQuery`'s type rather than built out to its full
+  // result shape.
+  useQuery: ((options: unknown) => {
+    const id = queryId(options);
+    if (id === "activationProgressGet") {
+      return {
+        data: activationProgressRef.data,
+        isLoading: false,
+        isError: false,
+      };
+    }
+    return { data: billingRef.data, isLoading: false, isError: false };
+  }) as unknown as typeof reactQueryModule.useQuery,
+});
+
+const generatedQueriesModule =
+  await import("@/generated/api/@tanstack/react-query.gen");
+// Only the query key is read (the stubbed `useQuery` answers by key), so each
+// factory answers with the key alone and asserts the generated signature.
+stubModule(
+  "@/generated/api/@tanstack/react-query.gen",
+  generatedQueriesModule,
+  {
+    organizationsBillingSummaryRetrieveOptions: (() => ({
+      queryKey: [{ _id: "organizationsBillingSummaryRetrieve" }],
+    })) as unknown as typeof generatedQueriesModule.organizationsBillingSummaryRetrieveOptions,
+  },
+);
+
+// Capture navigate() targets so the menu's destinations can be asserted
+// without a live Router.
+let navigateArgs: unknown[] = [];
+stubModule("react-router", await import("react-router"), {
+  useNavigate: () => (to: unknown) => {
+    navigateArgs.push(to);
+  },
+});
+
+// The menu owns when the chunk is warmed and when the dialog is mounted; the
+// dialog's own lazy wiring is covered by `share-feedback-modal-lazy.test.tsx`.
+const feedbackRef = { prefetches: 0 };
+stubModule(
+  "@/components/share-feedback-modal-lazy",
+  await import("@/components/share-feedback-modal-lazy"),
+  {
+    ShareFeedbackModalLazy: ({ open }: { open: boolean }) =>
+      open
+        ? createElement("div", { "data-testid": "share-feedback-modal" })
+        : createElement(Fragment),
+    prefetchShareFeedbackModal: () => {
+      feedbackRef.prefetches += 1;
+    },
+  },
+);
+
+// Records the paths the menu warms. Which chunks a path pulls in is
+// `prefetch-route.test.ts`'s business; this suite owns only when the menu asks.
+const prefetchedPaths: string[] = [];
+stubModule("@/lib/prefetch-route", await import("@/lib/prefetch-route"), {
+  prefetchRoute: (href?: string) => {
+    prefetchedPaths.push(href ?? "");
+  },
+});
+
+// The panel owns its own reads (subscription, plan catalog, usage totals),
+// which this suite's partial `@tanstack/react-query` mock cannot host. Its
+// rendering is covered by `preferences-usage-panel.test.tsx`; what the menu
+// owns is where the panel sits and what its two actions do.
+const panelPropsRef: { conversationId?: string | null } = {};
+stubModule(
+  "@/domains/chat/components/preferences-usage-panel",
+  await import("@/domains/chat/components/preferences-usage-panel"),
+  {
+    PreferencesUsagePanel: ({
+      onOpenBilling,
+      onAddCredits,
+      conversationId,
+    }: {
+      onOpenBilling: () => void;
+      onAddCredits?: () => void;
+      conversationId?: string | null;
+    }) => {
+      panelPropsRef.conversationId = conversationId;
+      return createElement(
+        "div",
+        { "data-testid": "preferences-usage" },
+        createElement("button", { onClick: onOpenBilling }, "Usage settings"),
+        // The real panel drops the strip's button with the handler, so the
+        // stub has to as well.
+        onAddCredits
+          ? createElement(
+              "button",
+              { onClick: onAddCredits },
+              "Add usage credits",
+            )
+          : null,
+      );
+    },
+  },
+);
+
+stubModule(
+  "@/components/add-credits-modal",
+  await import("@/components/add-credits-modal"),
+  {
+    AddCreditsModal: ({ open }: { open: boolean }) =>
+      open
+        ? createElement("div", { "data-testid": "add-credits-modal" })
+        : createElement(Fragment),
+  },
+);
+
+// The reading itself is composed from three billing queries this suite's
+// partial `@tanstack/react-query` mock cannot host, and is covered by
+// `preferences-usage-panel.test.tsx`. What the menu owns is the rule it
+// applies to the reading, so only the data is stubbed here.
+const usageRef: {
+  value: PreferencesUsage | null;
+  settled: boolean;
+  opts: unknown;
+} = {
+  value: null,
+  settled: true,
+  opts: undefined,
+};
+stubModule(
+  "@/domains/chat/hooks/use-preferences-usage",
+  await import("@/domains/chat/hooks/use-preferences-usage"),
+  {
+    usePreferencesUsage: (opts?: unknown) => {
+      usageRef.opts = opts;
+      return { usage: usageRef.value, settled: usageRef.settled };
+    },
+  },
+);
+
+// The funnel emitter posts to the telemetry ingest, which has nowhere to go
+// in a test process. What the menu owns is that opening the list emits the
+// event at all, so the emitter is captured rather than run.
+//
+// `use-launch-activation-task.test.tsx` asserts on the same emitter, so this
+// one has to be put back when the file is done with it.
+const activationEvents: string[] = [];
+stubModule(
+  "@/utils/activation-telemetry",
+  await import("@/utils/activation-telemetry"),
+  {
+    emitActivationEvent: (event: string) => {
+      activationEvents.push(event);
+    },
+  },
+);
+
+stubModule(
+  "@/domains/chat/components/credits-card",
+  await import("@/domains/chat/components/credits-card"),
+  {
+    CreditsCard: ({
+      balance,
+      onAddCredits,
+    }: {
+      balance: string | null;
+      onAddCredits?: () => void;
+    }) =>
+      createElement(
+        "div",
+        { "data-testid": "credits-card" },
+        balance,
+        onAddCredits
+          ? createElement("button", { onClick: onAddCredits }, "Add credits")
+          : null,
+      ),
+  },
+);
+
+const { PreferencesMenu, showsMenuCredits } =
+  await import("@/domains/chat/components/preferences-menu");
+
+/** Opens the menu the way a touch user does, and returns the open surface. */
+async function openMenu(
+  props: { activeConversationId?: string | null } = {},
+): Promise<void> {
+  isTouchMobileRef.value = true;
+  render(<PreferencesMenu {...props} />);
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /Preferences/i }));
+    await Promise.resolve();
+  });
+}
+
+/** A reading at `ratio`, with the wallet behind it empty or not. */
+function usage(ratio: number, walletEmpty = false): PreferencesUsage {
+  const spent = ratio >= 1;
+  return {
+    kind: "overall",
+    ratio,
+    spent,
+    exhausted: spent && walletEmpty,
+    usingExtraCredits: spent && !walletEmpty,
+  };
+}
+
+const ACTIVATION_ASSISTANT_ID = "asst-1";
+
+function setActivationArm(arm: string): void {
+  useClientFeatureFlagStore
+    .getState()
+    .setStringFlags({ experimentActivationChecklist20260910: arm }, null);
+}
+
+/** Puts the client on `arm` with a daemon new enough to serve the list. */
+function enableActivationList(arm = "smb"): void {
+  setActivationArm(arm);
+  useResolvedAssistantsStore.setState({
+    activeAssistantId: ACTIVATION_ASSISTANT_ID,
+  });
+  useAssistantIdentityStore
+    .getState()
+    .setIdentity("Vel", MIN_VERSION, ACTIVATION_ASSISTANT_ID);
+}
+
+beforeEach(() => {
+  navigateArgs = [];
+  activationEvents.length = 0;
+  activationProgressRef.data = undefined;
+  setActivationArm("off");
+  useAssistantIdentityStore.getState().clearIdentity();
+  useResolvedAssistantsStore.setState({ activeAssistantId: null });
+  isTouchMobileRef.value = false;
+  nativeAndroidRef.value = false;
+  authRef.isAuthenticated = true;
+  authRef.user = {
+    kind: "platform",
+    id: "u1",
+    email: "user@example.com",
+    isStaff: false,
+    username: null,
+    firstName: "",
+    lastName: "",
+  };
+  billingRef.data = undefined;
+  orgReadyRef.value = true;
+  usageRef.value = null;
+  usageRef.settled = true;
+  usageRef.opts = undefined;
+  panelPropsRef.conversationId = undefined;
+  feedbackRef.prefetches = 0;
+  prefetchedPaths.length = 0;
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+describe("PreferencesMenu", () => {
+  test("renders nothing when not logged in", () => {
+    authRef.isAuthenticated = false;
+    const html = renderToStaticMarkup(createElement(PreferencesMenu));
+    expect(html).toBe("");
+  });
+
+  // A platform account with every identity field populated is the case most
+  // able to leak one into the trigger, so it is the one asserted against.
+  test("labels the trigger 'Preferences', never the account identity", () => {
+    authRef.user = {
+      kind: "platform",
+      id: "u1",
+      email: "user@example.com",
+      isStaff: false,
+      username: "jdoe",
+      firstName: "Jane",
+      lastName: "Doe",
+    };
+    const html = renderToStaticMarkup(createElement(PreferencesMenu));
+    expect(html).toContain("Preferences");
+    expect(html).not.toContain("Jane Doe");
+    expect(html).not.toContain("jdoe");
+    expect(html).not.toContain("user@example.com");
+  });
+
+  test("labels the trigger 'Preferences' for the local gateway user", () => {
+    // Mirrors GATEWAY_LOCAL_USER: name fields are populated but identify no
+    // real account, so they must not surface as a profile.
+    authRef.user = {
+      kind: "local",
+      id: "gateway-local",
+      email: null,
+      isStaff: false,
+      username: "local",
+      firstName: "Local",
+      lastName: "User",
+    };
+    const html = renderToStaticMarkup(createElement(PreferencesMenu));
+    expect(html).toContain("Preferences");
+    expect(html).not.toContain("Local User");
+  });
+
+  test("desktop renders trigger (Popover surface)", () => {
+    isTouchMobileRef.value = false;
+    const html = renderToStaticMarkup(createElement(PreferencesMenu));
+    expect(html).toContain("Preferences");
+  });
+
+  test("mobile renders trigger (BottomSheet surface)", () => {
+    isTouchMobileRef.value = true;
+    const html = renderToStaticMarkup(createElement(PreferencesMenu));
+    expect(html).toContain("Preferences");
+  });
+
+  /* The collapsed rail fits one tile and a pill is sized by its content, so a
+     labelled trigger rendered there is clipped mid-word. The tile is not that
+     pill with `display:none` on its label: it is a fixed square centring its
+     glyph, the same affordance the pinned apps and section tiles reduce to.
+
+     The collapsed `SideMenu` is the whole input: the trigger reads the rail's
+     state from that context and takes no prop for it, so this renders the
+     component the way the sidebar does and cannot pass a value the menu
+     disagrees with. Outside a rail it is an ordinary row, so a bare render
+     would assert nothing. */
+  function collapsedRailMarkup(): string {
+    return renderToStaticMarkup(
+      <SideMenu ariaLabel="Assistant navigation" variant="rail" collapsed>
+        <SideMenu.Footer>
+          <PreferencesMenu />
+        </SideMenu.Footer>
+      </SideMenu>,
+    );
+  }
+
+  /** Text a sighted user would read, with every tag and attribute stripped. */
+  function visibleText(html: string): string {
+    return html.replace(/<[^>]*>/g, "").trim();
+  }
+
+  test("collapsed rail drops the label and centers the glyph in a fixed tile", () => {
+    const html = collapsedRailMarkup();
+
+    // Fixed square, centered in the rail column, fully rounded - not a
+    // content-width capsule that the rail then crops.
+    expect(html).toContain("size-[var(--side-menu-tile-size)]");
+    expect(html).toContain("mx-auto");
+    // Nothing to clip: the label is not rendered at all.
+    expect(visibleText(html)).toBe("");
+    // …and the control is still named, for assistive tech and the tooltip.
+    expect(html).toContain('aria-label="Preferences"');
+  });
+
+  test("collapsed trigger stays a keyboard-reachable menu control", () => {
+    const html = collapsedRailMarkup();
+
+    // A real tab stop that announces what it opens. The rail's own
+    // `aria-current` is for destinations; this opens a menu over the rail.
+    expect(html).toContain('aria-haspopup="dialog"');
+    expect(html).not.toContain('aria-current="page"');
+    expect(html).not.toContain('tabindex="-1"');
+  });
+
+  test("expanded rail keeps the labeled pill", () => {
+    const html = renderToStaticMarkup(
+      <SideMenu ariaLabel="Assistant navigation" variant="rail">
+        <SideMenu.Footer>
+          <PreferencesMenu />
+        </SideMenu.Footer>
+      </SideMenu>,
+    );
+
+    // The label is visible text here, not just an accessible name, and the
+    // trigger is the content-sized pill it shares with the pinned apps.
+    expect(visibleText(html)).toContain("Preferences");
+    expect(html).toContain("w-fit");
+    expect(html).not.toContain("size-[var(--side-menu-tile-size)]");
+  });
+
+  test("the usage panel sits above the menu's destinations", async () => {
+    await openMenu();
+
+    const panel = screen.getByTestId("preferences-usage");
+    const settings = screen.getByText("Settings");
+    // The panel reads the plan; the rows below it go somewhere.
+    expect(
+      panel.compareDocumentPosition(settings) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  test("asks for the usage reading before the menu is opened", () => {
+    render(<PreferencesMenu activeConversationId="conv-7" />);
+
+    // The panel and the credits row only mount with the menu, so a reading
+    // asked for from inside it starts cold on the first open. The trigger is
+    // mounted with the sidebar, so asking from here means the requests run
+    // while the app loads and the menu opens onto answers.
+    expect(usageRef.opts).toEqual({ conversationId: "conv-7" });
+  });
+
+  test("the open conversation reaches both readings of the usage", async () => {
+    await openMenu({ activeConversationId: "conv-7" });
+
+    // The row's rule and the panel's bar have to classify the wallet against
+    // the same chat, or one of them calls it exhausted while the other does
+    // not.
+    expect(usageRef.opts).toEqual({ conversationId: "conv-7" });
+    expect(panelPropsRef.conversationId).toBe("conv-7");
+  });
+
+  test("the panel's gear opens the Billing tab and closes the menu", async () => {
+    await openMenu();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Usage settings" }));
+      await Promise.resolve();
+    });
+
+    expect(navigateArgs).toEqual([routes.settings.usageBilling]);
+    expect(screen.queryByTestId("preferences-usage")).toBeNull();
+  });
+
+  test("the panel's add-credits action opens the checkout", async () => {
+    await openMenu();
+    expect(screen.queryByTestId("add-credits-modal")).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Add usage credits" }),
+      );
+      await Promise.resolve();
+    });
+
+    // The menu closes as it goes, so the modal has to outlive the surface it
+    // was opened from.
+    expect(await screen.findByTestId("add-credits-modal")).toBeTruthy();
+    expect(screen.queryByTestId("preferences-usage")).toBeNull();
+  });
+
+  test("opening the menu warms the feedback chunk, once", async () => {
+    expect(feedbackRef.prefetches).toBe(0);
+
+    await openMenu();
+    expect(feedbackRef.prefetches).toBe(1);
+
+    // The menu closes here, which re-renders the component. The chunk is
+    // cached after the first fetch, so a second warm buys nothing.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Usage settings" }));
+      await Promise.resolve();
+    });
+    expect(feedbackRef.prefetches).toBe(1);
+  });
+
+  test("opening the menu warms the Settings route, once", async () => {
+    expect(prefetchedPaths).toEqual([]);
+
+    // GIVEN the menu opens, which is the first moment Settings is a plausible
+    // next tap
+    await openMenu();
+
+    // THEN its route is warmed, so the two chunks it needs are usually in
+    // hand before the tap that navigates to it
+    expect(prefetchedPaths).toEqual([routes.settings.root]);
+
+    // AND closing the menu does not ask again
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Usage settings" }));
+      await Promise.resolve();
+    });
+    expect(prefetchedPaths).toEqual([routes.settings.root]);
+  });
+
+  test("native Android keeps the panel's add-credits action, same as iOS", async () => {
+    nativeAndroidRef.value = true;
+    await openMenu();
+
+    // The purchase handoff lives in the add-credits modal, so the menu
+    // offers the same actions on every platform.
+    expect(screen.getByTestId("preferences-usage")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Add usage credits" }),
+    ).toBeTruthy();
+  });
+
+  test("native Android shows the balance with its add-credits action", async () => {
+    nativeAndroidRef.value = true;
+    isTouchMobileRef.value = true;
+    billingRef.data = { effective_balance: "60" };
+    render(<PreferencesMenu />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Preferences/i }));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("credits-card")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add credits" })).toBeTruthy();
+  });
+});
+
+describe("PreferencesMenu Inspiration List", () => {
+  test("stays hidden while the activation arm is off", async () => {
+    await openMenu();
+
+    expect(screen.queryByText("Inspiration List")).toBeNull();
+  });
+
+  test("stays hidden against a daemon with no activation routes", async () => {
+    setActivationArm("smb");
+    useResolvedAssistantsStore.setState({
+      activeAssistantId: ACTIVATION_ASSISTANT_ID,
+    });
+    useAssistantIdentityStore
+      .getState()
+      .setIdentity("Vel", "0.11.0", ACTIVATION_ASSISTANT_ID);
+    await openMenu();
+
+    // The page reads a resource that daemon does not serve, so the entry
+    // point to it goes too.
+    expect(screen.queryByText("Inspiration List")).toBeNull();
+  });
+
+  test("opens the list, records the visit, and closes the menu", async () => {
+    enableActivationList();
+    await openMenu();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Inspiration List"));
+      await Promise.resolve();
+    });
+
+    expect(navigateArgs).toEqual([routes.activationList]);
+    expect(activationEvents).toEqual(["activation_list_opened"]);
+    expect(screen.queryByTestId("preferences-usage")).toBeNull();
+  });
+
+  // A frozen id from a newer client that this bundle has no catalog for must
+  // not enable an empty list; the entry point stays hidden.
+  test("hides the entry point when the frozen list is unknown here", async () => {
+    enableActivationList("parent");
+    activationProgressRef.data = {
+      version: 1,
+      listId: "mystery-list",
+      modalDismissedAt: null,
+      allDoneShownAt: null,
+      tasks: {},
+    };
+    await openMenu();
+
+    expect(screen.queryByText("Inspiration List")).toBeNull();
+    expect(activationEvents).toEqual([]);
+  });
+
+  // The daemon freezes a list on the first write and the arm can be
+  // re-bucketed after that, so the entry point follows the freeze. Which list
+  // the event is filed under is `use-activation-enabled.test.tsx`'s to prove;
+  // the emitter resolves it, and the menu tells it nothing.
+  test("keeps the entry point on a frozen list the arm no longer names", async () => {
+    enableActivationList("parent");
+    activationProgressRef.data = {
+      version: 1,
+      listId: "smb",
+      modalDismissedAt: null,
+      allDoneShownAt: null,
+      tasks: {},
+    };
+    await openMenu();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Inspiration List"));
+      await Promise.resolve();
+    });
+
+    expect(activationEvents).toEqual(["activation_list_opened"]);
+  });
+
+  test("sits above Share Feedback, as Figma orders the menu", async () => {
+    enableActivationList();
+    await openMenu();
+
+    const list = screen.getByText("Inspiration List");
+    const feedback = screen.getByText("Share Feedback");
+    expect(
+      list.compareDocumentPosition(feedback) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});
+
+describe("PreferencesMenu credits row", () => {
+  test("the row is hidden while the bundle still has room", async () => {
+    billingRef.data = { effective_balance: "60.4" };
+    usageRef.value = usage(0.68);
+    await openMenu();
+
+    expect(screen.queryByTestId("credits-card")).toBeNull();
+  });
+
+  test("a spent bundle with credits left keeps the row hidden", async () => {
+    billingRef.data = { effective_balance: "60.4" };
+    usageRef.value = usage(1);
+    await openMenu();
+
+    // The panel already names the wallet takeover in the bar's place, so a
+    // dollar row beneath it would only restate the number the bar stands in
+    // for.
+    expect(screen.getByTestId("preferences-usage")).toBeTruthy();
+    expect(screen.queryByTestId("credits-card")).toBeNull();
+  });
+
+  test("the row names only the credit held on top of the usage grants", async () => {
+    billingRef.data = {
+      effective_balance: "34.65",
+      available_usage_balance: "9.10",
+    };
+    await openMenu();
+
+    // With no reading the row is the only balance on screen, and it states
+    // the bought-and-earned credit alone: the grants are what the panel's
+    // bar would have measured.
+    expect(screen.getByTestId("credits-card").textContent).toContain("25.55");
+  });
+
+  test("a free plan's used-up grant keeps the row hidden too", async () => {
+    billingRef.data = { effective_balance: "12.00" };
+    // The whole usage grant is gone and the panel names the extra credits
+    // covering the next turn, so the row has nothing left to add.
+    usageRef.value = {
+      kind: "overall",
+      ratio: 1,
+      spent: true,
+      exhausted: false,
+      usingExtraCredits: true,
+    };
+    await openMenu();
+
+    expect(screen.getByTestId("preferences-usage")).toBeTruthy();
+    expect(screen.queryByTestId("credits-card")).toBeNull();
+  });
+
+  test("a spent bundle with an empty wallet leaves the strip to say it", async () => {
+    billingRef.data = { effective_balance: "0" };
+    usageRef.value = usage(1, true);
+    await openMenu();
+
+    expect(screen.queryByTestId("credits-card")).toBeNull();
+  });
+
+  test("with nothing to measure the row stays", async () => {
+    billingRef.data = { effective_balance: "60.4" };
+    await openMenu();
+
+    // The real panel renders nothing without a reading, so the row is the only
+    // balance and the only way to buy more.
+    expect(screen.getByTestId("credits-card")).toBeTruthy();
+  });
+});
+
+describe("showsMenuCredits", () => {
+  test("hides the row whenever there is a reading", () => {
+    expect(showsMenuCredits(usage(0.99), true)).toBe(false);
+    expect(showsMenuCredits(usage(1), true)).toBe(false);
+    expect(showsMenuCredits(usage(1, true), true)).toBe(false);
+  });
+
+  test("an unmeasurable reading falls back to showing the row", () => {
+    expect(showsMenuCredits(null, true)).toBe(true);
+  });
+
+  test("an unsettled null holds the row back rather than flashing it", () => {
+    // The row needs only the summary; the panel that replaces it also needs
+    // the subscription. Showing the row in that gap swaps one surface for
+    // another a beat later.
+    expect(showsMenuCredits(null, false)).toBe(false);
+  });
+});

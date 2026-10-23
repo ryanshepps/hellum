@@ -1,0 +1,204 @@
+/**
+ * Right-hand side-drawer showing a skill's detail next to the chat: skill
+ * emoji + name header, description + SKILL.md body rendered as markdown, and
+ * a pinned "Go to Skill" footer that navigates to the skill's dedicated page.
+ * Removal (installed skills only) lives behind a header overflow menu with a
+ * confirmation dialog; on success the panel closes.
+ *
+ * SKILL.md resolution (files list → SKILL.md entry → content) comes from the
+ * shared `useSkillDetailFiles` hook — the same chain the intelligence
+ * skill-detail views use, so the caches are shared.
+ *
+ * Driven by `activeSkillDetailId` in `viewer-store` (see `openSkillDetail`).
+ * Rendered inside the shared chat `AnimatedRightDrawer` by
+ * `chat-content-layout`, matching its sibling `ToolDetailPanel`.
+ */
+
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Brain, MoreHorizontal, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { useLocation, useNavigate } from "react-router";
+
+import { Button, Menu, Notice, Typography } from "@vellumai/design-library";
+
+import { useTranslation } from "@/i18n";
+import { FileMarkdown } from "@/components/file-markdown";
+import { SkillLineageLink } from "@/components/skill-lineage-link";
+import { SkillRemovalDialog } from "@/components/skill-removal-dialog";
+import { DetailShell, DetailShellLoading } from "@/components/detail-shell";
+import {
+  skillsByIdGetOptions,
+  useSkillsByIdDeleteMutation,
+} from "@/generated/daemon/@tanstack/react-query.gen";
+import { useSkillDetailFiles } from "@/hooks/use-skill-detail-files";
+import { captureError } from "@/lib/sentry/capture-error";
+import { useResolvedAssistantsStore } from "@/stores/resolved-assistants-store";
+import { routes } from "@/utils/routes";
+import {
+  invalidateSkillsList,
+  isRemovableSkill,
+  skillDetailBackState,
+} from "@/utils/skills";
+
+interface SkillDetailPanelProps {
+  skillId: string;
+  onClose: () => void;
+}
+
+export function SkillDetailPanel({ skillId, onClose }: SkillDetailPanelProps) {
+  const { t } = useTranslation("chat");
+  const navigate = useNavigate();
+  const location = useLocation();
+  const queryClient = useQueryClient();
+  const assistantId = useResolvedAssistantsStore.use.activeAssistantId();
+  const [confirmingRemoval, setConfirmingRemoval] = useState(false);
+
+  const skillQuery = useQuery({
+    ...skillsByIdGetOptions({
+      path: { assistant_id: assistantId ?? "", id: skillId },
+    }),
+    select: (data) => data.skill,
+    enabled: Boolean(assistantId),
+  });
+  const skill = skillQuery.data;
+
+  const {
+    skillMd,
+    fileContent: skillMdContent,
+    isFilesPending,
+    isContentPending,
+  } = useSkillDetailFiles(assistantId, skillId);
+
+  const removeMutation = useSkillsByIdDeleteMutation({
+    onSuccess: () => {
+      if (assistantId) {
+        invalidateSkillsList(queryClient, assistantId);
+      }
+      onClose();
+    },
+    onError: (error) => {
+      captureError(error, { context: "skill-detail-panel-remove" });
+    },
+  });
+
+  const confirmRemove = () => {
+    if (!assistantId) {
+      return;
+    }
+    removeMutation.mutate({ path: { assistant_id: assistantId, id: skillId } });
+    setConfirmingRemoval(false);
+  };
+
+  // `isPending` (no data yet) rather than `isLoading` (actively fetching) so
+  // the disabled-query window while `assistantId` resolves also shows the
+  // spinner instead of a flash of empty body. The content query only counts
+  // once a SKILL.md entry exists — a skill without one isn't "loading".
+  const isLoading =
+    skillQuery.isPending ||
+    isFilesPending ||
+    (skillMd != null && isContentPending);
+
+  const removable = skill != null && isRemovableSkill(skill);
+
+  return (
+    <>
+      <DetailShell
+        // `icon` wins over `Glyph` in DetailShell, so Brain is the
+        // no-emoji fallback (matching the skill-created-card rows).
+        icon={
+          skill?.emoji ? (
+            <span className="text-xl leading-none" aria-hidden>
+              {skill.emoji}
+            </span>
+          ) : undefined
+        }
+        Glyph={Brain}
+        title={skill?.name ?? t("skillDetailPanel.titleFallback")}
+        closeLabel={t("skillDetailPanel.closeDetails")}
+        onClose={onClose}
+        headerActions={
+          removable ? (
+            <Menu.Root>
+              <Menu.Trigger asChild>
+                <Button
+                  // Matches the header's Close button: same `outlined`
+                  // variant, same bare `iconOnly` glyph (the Button sizes it),
+                  // and a short tooltip beside the descriptive aria-label.
+                  variant="outlined"
+                  iconOnly={<MoreHorizontal />}
+                  aria-label={t("skillDetailPanel.actionsAria")}
+                  tooltip={t("skillDetailPanel.moreTooltip")}
+                  className="shrink-0"
+                />
+              </Menu.Trigger>
+              <Menu.Content side="bottom" align="end">
+                <Menu.Item
+                  leftIcon={<Trash2 size={14} />}
+                  onSelect={() => setConfirmingRemoval(true)}
+                >
+                  {t("skillDetailPanel.removeSkill")}
+                </Menu.Item>
+              </Menu.Content>
+            </Menu.Root>
+          ) : undefined
+        }
+        footer={
+          <div className="flex justify-end">
+            <Button
+              onClick={() => {
+                // Close the in-place panel before handing off to the
+                // dedicated page, which supersedes it.
+                onClose();
+                navigate(routes.skills.detail(skillId), {
+                  state: skillDetailBackState(location),
+                });
+              }}
+            >
+              {t("skillDetailPanel.goToSkill")}
+            </Button>
+          </div>
+        }
+      >
+        {/* A failed background/window-focus revalidation sets `isError`
+            while KEEPING the cached skill. Gate the error state on the
+            RESOLVED skill being absent, not on `isError` alone: cached data
+            degrades to the cached render, while an error with nothing to
+            show surfaces the failure. */}
+        {skillQuery.isError && !skill ? (
+          <Notice tone="error">{t("skillDetailPanel.loadError")}</Notice>
+        ) : isLoading ? (
+          <DetailShellLoading placement="panel" />
+        ) : (
+          <div className="flex flex-col gap-5">
+            {skill?.description && (
+              <Typography
+                variant="body-medium-lighter"
+                as="p"
+                className="text-[var(--content-secondary)]"
+              >
+                {skill.description}
+              </Typography>
+            )}
+            {skill && (
+              <SkillLineageLink skill={skill} onNavigate={onClose} />
+            )}
+            {/* `FileMarkdown` renders its blocks with no wrapper of its own, so
+                the skill's body is boxed here: as bare children of the root
+                above, every heading and paragraph would space as a section. */}
+            {skillMdContent && (
+              <div>
+                <FileMarkdown content={skillMdContent} />
+              </div>
+            )}
+          </div>
+        )}
+      </DetailShell>
+
+      <SkillRemovalDialog
+        skillName={confirmingRemoval && skill ? skill.name : null}
+        onConfirm={confirmRemove}
+        onCancel={() => setConfirmingRemoval(false)}
+      />
+    </>
+  );
+}

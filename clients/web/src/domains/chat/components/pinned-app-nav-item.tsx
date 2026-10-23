@@ -1,0 +1,236 @@
+import { PinOff } from "lucide-react";
+import { useMemo } from "react";
+
+import {
+  SIDEBAR_CHIP_CLASSES,
+  SIDEBAR_MOBILE_GLYPH_CLASSES,
+  SIDEBAR_PILL_GAP_CLASSES,
+} from "@/components/sidebar-nav-geometry";
+import { SwipeActionReveal } from "@/components/swipe-action-reveal";
+
+import { PinnedAppColorSwatches } from "@/domains/chat/components/pinned-app-color-swatches";
+import { pinTintStyle } from "@/domains/chat/utils/pin-color-registry";
+import { useTranslation } from "@/i18n";
+import type { PinnedAppView } from "@/hooks/pinned-apps";
+import type { SwipeAction } from "@/hooks/use-swipe-to-reveal";
+import {
+  AppIcon,
+  DEFAULT_APP_ICON,
+  getAppIcon,
+} from "@/utils/app-icon-registry";
+import { cn, ContextMenu, PanelItem, SideMenu } from "@vellumai/design-library";
+import { Button } from "@vellumai/design-library/components/button";
+
+export interface PinnedAppNavItemProps {
+  app: PinnedAppView;
+  active: boolean;
+  collapsed: boolean;
+  onOpen?: (appId: string) => void;
+  /**
+   * Pin actions, owned by the block that lists the pins. It holds the assistant
+   * id the pin is written against, so a row never has to know one.
+   */
+  onUnpin: (appId: string) => void;
+  onSetColor: (appId: string, color: string | null) => void;
+}
+
+/**
+ * A pinned-app row in the assistant sidebar. Renders the app as a
+ * {@link SideMenu.Item} and, when expanded, wraps it in a right-click /
+ * long-press {@link ContextMenu} offering a colour for the pin and an unpin.
+ *
+ * A pin the user has given a colour wears it as a wash rather than the solid
+ * fill the assistant identity pill above it wears, so that pill stays the
+ * sidebar's one saturated surface. The colour rides onto the collapsed rail
+ * with the row, because collapsing changes the shape of a thing and not what
+ * colour it is.
+ *
+ * The unpin lives here as well as on the Library card so a pin can be cleared
+ * from the place it is showing, without first finding the app it points at.
+ *
+ * Both shapes carry the menu, because the rail changes what a pinned app
+ * looks like and not what can be done to it. The collapsed tile depends on it
+ * most: it has no hover button and nothing to swipe, so the menu is its only
+ * route to an unpin, reached by right click or by long press.
+ *
+ * The expanded row carries an unpin button on its trailing edge, revealed with
+ * the row where the device can hover and standing there where it cannot. The
+ * row has one command, so hiding it would leave a screen reader and a switch
+ * control nothing to announce, and a long press is not a control anything can
+ * name.
+ *
+ * On touch the expanded pill also swipes: a swipe left slides it aside and
+ * reveals the unpin behind it, in the pill's own size and shape, the way a
+ * list cell reveals its actions. The wrapper takes the pill's `w-fit
+ * rounded-full`, so nothing wider than the pill is ever painted.
+ *
+ * At a phone width the pill and its wrapper both go full width, the same
+ * band the conversation rows beneath it fill, so the unpin sits on the
+ * drawer's right edge rather than wherever the app's name happens to end.
+ * The unpin is drawn at the size the assistant pill's chevron and a row's
+ * ellipsis are drawn: a 24px box on desktop, a 36px touch target on a phone,
+ * with the same negative margin the chevron uses so the target never grows
+ * the pill past the height its label sets.
+ */
+export function PinnedAppNavItem({
+  app,
+  active,
+  collapsed,
+  onOpen,
+  onUnpin,
+  onSetColor,
+}: PinnedAppNavItemProps) {
+  const { t } = useTranslation("chat");
+
+  /* The pin's colour, as the three custom properties both shapes read, and
+     `undefined` on an uncoloured pin so neither shape sees a declaration and
+     both wear their plain surface.
+
+     Declared on the row element itself rather than on a wrapper, which the
+     rail tile rules out: the tile centres itself with `mx-auto` against the
+     rail column, and a wrapper would become the thing it centres in. A custom
+     property resolves on the element that declares it, so one mechanism
+     covers both shapes. */
+  const tintStyle = pinTintStyle(app.pinColor);
+
+  /* The app's icon as the manifest names it: a Lucide glyph from the app
+     icon registry (an emoji maps to one), or the default glyph for an app
+     the registry cannot place. The tile takes the constructor; the pill
+     renders through `AppIcon`. */
+  const leadingIcon = getAppIcon(app.icon) ?? DEFAULT_APP_ICON;
+
+  /* Memoised: the swipe hook keys its touch handlers on this list, so a fresh
+     array each render would re-mint them each render. */
+  const trailingActions = useMemo<SwipeAction[]>(
+    () => [
+      {
+        id: "unpin",
+        label: t("pinnedAppNavItem.unpin"),
+        icon: PinOff,
+        variant: "destructive",
+        onSelect: () => onUnpin(app.id),
+      },
+    ],
+    [app.id, onUnpin, t],
+  );
+
+  const sideMenuItem = (
+    <SideMenu.Item
+      style={tintStyle}
+      /* The same glyph the expanded pill leads with. */
+      icon={leadingIcon}
+      label={app.name}
+      /* The collapsed-rail affordance, surface included. */
+      shape="tile"
+      showCollapsedTooltip
+      active={active}
+      onSelect={onOpen ? () => onOpen(app.id) : undefined}
+      className="text-[color:var(--content-default)]"
+    />
+  );
+
+  /* One definition for both shapes. The rail changes what a pinned app looks
+     like, not what can be done to it, and the collapsed tile is the shape with
+     the most riding on this: it has no hover button and nothing to swipe, so
+     the menu is its only route to an unpin. */
+  const menu = (
+    <ContextMenu.Content onClick={(event) => event.stopPropagation()}>
+      <PinnedAppColorSwatches
+        value={app.pinColor}
+        onChange={(color) => onSetColor(app.id, color)}
+      />
+      <ContextMenu.Separator />
+      <ContextMenu.Item
+        leftIcon={<PinOff size={14} />}
+        onSelect={() => onUnpin(app.id)}
+      >
+        {t("pinnedAppNavItem.unpin")}
+      </ContextMenu.Item>
+    </ContextMenu.Content>
+  );
+
+  if (collapsed) {
+    /* No `SwipeActionReveal`: a 30px tile has nowhere to swipe to, and the
+       actions it reveals are sized for a full-width row. Touch reaches the
+       same menu by long press, which is what the trigger already does. */
+    return (
+      <ContextMenu.Root>
+        <ContextMenu.Trigger>{sideMenuItem}</ContextMenu.Trigger>
+        {menu}
+      </ContextMenu.Root>
+    );
+  }
+
+  /* A pill, so a pinned app reads as its own object rather than as a row in
+     a list. The unpin rides in `trailingAction`, which is why this is a
+     `PanelItem` and the collapsed branch above is not: `SideMenu.Item` has no
+     trailing slot, so the same button previously had to be a sibling
+     absolutely positioned over the row's right edge. */
+  const item = (
+    <PanelItem
+      style={tintStyle}
+      shape="pill"
+      /* The glyph in a chip rather than at its own width, so on a phone the
+         pill's label starts where the assistant's name does and the glyph
+         centres on the eyes' axis (see `SIDEBAR_MOBILE_CHIP_CLASSES`),
+         drawn at the size and in the ink `PanelItem` gives a leading
+         icon. */
+      leadingSlot={
+        <span
+          aria-hidden
+          className={cn(
+            "inline-flex shrink-0 items-center justify-center",
+            SIDEBAR_CHIP_CLASSES,
+          )}
+        >
+          <AppIcon
+            icon={app.icon}
+            size={14}
+            aria-hidden
+            className={cn(
+              SIDEBAR_MOBILE_GLYPH_CLASSES,
+              "shrink-0 text-[color:var(--panel-item-icon-fg,var(--content-tertiary))]",
+              "[@media(hover:hover)]:group-hover:text-[color:var(--panel-item-icon-fg,var(--content-secondary))]",
+              "group-aria-[current=page]:text-[var(--content-default)]",
+            )}
+          />
+        </span>
+      }
+      label={app.name}
+      active={active}
+      onSelect={onOpen ? () => onOpen(app.id) : undefined}
+      className={cn("max-md:w-full", SIDEBAR_PILL_GAP_CLASSES)}
+      trailingAction={
+        <Button
+          variant="ghost"
+          size="compact"
+          expandOnMobile={false}
+          aria-label={t("pinnedAppNavItem.unpinAria", { name: app.name })}
+          onClick={(event) => {
+            event.stopPropagation();
+            onUnpin(app.id);
+          }}
+          /* The row's own 4px corner and hover, and the 36px circle a thumb
+             gets, rather than the ghost defaults. */
+          className="shrink-0 rounded-[4px] hover:bg-[var(--surface-hover)] hover:[--vbtn-fg:var(--content-secondary)] max-md:-my-2 max-md:size-9 max-md:rounded-full"
+          iconOnly={<PinOff />}
+          iconOnlyGlyphClassName="max-md:size-4 max-md:[&_svg]:size-4"
+        />
+      }
+    />
+  );
+
+  return (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger>
+        <SwipeActionReveal
+          className="w-fit rounded-full max-md:w-full"
+          trailingActions={trailingActions}
+        >
+          {item}
+        </SwipeActionReveal>
+      </ContextMenu.Trigger>
+      {menu}
+    </ContextMenu.Root>
+  );
+}
