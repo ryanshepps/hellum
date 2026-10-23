@@ -8,6 +8,7 @@ import { conversationRoutes } from "./api/conversation-routes";
 import { pushRoutes } from "./api/push-routes";
 import { scheduleRoutes } from "./api/schedule-routes";
 import { skillRoutes } from "./api/skill-routes";
+import { voiceRoutes } from "./api/voice-routes";
 import { systemRoutes } from "./api/system-routes";
 import { createAuthRoutes } from "./auth/auth-routes";
 import { AuthService } from "./auth/auth-service";
@@ -28,6 +29,7 @@ import { PushNotifier } from "./push/push-notifier";
 import { PushTokenRegistry } from "./push/push-tokens";
 import { ScheduleDescriptionsSchema, ScheduleService } from "./schedules/schedule-service";
 import { SkillService } from "./skills/skill-service";
+import { VoiceService } from "./voice/voice-service";
 import { buildRemoteGatewayConfig } from "./spa/index-html";
 import { createSpaHandler } from "./spa/spa-handler";
 import { privateJsonFile } from "./storage/json-file";
@@ -90,6 +92,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
       ),
     ),
     ...skillRoutes(new SkillService(config.hermesHelpers)),
+    ...voiceRoutes(new VoiceService(config.hermesHelpers, join(config.stateDir, "voice"))),
     ...conversationRoutes(conversations, hub),
   ]);
   const socketPath = adminSocketPath(config.stateDir);

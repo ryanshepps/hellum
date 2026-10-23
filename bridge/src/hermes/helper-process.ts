@@ -17,7 +17,13 @@ export class HermesHelperError extends Error {
 
 const HELPER_TIMEOUT_MS = 30_000;
 
-export async function runHermesHelper<T>(command: HelperCommand, helper: string, request: object, schema: z.ZodType<T>): Promise<T> {
+export async function runHermesHelper<T>(
+  command: HelperCommand,
+  helper: string,
+  request: object,
+  schema: z.ZodType<T>,
+  timeoutMs = HELPER_TIMEOUT_MS,
+): Promise<T> {
   const child = Bun.spawn([...command.interpreter, join(command.scriptsDir, `${helper}.py`)], {
     cwd: command.cwd,
     env: { ...command.env },
@@ -25,7 +31,7 @@ export async function runHermesHelper<T>(command: HelperCommand, helper: string,
     stdout: "pipe",
     stderr: "pipe",
   });
-  const timer = setTimeout(() => child.kill(), HELPER_TIMEOUT_MS);
+  const timer = setTimeout(() => child.kill(), timeoutMs);
   const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   clearTimeout(timer);
   if (exitCode !== 0) {

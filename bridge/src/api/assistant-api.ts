@@ -5,6 +5,7 @@ import { HermesRpcError, HermesUnavailableError } from "../hermes/rpc-peer";
 import { MemoryWriteRejectedError } from "../memory/memory-service";
 import { ScheduleNotFoundError, ScheduleRejectedError } from "../schedules/schedule-service";
 import { SkillNotFoundError, SkillRejectedError } from "../skills/skill-service";
+import { SpeechUnavailableError, TranscriptionFailedError } from "../voice/voice-service";
 import { errorResponse } from "../http/json";
 import { log } from "../log";
 import { matchRoute, type Route } from "./route-table";
@@ -25,6 +26,14 @@ function toErrorResponse(error: unknown, method: string, path: string): Response
   }
   if (error instanceof SkillRejectedError) {
     return errorResponse(422, "skill_rejected", error.message);
+  }
+  if (error instanceof SpeechUnavailableError) {
+    log.warn("hermes speech unavailable", { error: error.message });
+    return errorResponse(503, "tts_unavailable", error.message);
+  }
+  if (error instanceof TranscriptionFailedError) {
+    log.warn("hermes transcription failed", { error: error.message });
+    return errorResponse(502, "stt_failed", error.message);
   }
   if (error instanceof UnknownAttachmentError) {
     return errorResponse(400, "unknown_attachment", error.message);
