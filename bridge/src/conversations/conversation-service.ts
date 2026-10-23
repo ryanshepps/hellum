@@ -7,7 +7,8 @@ import type { HermesEvent } from "../hermes/wire";
 import { log } from "../log";
 import { toConversationSummary, type ConversationActivity, type ConversationSummary } from "../translate/conversations";
 import { historyToMessages } from "../translate/history";
-import { userMessageId } from "../translate/message-ids";
+import { foldLiveTurn, mergeLiveTurn, openLiveTurn, type LiveTurn } from "../translate/live-turn";
+import { assistantMessageId, userMessageId } from "../translate/message-ids";
 import { resolveApproval, startTurn, translateTurnEvent, type TranslatedTurn, type TurnState } from "../translate/turn-translator";
 import {
   withActivity,
@@ -61,6 +62,7 @@ export class ConversationService {
   private readonly live: LiveSessions;
   private readonly catalog: SessionCatalog;
   private readonly turns = new Map<string, TurnState>();
+  private readonly liveTurns = new Map<string, LiveTurn>();
   private readonly processing = new Set<string>();
 
   private constructor(
@@ -105,7 +107,7 @@ export class ConversationService {
     const history = await this.live.history(conversationId);
     const startedAtMs = row ? Math.round(row.started_at * 1000) : Date.now();
     return {
-      messages: historyToMessages(conversationId, startedAtMs, history),
+      messages: mergeLiveTurn(historyToMessages(conversationId, startedAtMs, history), this.liveTurns.get(conversationId) ?? null),
       processing: this.processing.has(conversationId),
     };
   }
@@ -116,6 +118,10 @@ export class ConversationService {
     const messageId = userMessageId(live.conversationId, turn);
     this.turns.set(live.conversationId, startTurn(live.conversationId, turn, this.turns.get(live.conversationId) ?? null));
     this.processing.add(live.conversationId);
+    this.liveTurns.set(
+      live.conversationId,
+      openLiveTurn(messageId, assistantMessageId(live.conversationId, turn), clientMessageId, text, Date.now()),
+    );
     this.hub.publish({
       type: "user_message_echo",
       text,
@@ -191,6 +197,7 @@ export class ConversationService {
     await this.gateway.request("session.delete", { session_id: conversationId }, z.unknown());
     this.catalog.invalidate();
     this.turns.delete(conversationId);
+    this.liveTurns.delete(conversationId);
     this.processing.delete(conversationId);
     await this.updateState((state) => withoutConversation(state, conversationId));
   }
@@ -247,6 +254,10 @@ export class ConversationService {
     const { state, events } = step(current);
     this.turns.set(conversationId, state);
     for (const assistantEvent of events) {
+      const liveTurn = this.liveTurns.get(conversationId);
+      if (liveTurn) {
+        this.liveTurns.set(conversationId, foldLiveTurn(liveTurn, assistantEvent));
+      }
       this.hub.publish(assistantEvent);
     }
   }

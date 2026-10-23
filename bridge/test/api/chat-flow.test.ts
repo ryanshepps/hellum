@@ -128,6 +128,15 @@ describe("tool approvals", () => {
     expect(pending.pendingConfirmation).toMatchObject({ requestId: confirmation.requestId, input: { command: "rm -rf ./hellum-nonexistent-dir" } });
     expect(pending.interactions).toHaveLength(1);
 
+    const midTurn = (await (await api.get(`messages?conversationId=${sent.conversationId}`)).json()) as {
+      messages: { id: string; clientMessageId?: string; contentBlocks?: { type: string }[] }[];
+      processing: boolean;
+    };
+    expect(midTurn.processing).toBe(true);
+    expect(midTurn.messages.map((message) => message.id)).toEqual([`${sent.conversationId}:u0`, `${sent.conversationId}:a0`]);
+    expect(midTurn.messages[0]?.clientMessageId).toBe("client-1");
+    expect(midTurn.messages[1]?.contentBlocks?.map((block) => block.type)).toEqual(["tool_use"]);
+
     const decided = await api.send("POST", "confirm", { requestId: confirmation.requestId, decision: "deny" });
     expect(await decided.json()).toEqual({ accepted: true });
     const after = await events.until(isType("message_complete", sent.conversationId));
