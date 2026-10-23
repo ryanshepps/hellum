@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { missingFields, responseSchema } from "../support/daemon-spec";
 import { authedClient, pairDevice, startTestBridge, type TestBridge } from "../support/test-bridge";
 
 let bridge: TestBridge | null = null;
@@ -16,22 +15,6 @@ async function start() {
 }
 
 type Schedule = { id: string; name: string; enabled: boolean; description: string; message: string; cronExpression: string; timezone: string };
-
-type JsonSchema = { properties?: Record<string, JsonSchema>; required?: string[]; items?: JsonSchema; enum?: unknown[] };
-
-const DAEMON_SPEC = JSON.parse(readFileSync(join(import.meta.dir, "../../../clients/web/openapi-schemas/daemon.json"), "utf8")) as {
-  paths: Record<string, Record<string, { responses: Record<string, { content: Record<string, { schema: JsonSchema }> }> }>>;
-};
-
-function responseSchema(path: string, method: string): JsonSchema {
-  const schema = DAEMON_SPEC.paths[`/v1/assistants/{assistant_id}/${path}`]?.[method]?.responses["200"]?.content["application/json"]?.schema;
-  if (!schema) throw new Error(`no schema for ${method} ${path}`);
-  return schema;
-}
-
-function missingFields(value: Record<string, unknown>, schema: JsonSchema): string[] {
-  return (schema.required ?? []).filter((field) => !(field in value));
-}
 
 const NEW_SCHEDULE = {
   name: "Morning brief",
