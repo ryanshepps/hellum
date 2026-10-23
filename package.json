@@ -2,6 +2,7 @@
   "name": "hellum",
   "private": true,
   "workspaces": [
+    "bridge",
     "assistant/src/api",
     "clients/web",
     "packages/app-icons",
