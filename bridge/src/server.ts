@@ -1,12 +1,23 @@
 import { adminSocketPath, startAdminServer } from "./admin/admin-server";
+import { createAssistantApi } from "./api/assistant-api";
+import { conversationRoutes } from "./api/conversation-routes";
+import { systemRoutes } from "./api/system-routes";
 import { createAuthRoutes } from "./auth/auth-routes";
 import { AuthService } from "./auth/auth-service";
 import { createFileDeviceStore } from "./auth/device-store";
 import type { BridgeConfig } from "./config";
+import { ConversationService } from "./conversations/conversation-service";
+import { createFileConversationStore } from "./conversations/conversation-store";
+import { EventHub } from "./events/event-hub";
+import { spawnGatewayProcess } from "./hermes/gateway-process";
+import { HermesGateway } from "./hermes/hermes-gateway";
 import { bearerToken, errorResponse } from "./http/json";
 import { log } from "./log";
 import { buildRemoteGatewayConfig } from "./spa/index-html";
 import { createSpaHandler } from "./spa/spa-handler";
+
+const SELF_ASSISTANT_ID = "self";
+const MAX_IDLE_TIMEOUT_SECONDS = 255;
 
 export type BridgeServer = {
   readonly url: URL;
@@ -22,8 +33,15 @@ function notFound(request: Request): Response {
 
 export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
   const auth = await AuthService.open(createFileDeviceStore(config.stateDir));
+  const hub = new EventHub();
+  const gateway = new HermesGateway(config.hermesGateway, spawnGatewayProcess);
+  const conversations = await ConversationService.open(gateway, hub, createFileConversationStore(config.stateDir));
   const spa = createSpaHandler(config.webDistDir, buildRemoteGatewayConfig(config.assistantName, config.assistantId));
   const authRoutes = createAuthRoutes(auth, config.assistantId);
+  const assistantApi = createAssistantApi(new Set([SELF_ASSISTANT_ID, config.assistantId]), [
+    ...systemRoutes(),
+    ...conversationRoutes(conversations, hub),
+  ]);
   const socketPath = adminSocketPath(config.stateDir);
   const admin = await startAdminServer(auth, socketPath);
 
@@ -32,12 +50,13 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
     if (!token || !auth.authenticate(token)) {
       return errorResponse(401, "unauthorized", "Missing or expired access token");
     }
-    return notFound(request);
+    return (await assistantApi(request)) ?? notFound(request);
   }
 
   const server = Bun.serve({
     hostname: config.host,
     port: config.port,
+    idleTimeout: MAX_IDLE_TIMEOUT_SECONDS,
     async fetch(request) {
       const response = (await spa(request)) ?? (await authRoutes(request));
       if (response) {
@@ -53,6 +72,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
     stop: async () => {
       await server.stop(true);
       await admin.stop();
+      await gateway.stop();
     },
   };
 }
