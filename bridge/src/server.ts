@@ -1,6 +1,7 @@
 import { adminSocketPath, startAdminServer } from "./admin/admin-server";
 import { createAssistantApi } from "./api/assistant-api";
 import { conversationRoutes } from "./api/conversation-routes";
+import { pushRoutes } from "./api/push-routes";
 import { systemRoutes } from "./api/system-routes";
 import { createAuthRoutes } from "./auth/auth-routes";
 import { AuthService } from "./auth/auth-service";
@@ -12,7 +13,12 @@ import { EventHub } from "./events/event-hub";
 import { spawnGatewayProcess } from "./hermes/gateway-process";
 import { HermesGateway } from "./hermes/hermes-gateway";
 import { bearerToken, errorResponse } from "./http/json";
+import { loadIdentity } from "./identity";
 import { log } from "./log";
+import { APNS_ORIGINS, createApnsClient } from "./push/apns-client";
+import { createTokenCache } from "./push/apns-jwt";
+import { PushNotifier } from "./push/push-notifier";
+import { PushTokenRegistry } from "./push/push-tokens";
 import { buildRemoteGatewayConfig } from "./spa/index-html";
 import { createSpaHandler } from "./spa/spa-handler";
 
@@ -31,15 +37,34 @@ function notFound(request: Request): Response {
   return errorResponse(404, "not_found", "Not supported by Hellum");
 }
 
+async function startPushNotifier(config: BridgeConfig, hub: EventHub, tokens: PushTokenRegistry): Promise<PushNotifier | null> {
+  const apns = config.apns;
+  if (!apns) {
+    log.info("push notifications disabled: no APNs key configured");
+    return null;
+  }
+  const providerToken = createTokenCache({
+    keyId: apns.keyId,
+    teamId: apns.teamId,
+    privateKeyPem: await Bun.file(apns.keyPath).text(),
+  });
+  const origins = apns.originOverride ? { development: apns.originOverride, production: apns.originOverride } : APNS_ORIGINS;
+  return new PushNotifier(hub, tokens, createApnsClient(providerToken, origins), config.assistantName);
+}
+
 export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
   const auth = await AuthService.open(createFileDeviceStore(config.stateDir));
+  const identity = await loadIdentity(config.stateDir);
+  const pushTokens = await PushTokenRegistry.open(config.stateDir);
   const hub = new EventHub();
+  const notifier = await startPushNotifier(config, hub, pushTokens);
   const gateway = new HermesGateway(config.hermesGateway, spawnGatewayProcess);
   const conversations = await ConversationService.open(gateway, hub, createFileConversationStore(config.stateDir));
   const spa = createSpaHandler(config.webDistDir, buildRemoteGatewayConfig(config.assistantName, config.assistantId));
   const authRoutes = createAuthRoutes(auth, config.assistantId);
-  const assistantApi = createAssistantApi(new Set([SELF_ASSISTANT_ID, config.assistantId]), [
+  const assistantApi = createAssistantApi(new Set([SELF_ASSISTANT_ID, config.assistantId, identity.platformAssistantId]), [
     ...systemRoutes(),
+    ...pushRoutes(pushTokens, identity.platformAssistantId),
     ...conversationRoutes(conversations, hub),
   ]);
   const socketPath = adminSocketPath(config.stateDir);
@@ -70,6 +95,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
     url: server.url,
     adminSocketPath: socketPath,
     stop: async () => {
+      notifier?.stop();
       await server.stop(true);
       await admin.stop();
       await gateway.stop();

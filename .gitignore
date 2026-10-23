@@ -154,3 +154,6 @@ evals/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Apple push keys never belong in this repo
+*.p8

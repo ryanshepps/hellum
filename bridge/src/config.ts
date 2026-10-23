@@ -16,7 +16,18 @@ const EnvSchema = z.object({
   HELLUM_ASSISTANT_ID: z.string().regex(/^[a-z0-9-]+$/).default("hellum"),
   HELLUM_HERMES_AGENT_DIR: z.string().default(DEFAULT_HERMES_AGENT_DIR),
   HELLUM_HERMES_GATEWAY_ARGV: z.string().optional(),
+  HELLUM_APNS_KEY_PATH: z.string().optional(),
+  HELLUM_APNS_KEY_ID: z.string().regex(/^[A-Z0-9]{10}$/).optional(),
+  HELLUM_APNS_TEAM_ID: z.string().regex(/^[A-Z0-9]{10}$/).optional(),
+  HELLUM_APNS_ORIGIN: z.url().optional(),
 });
+
+export type ApnsConfig = {
+  readonly keyPath: string;
+  readonly keyId: string;
+  readonly teamId: string;
+  readonly originOverride: string | null;
+};
 
 export type BridgeConfig = {
   readonly host: string;
@@ -26,10 +37,22 @@ export type BridgeConfig = {
   readonly assistantName: string;
   readonly assistantId: string;
   readonly hermesGateway: GatewayCommand;
+  readonly apns: ApnsConfig | null;
 };
 
 function gatewayArgv(agentDir: string, override: string | undefined): readonly string[] {
   return override ? ArgvSchema.parse(JSON.parse(override)) : [join(agentDir, "venv", "bin", "python"), "-m", "tui_gateway.entry"];
+}
+
+function apnsConfig(parsed: z.infer<typeof EnvSchema>): ApnsConfig | null {
+  const { HELLUM_APNS_KEY_PATH: keyPath, HELLUM_APNS_KEY_ID: keyId, HELLUM_APNS_TEAM_ID: teamId } = parsed;
+  if (!keyPath && !keyId && !teamId) {
+    return null;
+  }
+  if (!keyPath || !keyId || !teamId) {
+    throw new Error("Set all of HELLUM_APNS_KEY_PATH, HELLUM_APNS_KEY_ID, and HELLUM_APNS_TEAM_ID to enable push");
+  }
+  return { keyPath, keyId, teamId, originOverride: parsed.HELLUM_APNS_ORIGIN ?? null };
 }
 
 export function loadConfig(env: Readonly<Record<string, string | undefined>>): BridgeConfig {
@@ -46,5 +69,6 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): B
       cwd: parsed.HELLUM_HERMES_AGENT_DIR,
       env,
     },
+    apns: apnsConfig(parsed),
   };
 }
