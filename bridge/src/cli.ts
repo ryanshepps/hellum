@@ -4,6 +4,7 @@ import QRCode from "qrcode";
 import { z } from "zod";
 import { adminSocketPath } from "./admin/admin-server";
 import { loadConfig } from "./config";
+import { parseSendArgs } from "./notifications/send-command";
 
 const PairingSchema = z.object({ deviceCode: z.string(), userCode: z.string(), expiresAt: z.number() });
 const PendingSchema = z.object({ pending: z.array(z.object({ userCode: z.string(), expiresAt: z.number() })) });
@@ -13,13 +14,26 @@ const DevicesSchema = z.object({
   ),
 });
 
+const SendResultSchema = z.object({
+  ok: z.boolean(),
+  dispatched: z.boolean(),
+  deduplicated: z.boolean(),
+  selectedChannels: z.array(z.string()),
+  remotePushAccepted: z.boolean(),
+});
+
 const USAGE = `Usage: hellum <command>
 
   pair [public-url]     Print a one-time link that pairs a device (default: HELLUM_PUBLIC_URL)
   pending               List pairing requests waiting for approval
   approve <code>        Approve a pairing request shown on a device
   devices               List paired devices
-  revoke <device-id>    Unpair a device`;
+  revoke <device-id>    Unpair a device
+  notifications send --message <text> [--title <title>] [--urgent | --urgency low|medium|high|critical]
+                     [--conversation-id <id>] [--session-id <id>] [--source-channel <channel>]
+                     [--source-event-name <name>] [--dedupe-key <key>] [--json]
+                        Notify your devices, like Vellum's \`assistant notifications send\`.
+                        Only high or critical urgency (or --urgent) reaches a locked phone.`;
 
 const config = loadConfig(process.env);
 const socketPath = adminSocketPath(config.stateDir);
@@ -58,9 +72,28 @@ async function pair(publicUrl: string | undefined): Promise<void> {
   print(`Expires:      ${new Date(pairing.expiresAt).toLocaleTimeString()}`);
 }
 
+async function sendNotification(args: readonly string[]): Promise<void> {
+  const { request, json } = parseSendArgs(args, process.env);
+  const result = SendResultSchema.parse(await admin("POST", "/notifications", request));
+  if (json) {
+    print(JSON.stringify(result));
+    return;
+  }
+  if (result.deduplicated) {
+    print("Already sent a notification with that dedupe key.");
+    return;
+  }
+  print(`Sent to ${result.selectedChannels.join(" and ")}${result.remotePushAccepted ? ", Apple accepted the push" : ""}.`);
+}
+
 async function run(args: readonly string[]): Promise<void> {
   const [command, argument] = args;
   switch (command) {
+    case "notifications":
+      if (argument !== "send") {
+        throw new Error("Usage: hellum notifications send --message <text> [options]");
+      }
+      return sendNotification(args.slice(2));
     case "pair":
       return pair(argument);
     case "pending": {
