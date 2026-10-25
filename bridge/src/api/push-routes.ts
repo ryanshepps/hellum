@@ -13,6 +13,11 @@ const IosTokenSchema = z.object({
 export function pushRoutes(tokens: PushTokenRegistry, platformAssistantId: string): readonly Route[] {
   return [
     {
+      method: "POST",
+      pattern: "notification-intent-result",
+      handle: () => Response.json({ ok: true }),
+    },
+    {
       method: "GET",
       pattern: "platform/status",
       handle: () =>

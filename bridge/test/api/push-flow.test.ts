@@ -55,14 +55,29 @@ describe("push notifications", () => {
     const sent = (await (await api.send("POST", "messages", { content: "ping", sourceChannel: "vellum", interface: "ios" })).json()) as {
       conversationId: string;
     };
-    await events.until((envelope) => envelope.message.type === "message_complete");
+    const received = await events.until((envelope) => envelope.message.type === "notification_intent");
     const [push] = await fakeApns.waitFor(1);
     expect(push?.path).toBe(`/3/device/${DEVICE_TOKEN}`);
     expect(push?.headers["apns-topic"]).toBe("com.ryanshepps.hellum");
     expect(JSON.parse(push?.body ?? "{}")).toMatchObject({
-      aps: { alert: { title: "Hellum", body: "echo: ping" } },
+      aps: { alert: { title: "echo: ping", body: "echo: ping" } },
       conversationId: sent.conversationId,
+      deep_link: { conversationId: sent.conversationId },
     });
+    expect(received.at(-1)?.message).toMatchObject({
+      type: "notification_intent",
+      sourceEventName: "chat.assistant_reply",
+      deepLinkMetadata: { conversationId: sent.conversationId },
+      silent: false,
+      remotePushDispatched: true,
+      remotePushPlatforms: ["ios"],
+    });
+  });
+
+  test("clients can acknowledge a local notification", async () => {
+    const { api } = await startWithPush();
+    const response = await api.send("POST", "notification-intent-result", { deliveryId: "d1", success: true });
+    expect(await response.json()).toEqual({ ok: true });
   });
 
   test("a token Apple reports as unregistered is forgotten", async () => {

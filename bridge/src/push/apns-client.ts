@@ -14,6 +14,7 @@ export type ApnsPayload = {
     readonly "thread-id"?: string;
   };
   readonly conversationId?: string;
+  readonly deep_link?: { readonly conversationId: string };
 };
 
 export type ApnsSend = {

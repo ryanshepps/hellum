@@ -28,7 +28,10 @@ import { ModelService } from "./models/model-service";
 import { EMPTY_PROFILE_STORE, ProfileStoreSchema } from "./translate/inference";
 import { APNS_ORIGINS, createApnsClient } from "./push/apns-client";
 import { createTokenCache } from "./push/apns-jwt";
-import { PushNotifier } from "./push/push-notifier";
+import { NotificationLog } from "./notifications/notification-log";
+import { NotificationRouter } from "./notifications/notification-router";
+import { PlatformPush } from "./notifications/platform-push";
+import { startReplyNotifications } from "./notifications/reply-producer";
 import { PushTokenRegistry } from "./push/push-tokens";
 import { ScheduleDescriptionsSchema, ScheduleService } from "./schedules/schedule-service";
 import { SkillService } from "./skills/skill-service";
@@ -52,7 +55,7 @@ function notFound(request: Request): Response {
   return errorResponse(404, "not_found", "Not supported by Hellum");
 }
 
-async function startPushNotifier(config: BridgeConfig, hub: EventHub, tokens: PushTokenRegistry): Promise<PushNotifier | null> {
+async function startPlatformPush(config: BridgeConfig, tokens: PushTokenRegistry): Promise<PlatformPush | null> {
   const apns = config.apns;
   if (!apns) {
     log.info("push notifications disabled: no APNs key configured");
@@ -64,7 +67,7 @@ async function startPushNotifier(config: BridgeConfig, hub: EventHub, tokens: Pu
     privateKeyPem: await Bun.file(apns.keyPath).text(),
   });
   const origins = apns.originOverride ? { development: apns.originOverride, production: apns.originOverride } : APNS_ORIGINS;
-  return new PushNotifier(hub, tokens, createApnsClient(providerToken, origins), config.assistantName);
+  return new PlatformPush(tokens, createApnsClient(providerToken, origins));
 }
 
 export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
@@ -72,7 +75,8 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
   const identity = await loadIdentity(config.stateDir);
   const pushTokens = await PushTokenRegistry.open(config.stateDir);
   const hub = new EventHub();
-  const notifier = await startPushNotifier(config, hub, pushTokens);
+  const notifications = new NotificationRouter(hub, await NotificationLog.open(config.stateDir), await startPlatformPush(config, pushTokens), config.assistantName);
+  const stopReplyNotifications = startReplyNotifications(hub, notifications);
   const gateway = new HermesGateway(config.hermesGateway, spawnGatewayProcess);
   const attachments = await AttachmentStore.open(config.stateDir);
   const conversations = await ConversationService.open(gateway, hub, createFileConversationStore(config.stateDir), attachments);
@@ -139,7 +143,8 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
     url: server.url,
     adminSocketPath: socketPath,
     stop: async () => {
-      notifier?.stop();
+      stopReplyNotifications();
+      notifications.stop();
       await server.stop(true);
       await admin.stop();
       await gateway.stop();
