@@ -63,6 +63,19 @@ describe("sending a message", () => {
     expect(received.at(-2)?.message.type).toBe("message_complete");
   });
 
+  test("a follow-up addressed by conversation key stays in the same conversation", async () => {
+    const { api, events } = await start();
+    const first = await sendMessage(api, "one");
+    await events.until(isType("message_complete", first.conversationId));
+    const response = await api.send("POST", "messages", {
+      content: "two",
+      sourceChannel: "vellum",
+      interface: "web",
+      conversationKey: first.conversationId,
+    });
+    expect(await response.json()).toMatchObject({ conversationId: first.conversationId, messageId: "fake_1:u1" });
+  });
+
   test("the generated title is announced after the first turn", async () => {
     const { api, events } = await start();
     const sent = await sendMessage(api, "plan a trip");

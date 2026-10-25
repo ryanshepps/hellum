@@ -8,6 +8,7 @@ const DEFAULT_PAGE_SIZE = 50;
 
 const SendBodySchema = z.object({
   conversationId: z.string().min(1).nullish(),
+  conversationKey: z.string().min(1).nullish(),
   content: z.string(),
   clientMessageId: z.string().optional(),
   attachmentIds: z.array(z.string()).optional(),
@@ -129,7 +130,7 @@ export function conversationRoutes(conversations: ConversationService, hub: Even
         if (!body || (!body.content.trim() && attachmentIds.length === 0)) {
           return errorResponse(400, "invalid_request", "content or attachments are required");
         }
-        const sent = await conversations.send(body.conversationId ?? null, body.content, body.clientMessageId, attachmentIds);
+        const sent = await conversations.send(body.conversationId ?? body.conversationKey ?? null, body.content, body.clientMessageId, attachmentIds);
         return Response.json({ accepted: true, conversationId: sent.conversationId, messageId: sent.messageId }, { status: 202 });
       },
     },
