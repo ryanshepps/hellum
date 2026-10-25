@@ -2,6 +2,7 @@ import { basename } from "node:path";
 import { handleCron, type CronRequest } from "./fake-hermes-cron";
 import { handleMemory, type MemoryRequest } from "./fake-hermes-memory";
 import { handleModels, type ModelsRequest } from "./fake-hermes-models";
+import { handleSessions, type SessionsRequest } from "./fake-hermes-sessions";
 import { handleSkills, type SkillsRequest } from "./fake-hermes-skills";
 import { handleVoice, type VoiceRequest } from "./fake-hermes-voice";
 
@@ -20,6 +21,9 @@ switch (helper) {
     break;
   case "models":
     process.stdout.write(JSON.stringify(handleModels(request as ModelsRequest)));
+    break;
+  case "sessions":
+    process.stdout.write(JSON.stringify(handleSessions(request as SessionsRequest)));
     break;
   case "voice":
     process.stdout.write(JSON.stringify(handleVoice(request as VoiceRequest)));

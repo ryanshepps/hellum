@@ -36,6 +36,14 @@ async function startWithPush() {
   return { api: authedClient(bridge, token, status.assistantId), events: stream, fakeApns: apns, platformAssistantId: status.assistantId };
 }
 
+type OutsideReply = { id: string; source: string; title: string; text: string; message_id: string };
+
+async function writeOutsideReplies(replies: readonly OutsideReply[]): Promise<void> {
+  const now = Date.now() / 1000;
+  const rows = replies.map((reply) => ({ ...reply, started_at: now, replied_at: now + 1, silent: false }));
+  await writeFile(join(bridge?.stateDir ?? "", "fake-sessions.json"), JSON.stringify(rows));
+}
+
 describe("push notifications", () => {
   test("the platform status exposes a stable UUID for push registration", async () => {
     const { platformAssistantId } = await startWithPush();
@@ -72,6 +80,32 @@ describe("push notifications", () => {
       remotePushDispatched: true,
       remotePushPlatforms: ["ios"],
     });
+  });
+
+  test("a chat a webhook started notifies when Hermes finishes replying", async () => {
+    const { api, fakeApns } = await startWithPush();
+    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.ryanshepps.hellum", apns_environment: "production" });
+    await writeOutsideReplies([
+      { id: "20261025_170610_c7dfdc3d", source: "webhook", title: "Deploy hook", text: "Deploy **finished**.", message_id: "7" },
+    ]);
+    const [push] = await fakeApns.waitFor(1);
+    expect(JSON.parse(push?.body ?? "{}")).toMatchObject({
+      aps: { alert: { title: "Deploy hook", body: "Deploy finished." } },
+      conversationId: "20261025_170610_c7dfdc3d",
+    });
+  });
+
+  test("a scheduled run notifies under the schedule's name, once", async () => {
+    const { api, fakeApns } = await startWithPush();
+    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.ryanshepps.hellum", apns_environment: "production" });
+    const created = (await (
+      await api.send("POST", "schedules", { name: "Nightly sweep", expression: "0 3 * * *", message: "Sweep the repo", syntax: "cron", mode: "execute" })
+    ).json()) as { schedule: { id: string } };
+    await writeOutsideReplies([{ id: `cron_${created.schedule.id}_20261026_030001`, source: "cron", title: "", text: "No new issues.", message_id: "9" }]);
+    const [push] = await fakeApns.waitFor(1);
+    expect(JSON.parse(push?.body ?? "{}")).toMatchObject({ aps: { alert: { title: "Nightly sweep", body: "No new issues." } } });
+    await Bun.sleep(400);
+    expect(fakeApns.received).toHaveLength(1);
   });
 
   test("clients can acknowledge a local notification", async () => {

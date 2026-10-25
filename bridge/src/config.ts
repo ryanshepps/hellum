@@ -22,6 +22,7 @@ const EnvSchema = z.object({
   HELLUM_APNS_KEY_ID: z.string().regex(/^[A-Z0-9]{10}$/).optional(),
   HELLUM_APNS_TEAM_ID: z.string().regex(/^[A-Z0-9]{10}$/).optional(),
   HELLUM_APNS_ORIGIN: z.url().optional(),
+  HELLUM_OUTSIDE_CHAT_POLL_MS: z.coerce.number().int().min(50).default(15_000),
 });
 
 export type ApnsConfig = {
@@ -41,6 +42,7 @@ export type BridgeConfig = {
   readonly hermesGateway: GatewayCommand;
   readonly hermesHelpers: HelperCommand;
   readonly apns: ApnsConfig | null;
+  readonly outsideChatPollMs: number;
 };
 
 function gatewayArgv(agentDir: string, override: string | undefined): readonly string[] {
@@ -81,5 +83,6 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): B
       env,
     },
     apns: apnsConfig(parsed),
+    outsideChatPollMs: parsed.HELLUM_OUTSIDE_CHAT_POLL_MS,
   };
 }
