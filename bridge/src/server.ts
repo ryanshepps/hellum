@@ -30,6 +30,7 @@ import { APNS_ORIGINS, createApnsClient } from "./push/apns-client";
 import { createTokenCache } from "./push/apns-jwt";
 import { NotificationLog } from "./notifications/notification-log";
 import { NotificationRouter } from "./notifications/notification-router";
+import { OutsideChatWatcher } from "./notifications/outside-chat-watcher";
 import { PlatformPush } from "./notifications/platform-push";
 import { startReplyNotifications } from "./notifications/reply-producer";
 import { PushTokenRegistry } from "./push/push-tokens";
@@ -77,6 +78,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
   const hub = new EventHub();
   const notifications = new NotificationRouter(hub, await NotificationLog.open(config.stateDir), await startPlatformPush(config, pushTokens), config.assistantName);
   const stopReplyNotifications = startReplyNotifications(hub, notifications);
+  const outsideChats = await OutsideChatWatcher.start(config.stateDir, config.hermesHelpers, notifications, config.outsideChatPollMs);
   const gateway = new HermesGateway(config.hermesGateway, spawnGatewayProcess);
   const attachments = await AttachmentStore.open(config.stateDir);
   const conversations = await ConversationService.open(gateway, hub, createFileConversationStore(config.stateDir), attachments);
@@ -143,6 +145,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
     url: server.url,
     adminSocketPath: socketPath,
     stop: async () => {
+      outsideChats.stop();
       stopReplyNotifications();
       notifications.stop();
       await server.stop(true);
