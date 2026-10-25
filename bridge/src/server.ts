@@ -114,7 +114,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
     ...conversationRoutes(conversations, hub),
   ]);
   const socketPath = adminSocketPath(config.stateDir);
-  const admin = await startAdminServer(auth, socketPath);
+  const admin = await startAdminServer(auth, notifications, socketPath);
 
   async function handleApi(request: Request): Promise<Response> {
     const token = bearerToken(request);

@@ -3,15 +3,52 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import type { AuthService } from "../auth/auth-service";
 import { errorResponse, readJsonBody } from "../http/json";
+import type { NotificationRouter } from "../notifications/notification-router";
+import { UrgencySchema } from "../notifications/signal";
 
 const ApproveBodySchema = z.object({ userCode: z.string().min(1) });
+const NotificationBodySchema = z.object({
+  message: z.string().trim().min(1),
+  title: z.string().optional(),
+  urgency: UrgencySchema,
+  sourceChannel: z.string().min(1),
+  sourceEventName: z.string().min(1),
+  sourceContextId: z.string().trim().min(1).optional(),
+  dedupeKey: z.string().min(1).optional(),
+});
+
+async function sendNotification(notifications: NotificationRouter, request: Request): Promise<Response> {
+  const body = await readJsonBody(request, NotificationBodySchema);
+  if (!body) {
+    return errorResponse(400, "invalid_request", "message, urgency, sourceChannel and sourceEventName are required");
+  }
+  const result = await notifications.emit({
+    sourceEventName: body.sourceEventName,
+    sourceChannel: body.sourceChannel,
+    sourceContextId: body.sourceContextId,
+    urgency: body.urgency,
+    requestedTitle: body.title,
+    requestedMessage: body.message,
+    dedupeKey: body.dedupeKey,
+  });
+  return Response.json({
+    ok: true,
+    dispatched: !result.deduplicated && result.channels.length > 0,
+    deduplicated: result.deduplicated,
+    selectedChannels: result.channels,
+    remotePushAccepted: result.remotePushAccepted,
+  });
+}
 
 export function adminSocketPath(stateDir: string): string {
   return join(stateDir, "admin.sock");
 }
 
-async function route(auth: AuthService, request: Request): Promise<Response> {
+async function route(auth: AuthService, notifications: NotificationRouter, request: Request): Promise<Response> {
   const { pathname } = new URL(request.url);
+  if (request.method === "POST" && pathname === "/notifications") {
+    return sendNotification(notifications, request);
+  }
   const deviceMatch = /^\/devices\/([^/]+)$/.exec(pathname);
   if (request.method === "POST" && pathname === "/pairings") {
     return Response.json(auth.createApprovedPairing());
@@ -49,10 +86,10 @@ async function route(auth: AuthService, request: Request): Promise<Response> {
 
 export type AdminServer = { readonly stop: () => Promise<void> };
 
-export async function startAdminServer(auth: AuthService, socketPath: string): Promise<AdminServer> {
+export async function startAdminServer(auth: AuthService, notifications: NotificationRouter, socketPath: string): Promise<AdminServer> {
   await mkdir(dirname(socketPath), { recursive: true, mode: 0o700 });
   await rm(socketPath, { force: true });
-  const server = Bun.serve({ unix: socketPath, fetch: (request) => route(auth, request) });
+  const server = Bun.serve({ unix: socketPath, fetch: (request) => route(auth, notifications, request) });
   await chmod(socketPath, 0o600);
   return {
     stop: async () => {

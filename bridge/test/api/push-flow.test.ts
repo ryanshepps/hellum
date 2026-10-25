@@ -44,6 +44,19 @@ async function writeOutsideReplies(replies: readonly OutsideReply[]): Promise<vo
   await writeFile(join(bridge?.stateDir ?? "", "fake-sessions.json"), JSON.stringify(rows));
 }
 
+async function runCli(args: readonly string[]): Promise<string> {
+  const child = Bun.spawn(["bun", "run", join(import.meta.dir, "../../src/cli.ts"), ...args], {
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, HELLUM_STATE_DIR: bridge?.stateDir ?? "" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  if (exitCode !== 0) {
+    throw new Error(`hellum ${args.join(" ")} failed: ${stderr}`);
+  }
+  return stdout.trim();
+}
+
 describe("push notifications", () => {
   test("the platform status exposes a stable UUID for push registration", async () => {
     const { platformAssistantId } = await startWithPush();
@@ -106,6 +119,34 @@ describe("push notifications", () => {
     expect(JSON.parse(push?.body ?? "{}")).toMatchObject({ aps: { alert: { title: "Nightly sweep", body: "No new issues." } } });
     await Bun.sleep(400);
     expect(fakeApns.received).toHaveLength(1);
+  });
+
+  test("hellum notifications send --urgent reaches the phone and the open app", async () => {
+    const { api, events, fakeApns } = await startWithPush();
+    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.ryanshepps.hellum", apns_environment: "production" });
+    const output = await runCli(["notifications", "send", "--message", "Prod is down", "--title", "Pager", "--urgent", "--json"]);
+    expect(JSON.parse(output)).toEqual({ ok: true, dispatched: true, deduplicated: false, selectedChannels: ["vellum", "platform"], remotePushAccepted: true });
+    const [push] = await fakeApns.waitFor(1);
+    expect(JSON.parse(push?.body ?? "{}")).toMatchObject({ aps: { alert: { title: "Pager", body: "Prod is down" } } });
+    const received = await events.until((envelope) => envelope.message.type === "notification_intent");
+    expect(received.at(-1)?.message).toMatchObject({ silent: false, remotePushDispatched: true });
+  });
+
+  test("a plain send stays in the open app without a banner, like Vellum", async () => {
+    const { api, events, fakeApns } = await startWithPush();
+    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.ryanshepps.hellum", apns_environment: "production" });
+    await runCli(["notifications", "send", "--message", "Build finished"]);
+    const received = await events.until((envelope) => envelope.message.type === "notification_intent");
+    expect(received.at(-1)?.message).toMatchObject({ sourceEventName: "assistant.share", silent: true, remotePushDispatched: false });
+    expect(fakeApns.received).toHaveLength(0);
+  });
+
+  test("a repeated dedupe key is sent once", async () => {
+    await startWithPush();
+    const first = await runCli(["notifications", "send", "--message", "m", "--dedupe-key", "k1", "--json"]);
+    const second = await runCli(["notifications", "send", "--message", "m", "--dedupe-key", "k1", "--json"]);
+    expect(JSON.parse(first)).toMatchObject({ dispatched: true, deduplicated: false });
+    expect(JSON.parse(second)).toMatchObject({ dispatched: false, deduplicated: true });
   });
 
   test("clients can acknowledge a local notification", async () => {
