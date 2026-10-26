@@ -76,6 +76,19 @@ describe("sending a message", () => {
     expect(received.at(-2)?.message.type).toBe("message_complete");
   });
 
+  test("a follow-up after Hermes adds its own user message takes the next id in Hermes' history", async () => {
+    const { api, events } = await start();
+    const first = await sendMessage(api, "limit: keep going");
+    await events.until(isType("message_complete", first.conversationId));
+
+    const second = await sendMessage(api, "ok go ahead", first.conversationId);
+    expect(second.messageId).toBe("fake_1:u2");
+    await events.until((envelope) => envelope.message.type === "message_complete" && envelope.message.messageId === "fake_1:a2");
+
+    const body = (await (await api.get(`messages?conversationId=${first.conversationId}`)).json()) as { messages: { id: string; textSegments?: string[] }[] };
+    expect(body.messages.find((message) => message.id === "fake_1:u2")?.textSegments).toEqual(["ok go ahead"]);
+  });
+
   test("a follow-up addressed by conversation key stays in the same conversation", async () => {
     const { api, events } = await start();
     const first = await sendMessage(api, "one");

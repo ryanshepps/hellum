@@ -101,6 +101,9 @@ async function runTurn(sid: string, session: StoredSession, text: string): Promi
       });
     }
     if (frame.type === "message.complete") {
+      if (text.startsWith("limit:")) {
+        session.history.push({ role: "user", text: "You've reached the maximum number of tool-calling iterations allowed." });
+      }
       session.history.push({ role: "assistant", text: String(frame.payload?.text) });
       if (!session.title) {
         session.title = `About ${session.history[0]?.role === "user" ? session.history[0].text.slice(0, 20) : "chat"}`;

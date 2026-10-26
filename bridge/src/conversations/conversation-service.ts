@@ -10,7 +10,7 @@ import { parseTurnEvent, type SessionRow } from "../hermes/schemas";
 import type { HermesEvent } from "../hermes/wire";
 import { log } from "../log";
 import { toConversationSummary, type ConversationActivity, type ConversationSummary } from "../translate/conversations";
-import { historyToMessages, type TurnTimes } from "../translate/history";
+import { historyToMessages, userTurnCount, type TurnTimes } from "../translate/history";
 import { foldLiveTurn, mergeLiveTurn, openLiveTurn, type LiveTurn } from "../translate/live-turn";
 import { decorateUserMessages, promptWithFileRefs } from "../translate/message-attachments";
 import { assistantMessageId, userMessageId } from "../translate/message-ids";
@@ -168,7 +168,8 @@ export class ConversationService {
     const attached = resolveAttachments(this.attachments, attachmentIds);
     const live = conversationId && (await this.isKnown(conversationId)) ? await this.live.open(conversationId) : await this.createSession();
     const staged = await stageAttachments(this.gateway, this.attachments, live.sid, attached);
-    const turn = this.live.claimTurn(live.conversationId);
+    const recordedTurns = userTurnCount(await this.live.history(live.conversationId));
+    const turn = this.live.claimTurn(live.conversationId, recordedTurns, this.processing.has(live.conversationId));
     const messageId = userMessageId(live.conversationId, turn);
     await this.attachments.link(attachmentIds, live.conversationId, messageId);
     if (attached.length > 0) {
