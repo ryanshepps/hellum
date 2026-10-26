@@ -32,6 +32,8 @@ export type ApnsConfig = {
   readonly originOverride: string | null;
 };
 
+export type GatewayConnection = GatewayCommand & { readonly mode: "attach" | "spawn" };
+
 export type BridgeConfig = {
   readonly host: string;
   readonly port: number;
@@ -39,14 +41,22 @@ export type BridgeConfig = {
   readonly stateDir: string;
   readonly assistantName: string;
   readonly assistantId: string;
-  readonly hermesGateway: GatewayCommand;
+  readonly hermesGateway: GatewayConnection;
   readonly hermesHelpers: HelperCommand;
   readonly apns: ApnsConfig | null;
   readonly outsideChatPollMs: number;
 };
 
-function gatewayArgv(agentDir: string, override: string | undefined): readonly string[] {
-  return override ? ArgvSchema.parse(JSON.parse(override)) : [join(agentDir, "venv", "bin", "python"), "-m", "tui_gateway.entry"];
+function gatewayConnection(agentDir: string, override: string | undefined, env: Readonly<Record<string, string | undefined>>): GatewayConnection {
+  if (override) {
+    return { mode: "spawn", argv: ArgvSchema.parse(JSON.parse(override)), cwd: agentDir, env };
+  }
+  return {
+    mode: "attach",
+    argv: [join(agentDir, "venv", "bin", "python"), join(agentDir, "ui-tui", "scripts", "gateway_bootstrap.py")],
+    cwd: agentDir,
+    env: { ...env, HERMES_PYTHON_SRC_ROOT: agentDir },
+  };
 }
 
 function apnsConfig(parsed: z.infer<typeof EnvSchema>): ApnsConfig | null {
@@ -69,11 +79,7 @@ export function loadConfig(env: Readonly<Record<string, string | undefined>>): B
     stateDir: parsed.HELLUM_STATE_DIR,
     assistantName: parsed.HELLUM_ASSISTANT_NAME,
     assistantId: parsed.HELLUM_ASSISTANT_ID,
-    hermesGateway: {
-      argv: gatewayArgv(parsed.HELLUM_HERMES_AGENT_DIR, parsed.HELLUM_HERMES_GATEWAY_ARGV),
-      cwd: parsed.HELLUM_HERMES_AGENT_DIR,
-      env,
-    },
+    hermesGateway: gatewayConnection(parsed.HELLUM_HERMES_AGENT_DIR, parsed.HELLUM_HERMES_GATEWAY_ARGV, env),
     hermesHelpers: {
       interpreter: parsed.HELLUM_HERMES_HELPER_ARGV
         ? ArgvSchema.parse(JSON.parse(parsed.HELLUM_HERMES_HELPER_ARGV))

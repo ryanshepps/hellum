@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import { log } from "../log";
-import { encodeRequest, parseFrame, type HermesEvent, type RpcParams } from "./wire";
+import { encodeRequest, encodeResponse, parseFrame, type ErrorData, type HermesEvent, type RpcParams, type ServerRequest } from "./wire";
 
 export type LineTransport = {
   readonly send: (line: string) => void;
@@ -14,6 +14,7 @@ export class HermesRpcError extends Error {
     readonly code: number,
     message: string,
     readonly method: string,
+    readonly data: ErrorData = {},
   ) {
     super(`Hermes ${method} failed (${code}): ${message}`);
     this.name = "HermesRpcError";
@@ -36,12 +37,15 @@ type PendingRequest = {
 
 export type EventListener = (event: HermesEvent) => void;
 
+export type ServerRequestListener = (request: ServerRequest) => void;
+
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 export class HermesRpcPeer {
   private nextId = 1;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly listeners = new Set<EventListener>();
+  private readonly requestListeners = new Set<ServerRequestListener>();
   private closedReason: string | null = null;
   readonly ready: Promise<void>;
 
@@ -61,6 +65,17 @@ export class HermesRpcPeer {
   onEvent(listener: EventListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  onServerRequest(listener: ServerRequestListener): () => void {
+    this.requestListeners.add(listener);
+    return () => this.requestListeners.delete(listener);
+  }
+
+  respond(id: string, result: unknown): void {
+    if (this.closedReason === null) {
+      this.transport.send(encodeResponse(id, result));
+    }
   }
 
   request<T>(method: string, params: RpcParams, schema: z.ZodType<T>, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
@@ -106,6 +121,11 @@ export class HermesRpcPeer {
           listener(frame.event);
         }
         return;
+      case "request":
+        for (const listener of this.requestListeners) {
+          listener(frame.request);
+        }
+        return;
       case "result":
         this.settle(frame.id, (request) => request.resolve(frame.result));
         return;
@@ -114,7 +134,7 @@ export class HermesRpcPeer {
           log.warn("hermes reported an uncorrelated error", { code: frame.code, message: frame.message });
           return;
         }
-        this.settle(frame.id, (request) => request.reject(new HermesRpcError(frame.code, frame.message, request.method)));
+        this.settle(frame.id, (request) => request.reject(new HermesRpcError(frame.code, frame.message, request.method, frame.data)));
         return;
       case "invalid":
         log.debug("ignored non-protocol output from hermes", { line: frame.line.slice(0, 200) });

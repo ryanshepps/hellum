@@ -1,10 +1,10 @@
 import type { z } from "zod";
 import { log } from "../log";
 import type { GatewayCommand } from "./gateway-process";
-import { HermesRpcPeer, HermesUnavailableError, type EventListener, type LineTransport } from "./rpc-peer";
+import { HermesRpcPeer, HermesUnavailableError, type EventListener, type LineTransport, type ServerRequestListener } from "./rpc-peer";
 import type { RpcParams } from "./wire";
 
-export type SpawnTransport = (command: GatewayCommand) => LineTransport;
+export type SpawnTransport = (command: GatewayCommand) => LineTransport | Promise<LineTransport>;
 
 const READY_TIMEOUT_MS = 60_000;
 const MAX_RESTART_DELAY_MS = 30_000;
@@ -15,6 +15,7 @@ export class HermesGateway {
   private launchAttempts = 0;
   private stopped = false;
   private readonly eventListeners = new Set<EventListener>();
+  private readonly requestListeners = new Set<ServerRequestListener>();
   private readonly disconnectListeners = new Set<(reason: string) => void>();
 
   constructor(
@@ -25,6 +26,15 @@ export class HermesGateway {
   onEvent(listener: EventListener): () => void {
     this.eventListeners.add(listener);
     return () => this.eventListeners.delete(listener);
+  }
+
+  onServerRequest(listener: ServerRequestListener): () => void {
+    this.requestListeners.add(listener);
+    return () => this.requestListeners.delete(listener);
+  }
+
+  respond(id: string, result: unknown): void {
+    this.peer?.respond(id, result);
   }
 
   onDisconnect(listener: (reason: string) => void): () => void {
@@ -67,7 +77,7 @@ export class HermesGateway {
       await Bun.sleep(delay);
     }
     this.launchAttempts += 1;
-    const transport = this.spawn(this.command);
+    const transport = await this.spawn(this.command);
     transport.onClose((reason) => {
       if (this.stopped) {
         return;
@@ -80,6 +90,11 @@ export class HermesGateway {
     peer.onEvent((event) => {
       for (const listener of this.eventListeners) {
         listener(event);
+      }
+    });
+    peer.onServerRequest((request) => {
+      for (const listener of this.requestListeners) {
+        listener(request);
       }
     });
     const ready = await Promise.race([peer.ready.then(() => true), Bun.sleep(READY_TIMEOUT_MS).then(() => false)]);

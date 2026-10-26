@@ -19,6 +19,7 @@ import { ConversationService } from "./conversations/conversation-service";
 import { createFileConversationStore } from "./conversations/conversation-store";
 import { EventHub } from "./events/event-hub";
 import { spawnGatewayProcess } from "./hermes/gateway-process";
+import { attachGatewaySocket } from "./hermes/gateway-socket";
 import { HermesGateway } from "./hermes/hermes-gateway";
 import { bearerToken, errorResponse } from "./http/json";
 import { loadIdentity } from "./identity";
@@ -79,7 +80,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
   const notifications = new NotificationRouter(hub, await NotificationLog.open(config.stateDir), await startPlatformPush(config, pushTokens), config.assistantName);
   const stopReplyNotifications = startReplyNotifications(hub, notifications);
   const outsideChats = await OutsideChatWatcher.start(config.stateDir, config.hermesHelpers, notifications, config.outsideChatPollMs);
-  const gateway = new HermesGateway(config.hermesGateway, spawnGatewayProcess);
+  const gateway = new HermesGateway(config.hermesGateway, config.hermesGateway.mode === "attach" ? attachGatewaySocket : spawnGatewayProcess);
   const attachments = await AttachmentStore.open(config.stateDir);
   const conversations = await ConversationService.open(gateway, hub, createFileConversationStore(config.stateDir), attachments, config.hermesHelpers);
   gateway.start().catch((error: unknown) => {
