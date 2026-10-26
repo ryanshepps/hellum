@@ -64,7 +64,7 @@ Keep the `.p8` key outside the repository. Git ignores `*.p8` as a backstop.
 bun run bridge/scripts/install-launch-agent.ts
 ```
 
-Logs go to `~/.hellum/bridge.log`. To run it in the foreground instead: `cd ~/.hellum && bun run ~/path/to/hellum/bridge/src/main.ts`.
+The launch agent is named `<bundle ID>.bridge`, using `HELLUM_BUNDLE_ID` from `clients/ios/App/App/Config/Local.xcconfig` (see [Build the iOS app](#build-the-ios-app-for-testflight)), or `com.example.hellum.bridge` without one. Logs go to `~/.hellum/bridge.log`. To run it in the foreground instead: `cd ~/.hellum && bun run ~/path/to/hellum/bridge/src/main.ts`.
 
 ### 5. Expose it to your tailnet
 
@@ -96,11 +96,14 @@ Other commands:
 
 ## Build the iOS app for TestFlight
 
-1. Set your team. Create `clients/ios/App/App/Config/Local.xcconfig` (gitignored):
+1. Set your team and bundle ID. Create `clients/ios/App/App/Config/Local.xcconfig` (gitignored):
 
    ```
    DEVELOPMENT_TEAM = YOURTEAMID
+   HELLUM_BUNDLE_ID = com.yourname.hellum
    ```
+
+   Every target derives its identifiers from `HELLUM_BUNDLE_ID`, and the Capacitor config and the bridge's launch agent read it from this file too.
 
 2. Generate the project and open it:
 
@@ -114,11 +117,11 @@ Other commands:
 
 Automatic signing registers these identifiers on first archive:
 
-- `com.ryanshepps.hellum` and its `.VoiceActivity`, `.Share`, and `.NotificationService` extensions
-- App group `group.com.ryanshepps.hellum`
+- Your `HELLUM_BUNDLE_ID` and its `.VoiceActivity`, `.Share`, and `.NotificationService` extensions
+- App group `group.` followed by your `HELLUM_BUNDLE_ID`
 - Push Notifications on the app ID
 
-Create the app record in App Store Connect with bundle ID `com.ryanshepps.hellum` before uploading.
+Create the app record in App Store Connect with your `HELLUM_BUNDLE_ID` before uploading.
 
 ## Develop
 

@@ -1,8 +1,16 @@
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-const LABEL = "com.ryanshepps.hellum.bridge";
+const LOCAL_XCCONFIG = resolve(import.meta.dir, "../../clients/ios/App/App/Config/Local.xcconfig");
+
+function bundleId(): string {
+  const local = existsSync(LOCAL_XCCONFIG) ? readFileSync(LOCAL_XCCONFIG, "utf8") : "";
+  return /^HELLUM_BUNDLE_ID\s*=\s*(\S+)/m.exec(local)?.[1] ?? "com.example.hellum";
+}
+
+const LABEL = `${bundleId()}.bridge`;
 const stateDir = process.env.HELLUM_STATE_DIR ?? join(homedir(), ".hellum");
 const plistPath = join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
 const entry = resolve(import.meta.dir, "../src/main.ts");

@@ -64,7 +64,7 @@ describe("createApnsClient", () => {
     const client = createApnsClient(async () => "provider-token", { development: apns.origin, production: apns.origin });
     const result = await client.send({
       deviceToken: "a1b2c3d4e5f60718293a4b5c6d7e8f90",
-      topic: "com.ryanshepps.hellum",
+      topic: "com.example.hellum",
       environment: "production",
       collapseId: "conv:a0",
       payload: { aps: { alert: { title: "Hellum", body: "Done" }, sound: "default" }, conversationId: "conv" },
@@ -75,7 +75,7 @@ describe("createApnsClient", () => {
     expect(push?.path).toBe("/3/device/a1b2c3d4e5f60718293a4b5c6d7e8f90");
     expect(push?.headers).toMatchObject({
       authorization: "bearer provider-token",
-      "apns-topic": "com.ryanshepps.hellum",
+      "apns-topic": "com.example.hellum",
       "apns-push-type": "alert",
       "apns-collapse-id": "conv:a0",
     });

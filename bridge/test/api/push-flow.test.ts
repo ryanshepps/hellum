@@ -68,7 +68,7 @@ describe("push notifications", () => {
     const registered = await api.send("POST", "push-tokens/", {
       token: DEVICE_TOKEN,
       platform: "ios",
-      bundle_id: "com.ryanshepps.hellum",
+      bundle_id: "com.example.hellum",
       apns_environment: "development",
     });
     expect(registered.status).toBe(200);
@@ -79,7 +79,7 @@ describe("push notifications", () => {
     const received = await events.until((envelope) => envelope.message.type === "notification_intent");
     const [push] = await fakeApns.waitFor(1);
     expect(push?.path).toBe(`/3/device/${DEVICE_TOKEN}`);
-    expect(push?.headers["apns-topic"]).toBe("com.ryanshepps.hellum");
+    expect(push?.headers["apns-topic"]).toBe("com.example.hellum");
     expect(JSON.parse(push?.body ?? "{}")).toMatchObject({
       aps: { alert: { title: "echo: ping", body: "echo: ping" } },
       conversationId: sent.conversationId,
@@ -97,7 +97,7 @@ describe("push notifications", () => {
 
   test("a chat a webhook started notifies when Hermes finishes replying", async () => {
     const { api, fakeApns } = await startWithPush();
-    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.ryanshepps.hellum", apns_environment: "production" });
+    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.example.hellum", apns_environment: "production" });
     await writeOutsideReplies([
       { id: "20261025_170610_c7dfdc3d", source: "webhook", title: "Deploy hook", text: "Deploy **finished**.", message_id: "7" },
     ]);
@@ -110,7 +110,7 @@ describe("push notifications", () => {
 
   test("a scheduled run notifies under the schedule's name, once", async () => {
     const { api, fakeApns } = await startWithPush();
-    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.ryanshepps.hellum", apns_environment: "production" });
+    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.example.hellum", apns_environment: "production" });
     const created = (await (
       await api.send("POST", "schedules", { name: "Nightly sweep", expression: "0 3 * * *", message: "Sweep the repo", syntax: "cron", mode: "execute" })
     ).json()) as { schedule: { id: string } };
@@ -123,7 +123,7 @@ describe("push notifications", () => {
 
   test("hellum notifications send --urgent reaches the phone and the open app", async () => {
     const { api, events, fakeApns } = await startWithPush();
-    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.ryanshepps.hellum", apns_environment: "production" });
+    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.example.hellum", apns_environment: "production" });
     const output = await runCli(["notifications", "send", "--message", "Prod is down", "--title", "Pager", "--urgent", "--json"]);
     expect(JSON.parse(output)).toEqual({ ok: true, dispatched: true, deduplicated: false, selectedChannels: ["vellum", "platform"], remotePushAccepted: true });
     const [push] = await fakeApns.waitFor(1);
@@ -134,7 +134,7 @@ describe("push notifications", () => {
 
   test("a plain send stays in the open app without a banner, like Vellum", async () => {
     const { api, events, fakeApns } = await startWithPush();
-    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.ryanshepps.hellum", apns_environment: "production" });
+    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.example.hellum", apns_environment: "production" });
     await runCli(["notifications", "send", "--message", "Build finished"]);
     const received = await events.until((envelope) => envelope.message.type === "notification_intent");
     expect(received.at(-1)?.message).toMatchObject({ sourceEventName: "assistant.share", silent: true, remotePushDispatched: false });
@@ -158,7 +158,7 @@ describe("push notifications", () => {
   test("a token Apple reports as unregistered is forgotten", async () => {
     const { api, events, fakeApns } = await startWithPush();
     fakeApns.respondWith(410, "Unregistered");
-    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.ryanshepps.hellum", apns_environment: "production" });
+    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.example.hellum", apns_environment: "production" });
 
     await api.send("POST", "messages", { content: "one", sourceChannel: "vellum", interface: "ios" });
     await events.until((envelope) => envelope.message.type === "message_complete");
@@ -173,7 +173,7 @@ describe("push notifications", () => {
 
   test("unregistering stops notifications", async () => {
     const { api, events, fakeApns } = await startWithPush();
-    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.ryanshepps.hellum", apns_environment: "production" });
+    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.example.hellum", apns_environment: "production" });
     expect((await api.send("DELETE", `push-tokens/${DEVICE_TOKEN}/`)).status).toBe(204);
     await api.send("POST", "messages", { content: "quiet", sourceChannel: "vellum", interface: "ios" });
     await events.until((envelope) => envelope.message.type === "message_complete");

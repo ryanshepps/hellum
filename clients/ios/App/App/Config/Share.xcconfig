@@ -4,9 +4,9 @@
 
 #include "Share-Base.xcconfig"
 
-APP_GROUP_ID = group.com.ryanshepps.hellum
+APP_GROUP_ID = group.$(HELLUM_BUNDLE_ID)
 BUNDLE_DISPLAY_NAME = Hellum
 BUNDLE_URL_SCHEME = hellum
-PRODUCT_BUNDLE_IDENTIFIER = com.ryanshepps.hellum.Share
+PRODUCT_BUNDLE_IDENTIFIER = $(HELLUM_BUNDLE_ID).Share
 
 PROVISIONING_PROFILE_SPECIFIER_Manual = Hellum iOS Share Distribution

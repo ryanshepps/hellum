@@ -6,7 +6,7 @@
 
 #include "Extension-Base.xcconfig"
 
-APP_GROUP_ID = group.com.ryanshepps.hellum
+APP_GROUP_ID = group.$(HELLUM_BUNDLE_ID)
 BUNDLE_DISPLAY_NAME = Hellum
 BUNDLE_URL_SCHEME = hellum
 
@@ -14,7 +14,7 @@ BUNDLE_URL_SCHEME = hellum
 // `fill-specializations` solid in `App/AppIcon.icon/icon.json`: the widget
 // draws the containing app's icon, and each build ships its own.
 APP_ICON_GROUND = display-p3:0.37749,0.60064,0.34581,1.00000
-PRODUCT_BUNDLE_IDENTIFIER = com.ryanshepps.hellum.VoiceActivity
+PRODUCT_BUNDLE_IDENTIFIER = $(HELLUM_BUNDLE_ID).VoiceActivity
 
 // Exact portal profile name; must equal release-ios.yaml's `ext_profile_name`.
 PROVISIONING_PROFILE_SPECIFIER_Manual = Hellum iOS VoiceActivity Distribution

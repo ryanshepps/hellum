@@ -113,4 +113,5 @@ SWIFT_VERSION = 5.0
 TARGETED_DEVICE_FAMILY = 1,2
 
 // Optional, gitignored per-developer overrides such as DEVELOPMENT_TEAM.
+HELLUM_BUNDLE_ID = com.example.hellum
 #include? "Local.xcconfig"
