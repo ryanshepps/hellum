@@ -28,11 +28,13 @@ export const SessionOpenResultSchema = z.object({
   execution_generation: z.number(),
 });
 
+const RowFields = { timestamp: z.number().nullish(), row_id: z.number().nullish() };
+
 export const HistoryMessageSchema = z.discriminatedUnion("role", [
-  z.object({ role: z.literal("user"), text: z.string() }),
+  z.object({ role: z.literal("user"), text: z.string(), ...RowFields }),
   z.object({ role: z.literal("system"), text: z.string() }),
-  z.object({ role: z.literal("assistant"), text: z.string(), reasoning: z.string().nullish() }),
-  z.object({ role: z.literal("tool"), name: z.string(), context: z.string().nullish() }),
+  z.object({ role: z.literal("assistant"), text: z.string(), reasoning: z.string().nullish(), ...RowFields }),
+  z.object({ role: z.literal("tool"), name: z.string(), context: z.string().nullish(), ...RowFields }),
 ]);
 export type HistoryMessage = z.infer<typeof HistoryMessageSchema>;
 

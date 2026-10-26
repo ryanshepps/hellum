@@ -1,5 +1,5 @@
 """Read Hermes sessions for Hellum: the conversation list, finished replies in
-sessions Hellum did not start, and when each turn of a session happened.
+sessions Hellum did not start, and when each message of a session was first written.
 
 Run with the Hermes virtualenv and the hermes-agent checkout on sys.path.
 Reads one JSON request from stdin and writes one JSON response to stdout.
@@ -93,13 +93,7 @@ def active_row_times(rows):
 
 def message_times(session_id):
     db = SessionDB(read_only=True)
-    turns = []
-    for row, at in active_row_times(db.get_messages(session_id, include_inactive=True)):
-        if row.get("role") == "user":
-            turns.append({"user_at": at, "last_at": at})
-        elif row.get("role") == "assistant" and turns:
-            turns[-1]["last_at"] = max(turns[-1]["last_at"], at)
-    return turns
+    return {str(row["id"]): at for row, at in active_row_times(db.get_messages(session_id, include_inactive=True))}
 
 
 def main():
@@ -113,7 +107,7 @@ def main():
     elif action == "list_sessions":
         result = {"success": True, "sessions": list_sessions(int(request.get("limit") or 500))}
     elif action == "message_times":
-        result = {"success": True, "turns": message_times(str(request.get("session_id") or ""))}
+        result = {"success": True, "times": message_times(str(request.get("session_id") or ""))}
     else:
         result = {"success": False, "error": f"unknown action {action!r}"}
     sys.stdout.write(json.dumps(result, default=str))

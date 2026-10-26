@@ -6,11 +6,7 @@ import { toVellumToolCall } from "./tool-names";
 type Draft = {
   readonly id: string;
   readonly blocks: readonly ConversationContentBlock[];
-};
-
-export type TurnTimes = {
-  readonly userAtMs: number;
-  readonly lastAtMs: number;
+  readonly atMs: number | null;
 };
 
 type Fold = {
@@ -19,21 +15,25 @@ type Fold = {
   readonly draft: Draft | null;
 };
 
+export type OriginalTimes = ReadonlyMap<number, number>;
+
 type Clock = {
   readonly startedAtMs: number;
-  readonly turnTimes: readonly TurnTimes[];
+  readonly originalTimes: OriginalTimes;
 };
+
+type TimedEntry = { readonly timestamp?: number | null | undefined; readonly row_id?: number | null | undefined };
 
 function placeholderMs(clock: Clock, fold: Fold): number {
   return clock.startedAtMs + fold.messages.length;
 }
 
-function userAtMs(clock: Clock, fold: Fold, turn: number): number {
-  return clock.turnTimes[turn]?.userAtMs ?? placeholderMs(clock, fold);
-}
-
-function replyAtMs(clock: Clock, fold: Fold): number {
-  return clock.turnTimes[fold.turn]?.lastAtMs ?? placeholderMs(clock, fold);
+function recordedMs(clock: Clock, entry: TimedEntry): number | null {
+  const original = entry.row_id === null || entry.row_id === undefined ? undefined : clock.originalTimes.get(entry.row_id);
+  if (original !== undefined) {
+    return original;
+  }
+  return entry.timestamp ? Math.round(entry.timestamp * 1000) : null;
 }
 
 function flush(fold: Fold, clock: Clock): readonly ConversationMessage[] {
@@ -43,7 +43,7 @@ function flush(fold: Fold, clock: Clock): readonly ConversationMessage[] {
   const message: ConversationMessage = {
     id: fold.draft.id,
     role: "assistant",
-    timestamp: new Date(replyAtMs(clock, fold)).toISOString(),
+    timestamp: new Date(fold.draft.atMs ?? placeholderMs(clock, fold)).toISOString(),
     attachments: [],
     contentBlocks: [...fold.draft.blocks],
   };
@@ -51,12 +51,12 @@ function flush(fold: Fold, clock: Clock): readonly ConversationMessage[] {
 }
 
 function draftFor(fold: Fold, conversationId: string): Draft {
-  return fold.draft ?? { id: assistantMessageId(conversationId, Math.max(fold.turn, 0)), blocks: [] };
+  return fold.draft ?? { id: assistantMessageId(conversationId, Math.max(fold.turn, 0)), blocks: [], atMs: null };
 }
 
-function appendBlocks(fold: Fold, conversationId: string, blocks: readonly ConversationContentBlock[]): Fold {
+function appendBlocks(fold: Fold, conversationId: string, blocks: readonly ConversationContentBlock[], atMs: number | null): Fold {
   const draft = draftFor(fold, conversationId);
-  return { ...fold, draft: { ...draft, blocks: [...draft.blocks, ...blocks] } };
+  return { ...fold, draft: { ...draft, blocks: [...draft.blocks, ...blocks], atMs: atMs ?? draft.atMs } };
 }
 
 export function userTurnCount(history: readonly HistoryMessage[]): number {
@@ -67,9 +67,9 @@ export function historyToMessages(
   conversationId: string,
   startedAtMs: number,
   history: readonly HistoryMessage[],
-  turnTimes: readonly TurnTimes[] = [],
+  originalTimes: OriginalTimes = new Map(),
 ): readonly ConversationMessage[] {
-  const clock: Clock = { startedAtMs, turnTimes };
+  const clock: Clock = { startedAtMs, originalTimes };
   const initial: Fold = { messages: [], turn: -1, draft: null };
   const folded = history.reduce<Fold>((fold, entry) => {
     switch (entry.role) {
@@ -81,7 +81,7 @@ export function historyToMessages(
         const message: ConversationMessage = {
           id: userMessageId(conversationId, turn),
           role: "user",
-          timestamp: new Date(userAtMs(clock, { ...fold, messages }, turn)).toISOString(),
+          timestamp: new Date(recordedMs(clock, entry) ?? placeholderMs(clock, { ...fold, messages })).toISOString(),
           attachments: [],
           contentBlocks: [{ type: "text", text: entry.text }],
           textSegments: [entry.text],
@@ -92,18 +92,23 @@ export function historyToMessages(
         const draft = draftFor(fold, conversationId);
         const toolIndex = draft.blocks.filter((block) => block.type === "tool_use").length;
         const tool = toVellumToolCall(entry.name, entry.context ?? null);
-        const at = fold.turn >= 0 ? userAtMs(clock, fold, fold.turn) : placeholderMs(clock, fold);
-        return appendBlocks(fold, conversationId, [
-          {
-            type: "tool_use",
-            toolCall: { id: `${draft.id}:tool:${toolIndex}`, name: tool.toolName, input: tool.input, result: "", startedAt: at, completedAt: at },
-          },
-        ]);
+        const at = recordedMs(clock, entry) ?? placeholderMs(clock, fold);
+        return appendBlocks(
+          fold,
+          conversationId,
+          [
+            {
+              type: "tool_use",
+              toolCall: { id: `${draft.id}:tool:${toolIndex}`, name: tool.toolName, input: tool.input, result: "", startedAt: at, completedAt: at },
+            },
+          ],
+          null,
+        );
       }
       case "assistant": {
         const thinking: readonly ConversationContentBlock[] = entry.reasoning ? [{ type: "thinking", thinking: entry.reasoning }] : [];
         const text: readonly ConversationContentBlock[] = entry.text.trim() ? [{ type: "text", text: entry.text }] : [];
-        return appendBlocks(fold, conversationId, [...thinking, ...text]);
+        return appendBlocks(fold, conversationId, [...thinking, ...text], recordedMs(clock, entry));
       }
       default: {
         const exhaustive: never = entry;

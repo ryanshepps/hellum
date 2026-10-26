@@ -12,7 +12,7 @@ import { parseServerPrompt, parseTurnEvent, type SessionRow } from "../hermes/sc
 import type { HermesEvent, ServerRequest } from "../hermes/wire";
 import { log } from "../log";
 import { toConversationSummary, type ConversationActivity, type ConversationSummary } from "../translate/conversations";
-import { historyToMessages, userTurnCount, type TurnTimes } from "../translate/history";
+import { historyToMessages, userTurnCount, type OriginalTimes } from "../translate/history";
 import { foldLiveTurn, mergeLiveTurn, openLiveTurn, type LiveTurn } from "../translate/live-turn";
 import { decorateUserMessages, promptWithFileRefs } from "../translate/message-attachments";
 import { assistantMessageId, userMessageId } from "../translate/message-ids";
@@ -30,10 +30,7 @@ import { LiveSessions, type LiveSession } from "./live-sessions";
 import { SessionCatalog } from "./session-catalog";
 
 type Fence = "revision" | "execution_generation";
-const MessageTimesResultSchema = z.object({
-  success: z.literal(true),
-  turns: z.array(z.object({ user_at: z.number(), last_at: z.number() })),
-});
+const MessageTimesResultSchema = z.object({ success: z.literal(true), times: z.record(z.string(), z.number()) });
 
 export type ArchiveFilter = "active" | "archived" | "all";
 
@@ -137,22 +134,22 @@ export class ConversationService {
     if (!row && !this.live.get(conversationId)) {
       return { messages: [], processing: false };
     }
-    const [history, turnTimes] = await Promise.all([this.live.history(conversationId), this.turnTimes(conversationId)]);
+    const [history, originalTimes] = await Promise.all([this.live.history(conversationId), this.originalTimes(conversationId)]);
     const startedAtMs = row ? Math.round(row.started_at * 1000) : Date.now();
-    const messages = mergeLiveTurn(historyToMessages(conversationId, startedAtMs, history, turnTimes), this.liveTurns.get(conversationId) ?? null);
+    const messages = mergeLiveTurn(historyToMessages(conversationId, startedAtMs, history, originalTimes), this.liveTurns.get(conversationId) ?? null);
     return {
       messages: decorateUserMessages(messages, await attachmentsByMessage(this.attachments, messages), this.state.promptTexts),
       processing: this.processing.has(conversationId),
     };
   }
 
-  private async turnTimes(conversationId: string): Promise<readonly TurnTimes[]> {
+  private async originalTimes(conversationId: string): Promise<OriginalTimes> {
     try {
-      const { turns } = await runHermesHelper(this.helpers, "sessions", { action: "message_times", session_id: conversationId }, MessageTimesResultSchema);
-      return turns.map((turn) => ({ userAtMs: Math.round(turn.user_at * 1000), lastAtMs: Math.round(turn.last_at * 1000) }));
+      const { times } = await runHermesHelper(this.helpers, "sessions", { action: "message_times", session_id: conversationId }, MessageTimesResultSchema);
+      return new Map(Object.entries(times).map(([rowId, at]) => [Number(rowId), Math.round(at * 1000)]));
     } catch (error) {
       log.warn("message times unavailable", { conversationId, error: error instanceof Error ? error.message : String(error) });
-      return [];
+      return new Map();
     }
   }
 

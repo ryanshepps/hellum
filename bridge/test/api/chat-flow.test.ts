@@ -54,16 +54,18 @@ describe("sending a message", () => {
     expect(body.messages[1]).toMatchObject({ contentBlocks: [{ type: "text", text: "echo: hi there" }] });
   });
 
-  test("transcript messages carry the times Hermes recorded for each turn", async () => {
+  test("transcript messages carry the times Hermes recorded, keeping a compacted copy's original time", async () => {
     const { api, events, target } = await start();
+    const before = Date.now();
     const sent = await sendMessage(api, "hi there");
     await events.until(isType("message_complete", sent.conversationId));
-    const userAt = Date.UTC(2026, 9, 26, 11, 17, 32);
-    const replyAt = Date.UTC(2026, 9, 26, 11, 18, 14);
-    await Bun.write(join(target.stateDir, "fake-message-times.json"), JSON.stringify({ [sent.conversationId]: [{ user_at: userAt / 1000, last_at: replyAt / 1000 }] }));
+    const originalAt = Date.UTC(2026, 0, 15, 9, 30, 0);
+    await Bun.write(join(target.stateDir, "fake-message-times.json"), JSON.stringify({ [sent.conversationId]: { "1": originalAt / 1000 } }));
 
     const body = (await (await api.get(`messages?conversationId=${sent.conversationId}`)).json()) as { messages: { timestamp: string }[] };
-    expect(body.messages.map((message) => Date.parse(message.timestamp))).toEqual([userAt, replyAt]);
+    const [userAt, replyAt] = body.messages.map((message) => Date.parse(message.timestamp));
+    expect(userAt).toBe(originalAt);
+    expect(replyAt).toBeGreaterThanOrEqual(before);
   });
 
   test("a follow-up continues the turn numbering", async () => {
