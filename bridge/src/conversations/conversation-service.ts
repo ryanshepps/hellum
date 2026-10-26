@@ -85,7 +85,7 @@ export class ConversationService {
     private state: ConversationState,
   ) {
     this.live = new LiveSessions(gateway);
-    this.catalog = new SessionCatalog(gateway);
+    this.catalog = new SessionCatalog(helpers);
     gateway.onEvent((event) => this.handleHermesEvent(event));
     gateway.onDisconnect((reason) => this.handleDisconnect(reason));
   }
@@ -343,11 +343,7 @@ export class ConversationService {
     this.catalog.invalidate();
     try {
       await this.recordActivity(conversationId);
-      const live = this.live.get(conversationId);
-      if (!live) {
-        return;
-      }
-      const { title } = await this.gateway.request("session.title", { session_id: live.sid }, TitleResultSchema.passthrough());
+      const title = (await this.catalog.find(conversationId))?.title ?? "";
       if (title.trim()) {
         this.hub.publish({ type: "conversation_title_updated", conversationId, title });
       }

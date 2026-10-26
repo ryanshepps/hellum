@@ -3,17 +3,21 @@ import { z } from "zod";
 export const JsonValueSchema = z.json();
 export type JsonValue = z.infer<typeof JsonValueSchema>;
 
+const TextOrBlank = z.string().nullish().transform((value) => value ?? "");
+
 export const SessionRowSchema = z.object({
   id: z.string(),
-  title: z.string(),
-  preview: z.string(),
+  title: TextOrBlank,
+  preview: TextOrBlank,
   started_at: z.number(),
   message_count: z.number(),
-  source: z.string(),
+  source: TextOrBlank,
+  runtime_revision: z.number().nullish().transform((value) => value ?? 0),
+  runtime_generation: z.number().nullish().transform((value) => value ?? 0),
 });
 export type SessionRow = z.infer<typeof SessionRowSchema>;
 
-export const SessionListResultSchema = z.object({ sessions: z.array(SessionRowSchema) });
+export const SessionListResultSchema = z.object({ success: z.literal(true), sessions: z.array(SessionRowSchema) });
 
 export const SessionOpenResultSchema = z.object({
   session_id: z.string(),

@@ -31,6 +31,7 @@ export async function startTestBridge(env: Readonly<Record<string, string>> = {}
       FAKE_HERMES_MODELS_FILE: join(stateDir, "fake-models.json"),
       FAKE_HERMES_SESSIONS_FILE: join(stateDir, "fake-sessions.json"),
       FAKE_HERMES_MESSAGE_TIMES_FILE: join(stateDir, "fake-message-times.json"),
+      FAKE_HERMES_GATEWAY_STATE_FILE: join(stateDir, "fake-gateway-sessions.json"),
       HELLUM_OUTSIDE_CHAT_POLL_MS: "100",
       ...env,
     }),

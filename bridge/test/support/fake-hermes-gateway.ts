@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readModelState, writeModelState } from "./fake-hermes-models";
 
@@ -17,6 +17,22 @@ const running = new Map<string, { resumeApproval: (() => void) | null; interrupt
 const pendingImages = new Map<string, number>();
 const pendingPrompts = new Map<string, (answer: string) => void>();
 let counter = 0;
+
+function persistSessions(): void {
+  const path = process.env.FAKE_HERMES_GATEWAY_STATE_FILE;
+  if (!path) {
+    return;
+  }
+  const rows = [...stored.entries()].map(([id, session]) => ({
+    id,
+    title: session.title,
+    preview: session.history[0]?.role === "user" ? session.history[0].text : "",
+    started_at: session.startedAt,
+    message_count: session.history.length,
+    source: session.source,
+  }));
+  writeFileSync(path, JSON.stringify(rows));
+}
 
 function write(frame: object): void {
   process.stdout.write(`${JSON.stringify(frame)}\n`);
@@ -111,6 +127,7 @@ async function runTurn(sid: string, session: StoredSession, text: string): Promi
     }
   }
   running.delete(sid);
+  persistSessions();
 }
 
 function handle({ id, method, params }: Request): void {
@@ -206,5 +223,6 @@ for await (const chunk of Bun.stdin.stream()) {
   buffered = lines.pop() ?? "";
   for (const line of lines.filter((candidate) => candidate.trim())) {
     handle(JSON.parse(line));
+    persistSessions();
   }
 }

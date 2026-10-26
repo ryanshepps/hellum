@@ -9,6 +9,8 @@ const row: SessionRow = {
   started_at: 1_792_000_000,
   message_count: 4,
   source: "telegram",
+  runtime_revision: 0,
+  runtime_generation: 0,
 };
 
 const noActivity: ConversationActivity = { lastActivityAt: new Map(), processing: new Set(), archivedAt: new Map() };

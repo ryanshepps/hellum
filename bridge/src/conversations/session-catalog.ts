@@ -1,4 +1,4 @@
-import type { HermesGateway } from "../hermes/hermes-gateway";
+import { runHermesHelper, type HelperCommand } from "../hermes/helper-process";
 import { SessionListResultSchema, type SessionRow } from "../hermes/schemas";
 
 const SESSION_SCAN_LIMIT = 500;
@@ -12,7 +12,7 @@ export class SessionCatalog {
   private generation = 0;
 
   constructor(
-    private readonly gateway: HermesGateway,
+    private readonly helpers: HelperCommand,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -38,7 +38,7 @@ export class SessionCatalog {
 
   private async fetch(): Promise<readonly SessionRow[]> {
     const generation = this.generation;
-    const { sessions } = await this.gateway.request("session.list", { limit: SESSION_SCAN_LIMIT }, SessionListResultSchema);
+    const { sessions } = await runHermesHelper(this.helpers, "sessions", { action: "list_sessions", limit: SESSION_SCAN_LIMIT }, SessionListResultSchema);
     if (generation === this.generation) {
       this.snapshot = { rows: sessions, fetchedAt: this.now() };
     }

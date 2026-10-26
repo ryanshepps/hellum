@@ -1,5 +1,5 @@
-"""Read Hermes sessions for Hellum: finished replies in sessions Hellum did not
-start, and when each turn of a session happened.
+"""Read Hermes sessions for Hellum: the conversation list, finished replies in
+sessions Hellum did not start, and when each turn of a session happened.
 
 Run with the Hermes virtualenv and the hermes-agent checkout on sys.path.
 Reads one JSON request from stdin and writes one JSON response to stdout.
@@ -15,8 +15,10 @@ sys.path.insert(0, os.getcwd())
 
 from cron.scheduler import _is_cron_silence_response  # noqa: E402
 from hermes_state import SessionDB  # noqa: E402
+from hermes_state_sessions import INTERNAL_LISTING_SOURCES  # noqa: E402
 
 SCAN_LIMIT = 100
+LISTED_FIELDS = ("id", "title", "preview", "started_at", "message_count", "source", "runtime_revision", "runtime_generation")
 CONVERSATION_ROLES = {"user", "assistant"}
 
 
@@ -26,6 +28,12 @@ def text_of(content):
     if isinstance(content, list):
         return "\n".join(part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")
     return ""
+
+
+def list_sessions(limit):
+    db = SessionDB(read_only=True)
+    rows = db.list_sessions_rich(limit=limit, exclude_sources=list(INTERNAL_LISTING_SOURCES), order_by_last_active=True)
+    return [{field: row.get(field) for field in LISTED_FIELDS} for row in rows]
 
 
 def finished_reply(db, session):
@@ -102,6 +110,8 @@ def main():
             "success": True,
             "replies": finished_replies(set(request.get("sources") or []), float(request.get("since") or 0)),
         }
+    elif action == "list_sessions":
+        result = {"success": True, "sessions": list_sessions(int(request.get("limit") or 500))}
     elif action == "message_times":
         result = {"success": True, "turns": message_times(str(request.get("session_id") or ""))}
     else:
