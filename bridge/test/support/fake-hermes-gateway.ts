@@ -247,6 +247,7 @@ function handle({ id, method, params }: Request): void {
       if (!text(params, "submission_id")) return fail(id, 4001, "invalid_params");
       const prompt = text(params, "text");
       if (prompt === "crash") process.exit(3);
+      if (prompt === "read-only") return fail(id, 4001, "session_read_only");
       record(session, { role: "user", text: prompt });
       ok(id, { admission_id: nextId("adm"), status: "queued" });
       void runTurn(sid, session, prompt);

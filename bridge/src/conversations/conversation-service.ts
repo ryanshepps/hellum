@@ -201,6 +201,7 @@ export class ConversationService {
         translateTurnEvent(turnState, { type: "error", message: error instanceof Error ? error.message : String(error) }, Date.now()),
       );
       this.processing.delete(live.conversationId);
+      this.liveTurns.delete(live.conversationId);
       throw error;
     }
     return { conversationId: live.conversationId, messageId };

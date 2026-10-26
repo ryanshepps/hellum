@@ -91,6 +91,17 @@ describe("sending a message", () => {
     expect(body.messages.find((message) => message.id === "fake_1:u2")?.textSegments).toEqual(["ok go ahead"]);
   });
 
+  test("a message Hermes refuses does not stay in the transcript", async () => {
+    const { api, events } = await start();
+    const first = await sendMessage(api, "hello");
+    await events.until(isType("message_complete", first.conversationId));
+
+    const refused = await api.send("POST", "messages", { content: "read-only", conversationId: first.conversationId, sourceChannel: "vellum", interface: "web" });
+    expect(refused.status).toBe(502);
+    const body = (await (await api.get(`messages?conversationId=${first.conversationId}`)).json()) as { messages: { textSegments?: string[] }[] };
+    expect(body.messages.flatMap((message) => message.textSegments ?? [])).toEqual(["hello"]);
+  });
+
   test("a follow-up addressed by conversation key stays in the same conversation", async () => {
     const { api, events } = await start();
     const first = await sendMessage(api, "one");
