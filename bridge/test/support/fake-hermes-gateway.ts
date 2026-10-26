@@ -1,22 +1,38 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { readModelState, writeModelState } from "./fake-hermes-models";
 
 type HistoryEntry =
-  | { role: "user"; text: string }
-  | { role: "assistant"; text: string }
-  | { role: "tool"; name: string; context: string };
+  | { role: "user"; text: string; timestamp: number; row_id: number }
+  | { role: "assistant"; text: string; timestamp: number; row_id: number }
+  | { role: "tool"; name: string; context: string; timestamp: number };
 
-type StoredSession = { title: string; startedAt: number; history: HistoryEntry[]; source: string };
+type StoredSession = {
+  title: string;
+  startedAt: number;
+  history: HistoryEntry[];
+  source: string;
+  revision: number;
+  generation: number;
+};
 
-type Request = { id: string; method: string; params: Record<string, string | undefined> };
+type Params = Record<string, unknown>;
+
+type Request = { id: string; method: string; params: Params };
+
+type Response = { id: string; result?: { value?: string } };
+
+type PendingControl = { promptId: string; generation: number; answer: (value: string) => void };
+
+const SURFACES = new Set(["cli", "tui", "gui", "acp", "tool", "oneshot"]);
 
 const stored = new Map<string, StoredSession>();
-const liveToStored = new Map<string, string>();
-const running = new Map<string, { resumeApproval: (() => void) | null; interrupted: boolean }>();
+const subscriptions = new Map<string, string>();
+const running = new Map<string, { interrupted: boolean; settle: (() => void) | null }>();
 const pendingImages = new Map<string, number>();
-const pendingPrompts = new Map<string, (answer: string) => void>();
+const pendingControls = new Map<string, PendingControl>();
+const pendingRequests = new Map<string, (value: string) => void>();
 let counter = 0;
+let rowCounter = 0;
 
 function persistSessions(): void {
   const path = process.env.FAKE_HERMES_GATEWAY_STATE_FILE;
@@ -30,6 +46,8 @@ function persistSessions(): void {
     started_at: session.startedAt,
     message_count: session.history.length,
     source: session.source,
+    runtime_revision: session.revision,
+    runtime_generation: session.generation,
   }));
   writeFileSync(path, JSON.stringify(rows));
 }
@@ -46,15 +64,38 @@ function ok(id: string, result: object): void {
   write({ jsonrpc: "2.0", id, result });
 }
 
-function fail(id: string, code: number, message: string): void {
-  write({ jsonrpc: "2.0", id, error: { code, message } });
+function fail(id: string, code: number, message: string, data: object = {}): void {
+  write({ jsonrpc: "2.0", id, error: { code, message, data: { reason: message, ...data } } });
 }
 
-function openLive(storedId: string): string {
+function text(params: Params, key: string): string {
+  const value = params[key];
+  return typeof value === "string" ? value : "";
+}
+
+function nextId(prefix: string): string {
   counter += 1;
-  const sid = `live${counter}`;
-  liveToStored.set(sid, storedId);
-  return sid;
+  return `${prefix}${counter}`;
+}
+
+function record(session: StoredSession, entry: Omit<Extract<HistoryEntry, { role: "user" | "assistant" }>, "timestamp" | "row_id">): void {
+  rowCounter += 1;
+  session.history.push({ ...entry, timestamp: Date.now() / 1000, row_id: rowCounter });
+}
+
+function snapshot(sid: string, session: StoredSession): object {
+  const subscriptionId = nextId("sub");
+  subscriptions.set(sid, subscriptionId);
+  return {
+    session_id: sid,
+    stored_session_id: sid,
+    subscription_id: subscriptionId,
+    revision: session.revision,
+    execution_generation: session.generation,
+    message_count: session.history.length,
+    messages: [],
+    running: running.has(sid),
+  };
 }
 
 function traceFrames(name: string): { type: string; payload: Record<string, unknown> | undefined }[] {
@@ -64,39 +105,51 @@ function traceFrames(name: string): { type: string; payload: Record<string, unkn
     .map((line) => JSON.parse(line).params);
 }
 
-function askHermes(sid: string, type: string, payload: object): Promise<string> {
-  counter += 1;
-  const requestId = `req${counter}`;
+function askControl(sid: string, session: StoredSession, type: string, payload: object): Promise<string> {
+  const promptId = nextId("prompt");
   return new Promise((resolve) => {
-    pendingPrompts.set(requestId, resolve);
-    emit(type, sid, { ...payload, request_id: requestId });
+    pendingControls.set(promptId, { promptId, generation: session.generation, answer: resolve });
+    emit(type, sid, { ...payload, prompt_id: promptId, execution_generation: session.generation });
   });
 }
 
-async function promptReply(sid: string, text: string): Promise<string | null> {
-  if (text.startsWith("ask:")) {
-    const [question = "", choices = ""] = text.slice("ask:".length).split("|");
-    const answer = await askHermes(sid, "clarify.request", { question, choices: choices ? choices.split(",") : null });
+function askViewer(sid: string, method: string, params: object): Promise<string> {
+  const requestId = nextId("srq-");
+  return new Promise((resolve) => {
+    pendingRequests.set(requestId, resolve);
+    write({ jsonrpc: "2.0", id: requestId, method, params: { session_id: sid, ...params } });
+  });
+}
+
+async function promptReply(sid: string, session: StoredSession, prompt: string): Promise<string | null> {
+  if (prompt.startsWith("ask:")) {
+    const [question = "", choices = ""] = prompt.slice("ask:".length).split("|");
+    const answer = await askControl(sid, session, "clarify.request", { kind: "clarify", question, choices: choices ? choices.split(",") : [] });
     return `you said: ${answer || "(nothing)"}`;
   }
-  if (text.startsWith("secret:")) {
-    const value = await askHermes(sid, "secret.request", { prompt: "Paste your key", env_var: text.slice("secret:".length) });
+  if (prompt.startsWith("secret:")) {
+    const value = await askViewer(sid, "secret", { prompt: "Paste your key", env_var: prompt.slice("secret:".length) });
     return value ? `stored ${value.length} characters` : "skipped";
+  }
+  if (prompt === "sudo:") {
+    const password = await askViewer(sid, "sudo", { command: "sudo true" });
+    return password ? "authenticated" : "skipped";
   }
   return null;
 }
 
-async function runTurn(sid: string, session: StoredSession, text: string): Promise<void> {
-  const turn = { resumeApproval: null as (() => void) | null, interrupted: false };
+async function runTurn(sid: string, session: StoredSession, prompt: string): Promise<void> {
+  const turn = { interrupted: false, settle: null as (() => void) | null };
   running.set(sid, turn);
+  session.generation += 1;
   const images = pendingImages.get(sid) ?? 0;
   pendingImages.delete(sid);
-  if (!text.startsWith("trace:")) {
+  if (!prompt.startsWith("trace:")) {
     emit("message.start", sid);
   }
-  const reply = (await promptReply(sid, text)) ?? `echo: ${text}${images > 0 ? ` [images:${images}]` : ""}`;
-  const frames = text.startsWith("trace:")
-    ? traceFrames(text.slice("trace:".length))
+  const reply = (await promptReply(sid, session, prompt)) ?? `echo: ${prompt}${images > 0 ? ` [images:${images}]` : ""}`;
+  const frames = prompt.startsWith("trace:")
+    ? traceFrames(prompt.slice("trace:".length))
     : [
         { type: "message.delta", payload: { text: reply } },
         { type: "message.complete", payload: { text: reply, status: "complete" } },
@@ -107,20 +160,22 @@ async function runTurn(sid: string, session: StoredSession, text: string): Promi
       emit("message.complete", sid, { text: "", status: "interrupted" });
       break;
     }
-    emit(frame.type, sid, frame.payload);
-    if (frame.type === "tool.start") {
-      session.history.push({ role: "tool", name: String(frame.payload?.name), context: String(frame.payload?.context) });
-    }
     if (frame.type === "approval.request") {
       await new Promise<void>((resolve) => {
-        turn.resumeApproval = resolve;
+        turn.settle = resolve;
+        void askControl(sid, session, "approval.request", { kind: "approval", ...frame.payload, choices: ["once", "deny"] }).then(() => resolve());
       });
+      continue;
+    }
+    emit(frame.type, sid, frame.payload);
+    if (frame.type === "tool.start") {
+      session.history.push({ role: "tool", name: String(frame.payload?.name), context: String(frame.payload?.context), timestamp: Date.now() / 1000 });
     }
     if (frame.type === "message.complete") {
-      if (text.startsWith("limit:")) {
-        session.history.push({ role: "user", text: "You've reached the maximum number of tool-calling iterations allowed." });
+      if (prompt.startsWith("limit:")) {
+        record(session, { role: "user", text: "You've reached the maximum number of tool-calling iterations allowed." });
       }
-      session.history.push({ role: "assistant", text: String(frame.payload?.text) });
+      record(session, { role: "assistant", text: String(frame.payload?.text) });
       if (!session.title) {
         session.title = `About ${session.history[0]?.role === "user" ? session.history[0].text.slice(0, 20) : "chat"}`;
       }
@@ -130,89 +185,103 @@ async function runTurn(sid: string, session: StoredSession, text: string): Promi
   persistSessions();
 }
 
+function answerControl(id: string, params: Params, value: string): void {
+  const control = pendingControls.get(text(params, "prompt_id"));
+  if (!control || control.generation !== params.execution_generation) {
+    return fail(id, 4001, "stale_generation");
+  }
+  pendingControls.delete(control.promptId);
+  control.answer(value);
+  return ok(id, { resolved: true });
+}
+
+function mutate(id: string, sid: string, session: StoredSession, params: Params): void {
+  if (params.expected_revision !== session.revision) {
+    return fail(id, 4001, "revision_conflict", { revision: session.revision });
+  }
+  const payload = (params.payload ?? {}) as Params;
+  switch (params.operation) {
+    case "rename":
+      session.title = text(payload, "title");
+      session.revision += 1;
+      return ok(id, { session_id: sid, revision: session.revision });
+    case "delete":
+      stored.delete(sid);
+      subscriptions.delete(sid);
+      return ok(id, { session_id: sid, deleted: true });
+    default:
+      return fail(id, 4001, "invalid_params");
+  }
+}
+
 function handle({ id, method, params }: Request): void {
-  const sid = params.session_id ?? "";
-  const storedId = liveToStored.get(sid) ?? "";
-  const session = stored.get(storedId);
+  const sid = text(params, "session_id");
+  const session = stored.get(sid);
   switch (method) {
     case "session.create": {
-      counter += 1;
-      const newStoredId = `fake_${counter}`;
-      stored.set(newStoredId, { title: "", startedAt: Date.now() / 1000, history: [], source: params.source ?? "tui" });
-      return ok(id, { session_id: openLive(newStoredId), stored_session_id: newStoredId, message_count: 0 });
+      if (!text(params, "request_id") || !SURFACES.has(text(params, "source"))) {
+        return fail(id, 4001, "invalid_params");
+      }
+      const newId = nextId("fake_");
+      const created: StoredSession = { title: "", startedAt: Date.now() / 1000, history: [], source: "local", revision: 0, generation: 0 };
+      stored.set(newId, created);
+      return ok(id, snapshot(newId, created));
     }
-    case "session.list":
-      return ok(id, {
-        sessions: [...stored.entries()].map(([key, value]) => ({
-          id: key,
-          title: value.title,
-          preview: value.history[0]?.role === "user" ? value.history[0].text : "",
-          started_at: value.startedAt,
-          message_count: value.history.length,
-          source: value.source,
-        })),
-      });
     case "session.resume":
-      return stored.has(sid)
-        ? ok(id, { session_id: openLive(sid), stored_session_id: sid, message_count: stored.get(sid)?.history.length ?? 0 })
-        : fail(id, 4007, "session not found");
+      return session ? ok(id, snapshot(sid, session)) : fail(id, 4001, "not_found");
     case "session.history":
-      return session ? ok(id, { count: session.history.length, messages: session.history }) : fail(id, 4001, "session not found");
-    case "session.title":
-      if (!session) return fail(id, 4001, "session not found");
-      if (params.title) session.title = params.title;
-      return ok(id, { title: session.title });
-    case "prompt.submit":
-      if (!session) return fail(id, 4001, "session not found");
-      if (params.text === "crash") process.exit(3);
-      session.history.push({ role: "user", text: params.text ?? "" });
-      ok(id, { status: "streaming" });
-      void runTurn(sid, session, params.text ?? "");
+      return session ? ok(id, { count: session.history.length, messages: session.history }) : fail(id, 4001, "not_found");
+    case "session.detach": {
+      const attached = subscriptions.get(sid) === text(params, "subscription_id");
+      if (attached) subscriptions.delete(sid);
+      return ok(id, { session_id: sid, subscription_id: text(params, "subscription_id"), detached: attached });
+    }
+    case "session.mutate":
+      return session ? mutate(id, sid, session, params) : fail(id, 4001, "not_found");
+    case "prompt.submit": {
+      if (!session || !subscriptions.has(sid)) return fail(id, 4001, "permission_denied");
+      if (!text(params, "submission_id")) return fail(id, 4001, "invalid_params");
+      const prompt = text(params, "text");
+      if (prompt === "crash") process.exit(3);
+      record(session, { role: "user", text: prompt });
+      ok(id, { admission_id: nextId("adm"), status: "queued" });
+      void runTurn(sid, session, prompt);
       return;
+    }
     case "image.attach_bytes":
-      if (!session) return fail(id, 4001, "session not found");
+      if (!session) return fail(id, 4001, "not_found");
       pendingImages.set(sid, (pendingImages.get(sid) ?? 0) + 1);
       return ok(id, { attached: true, count: pendingImages.get(sid) });
     case "file.attach":
-      if (!session) return fail(id, 4001, "session not found");
-      return ok(id, { attached: true, name: params.name, ref_text: `@file:uploads/${params.name}` });
-    case "approval.respond": {
-      const turn = running.get(sid);
-      turn?.resumeApproval?.();
-      return ok(id, { resolved: Boolean(turn) });
-    }
+      if (!session) return fail(id, 4001, "not_found");
+      return ok(id, { attached: true, name: text(params, "name"), ref_text: `@file:uploads/${text(params, "name")}` });
+    case "approval.respond":
+      return answerControl(id, params, text(params, "choice"));
     case "clarify.respond":
-    case "secret.respond": {
-      const answer = pendingPrompts.get(params.request_id ?? "");
-      if (!answer) return fail(id, 4009, "no pending request");
-      pendingPrompts.delete(params.request_id ?? "");
-      answer(params.answer ?? params.value ?? "");
-      return ok(id, { status: "ok" });
-    }
-    case "config.set": {
-      const [model = "", ...flags] = (params.value ?? "").split(" ");
-      const provider = flags[flags.indexOf("--provider") + 1] ?? "";
-      const state = readModelState();
-      if (!state.keys[provider]) return fail(id, 5001, `No credentials for provider '${provider}'`);
-      writeModelState({ ...state, model, provider });
-      return ok(id, { key: "model", value: model, warning: "", confirm_required: false });
-    }
+      return answerControl(id, params, text(params, "answer"));
+    case "config.set":
+      return text(params, "key") === "model" ? fail(id, 4001, "use_session_mutation_model") : ok(id, { key: text(params, "key") });
     case "reload.env":
       return ok(id, { updated: 1 });
     case "session.interrupt": {
+      if (!session) return fail(id, 4001, "not_found");
+      if (params.execution_generation !== session.generation) {
+        return fail(id, 4001, "stale_generation", { execution_generation: session.generation });
+      }
       const turn = running.get(sid);
       if (turn) turn.interrupted = true;
-      turn?.resumeApproval?.();
-      return ok(id, { status: "interrupted" });
+      turn?.settle?.();
+      return ok(id, { session_id: sid, execution_generation: session.generation });
     }
-    case "session.close":
-      liveToStored.delete(sid);
-      return ok(id, { closed: true });
-    case "session.delete":
-      return stored.delete(sid) ? ok(id, { deleted: sid }) : fail(id, 4007, "session not found");
     default:
-      return fail(id, -32601, `unknown method ${method}`);
+      return fail(id, -32601, `unknown method: ${method}`);
   }
+}
+
+function settleRequest(response: Response): void {
+  const answer = pendingRequests.get(response.id);
+  pendingRequests.delete(response.id);
+  answer?.(response.result?.value ?? "");
 }
 
 write({ jsonrpc: "2.0", method: "event", params: { type: "gateway.ready", payload: {} } });
@@ -222,7 +291,12 @@ for await (const chunk of Bun.stdin.stream()) {
   const lines = buffered.split("\n");
   buffered = lines.pop() ?? "";
   for (const line of lines.filter((candidate) => candidate.trim())) {
-    handle(JSON.parse(line));
+    const frame = JSON.parse(line);
+    if (typeof frame.method === "string") {
+      handle({ id: frame.id, method: frame.method, params: frame.params ?? {} });
+    } else {
+      settleRequest(frame);
+    }
     persistSessions();
   }
 }

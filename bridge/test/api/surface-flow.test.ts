@@ -70,6 +70,16 @@ describe("Hermes questions become cards", () => {
     expect(replyText(received)).toBe("stored 15 characters");
   });
 
+  test("a sudo password answers Hermes' request for it", async () => {
+    const { api, events } = await start();
+    const sent = await sendMessage(api, "sudo:");
+    const surface = shownSurface(await events.until(isType("ui_surface_show")));
+    expect(surface.data).toMatchObject({ fields: [{ id: "password", type: "password" }] });
+
+    await api.send("POST", "surface-actions", { surfaceId: surface.surfaceId, actionId: "submit", data: { password: "hunter2" } });
+    expect(replyText(await events.until(isType("message_complete", sent.conversationId)))).toBe("authenticated");
+  });
+
   test("skipping a question answers Hermes with nothing", async () => {
     const { api, events } = await start();
     const sent = await sendMessage(api, "ask:Anything else?");

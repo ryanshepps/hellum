@@ -25,8 +25,6 @@ const StatusResultSchema = z.object({
   providers: z.array(HermesProviderSchema),
 });
 const WriteResultSchema = z.object({ success: z.boolean(), error: z.string().nullable() });
-const ModelSwitchResultSchema = z.object({ value: z.string() }).passthrough();
-
 export class ModelSettingRejectedError extends Error {
   constructor(reason: string) {
     super(reason);
@@ -133,11 +131,7 @@ export class ModelService {
     if (!entry.model || !provider) {
       throw new ModelSettingRejectedError(`Profile ${name} needs a provider and a model`);
     }
-    await this.gateway.request(
-      "config.set",
-      { key: "model", value: `${entry.model} --provider ${provider} --global`, confirm_expensive_model: true },
-      ModelSwitchResultSchema,
-    );
+    await this.write({ action: "set_default", provider, model: entry.model });
     await this.onModelChanged();
   }
 

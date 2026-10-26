@@ -1,4 +1,5 @@
 import type { ConversationMessage } from "@vellumai/assistant-api";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AttachmentStore } from "../attachments/attachment-store";
 import { resolveAttachments, stageAttachments } from "../attachments/attachment-stager";
@@ -6,8 +7,9 @@ import { attachmentsByMessage, messageAttachmentView } from "../attachments/atta
 import type { EventHub } from "../events/event-hub";
 import type { HermesGateway } from "../hermes/hermes-gateway";
 import { runHermesHelper, type HelperCommand } from "../hermes/helper-process";
-import { parseTurnEvent, type SessionRow } from "../hermes/schemas";
-import type { HermesEvent } from "../hermes/wire";
+import { HermesRpcError } from "../hermes/rpc-peer";
+import { parseServerPrompt, parseTurnEvent, type SessionRow } from "../hermes/schemas";
+import type { HermesEvent, ServerRequest } from "../hermes/wire";
 import { log } from "../log";
 import { toConversationSummary, type ConversationActivity, type ConversationSummary } from "../translate/conversations";
 import { historyToMessages, userTurnCount, type TurnTimes } from "../translate/history";
@@ -27,7 +29,7 @@ import {
 import { LiveSessions, type LiveSession } from "./live-sessions";
 import { SessionCatalog } from "./session-catalog";
 
-const TitleResultSchema = z.object({ title: z.string() });
+type Fence = "revision" | "execution_generation";
 const MessageTimesResultSchema = z.object({
   success: z.literal(true),
   turns: z.array(z.object({ user_at: z.number(), last_at: z.number() })),
@@ -87,6 +89,7 @@ export class ConversationService {
     this.live = new LiveSessions(gateway);
     this.catalog = new SessionCatalog(helpers);
     gateway.onEvent((event) => this.handleHermesEvent(event));
+    gateway.onServerRequest((request) => this.handleServerRequest(request));
     gateway.onDisconnect((reason) => this.handleDisconnect(reason));
   }
 
@@ -103,13 +106,7 @@ export class ConversationService {
   async releaseIdleSessions(): Promise<void> {
     const idle = this.live.openConversations().filter((conversationId) => !this.processing.has(conversationId));
     await Promise.all(
-      idle.map(async (conversationId) => {
-        const live = this.live.get(conversationId);
-        this.live.forget(conversationId);
-        if (live) {
-          await this.gateway.request("session.close", { session_id: live.sid }, z.unknown()).catch(() => undefined);
-        }
-      }),
+      idle.map((conversationId) => this.live.detach(conversationId).catch(() => undefined)),
     );
   }
 
@@ -193,7 +190,7 @@ export class ConversationService {
     try {
       await this.gateway.request(
         "prompt.submit",
-        { session_id: live.sid, text: promptWithFileRefs(text, staged.fileRefs) },
+        { session_id: live.sid, submission_id: randomUUID(), text: promptWithFileRefs(text, staged.fileRefs) },
         z.object({ status: z.string() }).passthrough(),
       );
     } catch (error) {
@@ -211,7 +208,10 @@ export class ConversationService {
     if (!live || !this.processing.has(conversationId)) {
       return false;
     }
-    await this.gateway.request("session.interrupt", { session_id: live.sid }, z.unknown());
+    const known = (await this.catalog.find(conversationId))?.runtime_generation ?? 0;
+    await this.fenced("execution_generation", known, (generation) =>
+      this.gateway.request("session.interrupt", { session_id: live.sid, execution_generation: generation }, z.unknown()),
+    );
     return true;
   }
 
@@ -221,7 +221,15 @@ export class ConversationService {
     if (!entry || !live) {
       return false;
     }
-    await this.gateway.request("approval.respond", { session_id: live.sid, choice: decision === "allow" ? "once" : "deny" }, z.unknown());
+    const { control } = entry[1].pendingApproval ?? {};
+    if (!control) {
+      return false;
+    }
+    await this.gateway.request(
+      "approval.respond",
+      { session_id: live.sid, execution_generation: control.generation, prompt_id: control.promptId, choice: decision === "allow" ? "once" : "deny" },
+      z.unknown(),
+    );
     this.applyTurn(entry[0], (turnState) => resolveApproval(turnState, decision === "allow" ? "approved" : "rejected"));
     return true;
   }
@@ -233,7 +241,15 @@ export class ConversationService {
       return null;
     }
     const reply = promptReply(pending.prompt, actionId, data);
-    await this.gateway.request(reply.method, reply.params, z.unknown());
+    if (reply.kind === "response") {
+      this.gateway.respond(reply.requestId, { value: reply.value });
+    } else {
+      const live = this.live.get(entry[0]);
+      if (!live) {
+        return null;
+      }
+      await this.gateway.request(reply.method, { session_id: live.sid, ...reply.params }, z.unknown());
+    }
     this.applyTurn(entry[0], (turnState) => resolvePrompt(turnState, reply.summary));
     return entry[0];
   }
@@ -258,19 +274,14 @@ export class ConversationService {
   }
 
   async rename(conversationId: string, title: string): Promise<void> {
-    const live = await this.live.open(conversationId);
-    await this.gateway.request("session.title", { session_id: live.sid, title }, TitleResultSchema.passthrough());
+    await this.mutate(conversationId, "rename", { title });
     this.catalog.invalidate();
     this.hub.publish({ type: "conversation_title_updated", conversationId, title });
   }
 
   async delete(conversationId: string): Promise<void> {
-    const live = this.live.get(conversationId);
-    if (live) {
-      await this.gateway.request("session.close", { session_id: live.sid }, z.unknown());
-      this.live.forget(conversationId);
-    }
-    await this.gateway.request("session.delete", { session_id: conversationId }, z.unknown());
+    await this.live.detach(conversationId);
+    await this.mutate(conversationId, "delete", {});
     this.catalog.invalidate();
     this.turns.delete(conversationId);
     this.liveTurns.delete(conversationId);
@@ -284,6 +295,31 @@ export class ConversationService {
       throw new ConversationNotFoundError(conversationId);
     }
     await this.updateState((state) => withArchived(state, conversationId, archived ? Date.now() : null));
+  }
+
+  private async mutate(conversationId: string, operation: "rename" | "delete", payload: Readonly<Record<string, string>>): Promise<void> {
+    this.catalog.invalidate();
+    const known = (await this.catalog.find(conversationId))?.runtime_revision ?? 0;
+    const requestId = randomUUID();
+    await this.fenced("revision", known, (revision) =>
+      this.gateway.request(
+        "session.mutate",
+        { session_id: conversationId, request_id: requestId, expected_revision: revision, operation, payload },
+        z.unknown(),
+      ),
+    );
+  }
+
+  private async fenced<T>(fence: Fence, known: number, attempt: (value: number) => Promise<T>): Promise<T> {
+    try {
+      return await attempt(known);
+    } catch (error) {
+      const current = error instanceof HermesRpcError ? error.data[fence] : undefined;
+      if (typeof current !== "number" || current === known) {
+        throw error;
+      }
+      return attempt(current);
+    }
   }
 
   private async summaries(): Promise<readonly ConversationSummary[]> {
@@ -316,6 +352,16 @@ export class ConversationService {
       this.processing.delete(conversationId);
       void this.afterTurn(conversationId);
     }
+  }
+
+  private handleServerRequest(request: ServerRequest): void {
+    const asked = parseServerPrompt(request);
+    const conversationId = asked ? this.live.conversationFor(asked.sessionId) : null;
+    if (!asked || !conversationId) {
+      log.warn("unanswered request from hermes", { method: request.method });
+      return;
+    }
+    this.applyTurn(conversationId, (turnState) => translateTurnEvent(turnState, { type: "prompt.request", prompt: asked.prompt }, Date.now()));
   }
 
   private handleDisconnect(reason: string): void {

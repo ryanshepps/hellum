@@ -1,5 +1,5 @@
 import type { AssistantEvent } from "@vellumai/assistant-api";
-import type { HermesPrompt, HermesTurnEvent } from "../hermes/schemas";
+import type { HermesPrompt, HermesTurnEvent, PromptControl } from "../hermes/schemas";
 import { approvalRequestId, assistantMessageId } from "./message-ids";
 import { promptSurface } from "./prompt-surfaces";
 import { formatToolResult } from "./tool-result";
@@ -13,6 +13,7 @@ type ConfirmationEvent = Extract<AssistantEvent, { type: "confirmation_request" 
 
 export type PendingApproval = {
   readonly requestId: string;
+  readonly control: PromptControl;
   readonly confirmation: ConfirmationEvent;
 };
 
@@ -145,7 +146,7 @@ export function translateTurnEvent(state: TurnState, event: HermesTurnEvent, now
         ...(state.lastTool ? { toolUseId: state.lastTool.id } : {}),
       };
       return emit(
-        { ...state, approvals: approval, pendingApproval: { requestId, confirmation } },
+        { ...state, approvals: approval, pendingApproval: { requestId, control: event.control, confirmation } },
         [confirmation],
         "awaiting_confirmation",
         "confirmation_requested",

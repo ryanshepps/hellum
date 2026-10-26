@@ -3,11 +3,14 @@ import type { HermesPrompt } from "../hermes/schemas";
 
 type SurfaceShowEvent = Extract<AssistantEvent, { type: "ui_surface_show" }>;
 
-export type PromptReply = {
-  readonly method: "clarify.respond" | "secret.respond" | "sudo.respond";
-  readonly params: Readonly<Record<string, string>>;
-  readonly summary: string;
-};
+export type PromptReply =
+  | {
+      readonly kind: "control";
+      readonly method: "clarify.respond";
+      readonly params: { readonly prompt_id: string; readonly execution_generation: number; readonly answer: string };
+      readonly summary: string;
+    }
+  | { readonly kind: "response"; readonly requestId: string; readonly value: string; readonly summary: string };
 
 const CANCEL_ACTIONS = new Set(["cancel", "dismiss"]);
 const CANCELLED = "Cancelled";
@@ -99,15 +102,20 @@ export function promptReply(prompt: HermesPrompt, actionId: string, data: Readon
   switch (prompt.kind) {
     case "clarify": {
       const answer = cancelled ? "" : clarifyAnswer(prompt, actionId, data);
-      return { method: "clarify.respond", params: { request_id: prompt.requestId, answer }, summary: answer || CANCELLED };
+      return {
+        kind: "control",
+        method: "clarify.respond",
+        params: { prompt_id: prompt.control.promptId, execution_generation: prompt.control.generation, answer },
+        summary: answer || CANCELLED,
+      };
     }
     case "secret": {
       const value = cancelled ? "" : stringField(data, "value");
-      return { method: "secret.respond", params: { request_id: prompt.requestId, value }, summary: value ? `Saved ${prompt.envVar}` : CANCELLED };
+      return { kind: "response", requestId: prompt.requestId, value, summary: value ? `Saved ${prompt.envVar}` : CANCELLED };
     }
     case "sudo": {
       const password = cancelled ? "" : stringField(data, "password");
-      return { method: "sudo.respond", params: { request_id: prompt.requestId, password }, summary: password ? "Password sent" : CANCELLED };
+      return { kind: "response", requestId: prompt.requestId, value: password, summary: password ? "Password sent" : CANCELLED };
     }
     default: {
       const exhaustive: never = prompt;

@@ -70,7 +70,9 @@ export function parseFrame(line: string): Frame {
   return { kind: "result", id: String(success.data.id), result: success.data.result };
 }
 
-export type RpcParams = Readonly<Record<string, string | number | boolean | null | undefined | readonly string[]>>;
+export type RpcParams = Readonly<
+  Record<string, string | number | boolean | null | undefined | readonly string[] | Readonly<Record<string, string>>>
+>;
 
 export function encodeRequest(id: string, method: string, params: RpcParams): string {
   return `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;

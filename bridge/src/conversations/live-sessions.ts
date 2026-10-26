@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import { HistoryResultSchema, SessionOpenResultSchema, type HistoryMessage } from "../hermes/schemas";
 import type { HermesGateway } from "../hermes/hermes-gateway";
 import { userTurnCount } from "../translate/history";
@@ -5,10 +7,11 @@ import { userTurnCount } from "../translate/history";
 export type LiveSession = {
   readonly conversationId: string;
   readonly sid: string;
+  readonly subscriptionId: string;
   readonly nextTurn: number;
 };
 
-export const SESSION_SOURCE = "hellum";
+export const SESSION_SOURCE = "tui";
 
 export class LiveSessions {
   private readonly byConversation = new Map<string, LiveSession>();
@@ -36,11 +39,17 @@ export class LiveSessions {
   }
 
   async create(): Promise<LiveSession> {
-    const opened = await this.gateway.request("session.create", { source: SESSION_SOURCE }, SessionOpenResultSchema);
-    if (!opened.stored_session_id) {
-      throw new Error("Hermes created a session without a stored id");
-    }
-    return this.remember({ conversationId: opened.stored_session_id, sid: opened.session_id, nextTurn: 0 });
+    const opened = await this.gateway.request(
+      "session.create",
+      { request_id: randomUUID(), source: SESSION_SOURCE, follow_profile_config: true },
+      SessionOpenResultSchema,
+    );
+    return this.remember({
+      conversationId: opened.stored_session_id ?? opened.session_id,
+      sid: opened.session_id,
+      subscriptionId: opened.subscription_id,
+      nextTurn: 0,
+    });
   }
 
   open(conversationId: string): Promise<LiveSession> {
@@ -73,6 +82,14 @@ export class LiveSessions {
     return turn;
   }
 
+  async detach(conversationId: string): Promise<void> {
+    const live = this.byConversation.get(conversationId);
+    this.forget(conversationId);
+    if (live) {
+      await this.gateway.request("session.detach", { session_id: live.sid, subscription_id: live.subscriptionId }, z.unknown());
+    }
+  }
+
   forget(conversationId: string): void {
     const live = this.byConversation.get(conversationId);
     if (live) {
@@ -84,7 +101,7 @@ export class LiveSessions {
   private async resume(conversationId: string): Promise<LiveSession> {
     const opened = await this.gateway.request("session.resume", { session_id: conversationId }, SessionOpenResultSchema);
     const history = await this.gateway.request("session.history", { session_id: opened.session_id }, HistoryResultSchema);
-    return this.remember({ conversationId, sid: opened.session_id, nextTurn: userTurnCount(history.messages) });
+    return this.remember({ conversationId, sid: opened.session_id, subscriptionId: opened.subscription_id, nextTurn: userTurnCount(history.messages) });
   }
 
   private remember(live: LiveSession): LiveSession {

@@ -12,7 +12,8 @@ import sys
 sys.path.insert(0, os.getcwd())
 
 from hermes_cli.auth import PROVIDER_REGISTRY, clear_provider_auth  # noqa: E402
-from hermes_cli.config import remove_env_value, save_env_value  # noqa: E402
+from hermes_cli.config import get_compatible_custom_providers, load_config, remove_env_value, save_env_value  # noqa: E402
+from hermes_cli.model_switch import persist_model_selection, switch_model  # noqa: E402
 from hermes_cli.inventory import build_models_payload, load_picker_context  # noqa: E402
 
 BUILT_IN_KEY_ENV = {"openrouter": ["OPENROUTER_API_KEY"]}
@@ -66,6 +67,28 @@ def disconnect(slug):
     return {"success": True, "error": None}
 
 
+def set_default(slug, model):
+    from tui_gateway.model_switch import _current_model_runtime
+
+    current_provider, current_model, current_base_url, current_api_key = _current_model_runtime(None, slug)
+    config = load_config()
+    result = switch_model(
+        raw_input=model,
+        current_provider=current_provider,
+        current_model=current_model,
+        current_base_url=current_base_url,
+        current_api_key=current_api_key,
+        is_global=True,
+        explicit_provider=slug,
+        user_providers=config.get("providers"),
+        custom_providers=get_compatible_custom_providers(config),
+    )
+    if not result.success:
+        return {"success": False, "error": result.error_message or "Hermes rejected the model"}
+    persist_model_selection(result)
+    return {"success": True, "error": None}
+
+
 def main():
     request = json.loads(sys.stdin.read() or "{}")
     action = request.get("action")
@@ -76,6 +99,8 @@ def main():
         result = save_key(slug, str(request.get("api_key") or ""))
     elif action == "disconnect":
         result = disconnect(slug)
+    elif action == "set_default":
+        result = set_default(slug, str(request.get("model") or ""))
     else:
         result = {"success": False, "error": f"unknown action {action!r}"}
     sys.stdout.write(json.dumps(result, default=str))

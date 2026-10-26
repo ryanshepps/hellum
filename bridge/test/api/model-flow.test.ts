@@ -59,7 +59,7 @@ describe("language model settings", () => {
   test("a profile whose provider has no key cannot be made active", async () => {
     const { api } = await start();
     await api.send("PATCH", "config", { llm: { profiles: { cheap: { provider: "openai-compatible", provider_connection: "deepseek", model: "deepseek-chat" } } } });
-    expect((await api.send("PUT", "inference/active-profile", { name: "cheap" })).status).toBe(502);
+    expect((await api.send("PUT", "inference/active-profile", { name: "cheap" })).status).toBe(422);
     expect(readModelState().model).toBe("@preset/vellum-main");
   });
 

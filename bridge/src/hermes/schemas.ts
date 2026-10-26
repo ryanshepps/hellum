@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ServerRequest } from "./wire";
 
 export const JsonValueSchema = z.json();
 export type JsonValue = z.infer<typeof JsonValueSchema>;
@@ -22,7 +23,9 @@ export const SessionListResultSchema = z.object({ success: z.literal(true), sess
 export const SessionOpenResultSchema = z.object({
   session_id: z.string(),
   stored_session_id: z.string().optional(),
-  message_count: z.number().optional(),
+  subscription_id: z.string(),
+  revision: z.number(),
+  execution_generation: z.number(),
 });
 
 export const HistoryMessageSchema = z.discriminatedUnion("role", [
@@ -52,26 +55,30 @@ const ToolCompletePayloadSchema = z.object({
   result: JsonValueSchema.optional(),
 });
 
+const ControlFields = {
+  prompt_id: z.string(),
+  execution_generation: z.number(),
+};
+
 const ClarifyPayloadSchema = z.object({
-  request_id: z.string(),
+  ...ControlFields,
   question: z.string(),
   choices: z.array(z.string()).nullish(),
 });
 
-const SecretPayloadSchema = z.object({
-  request_id: z.string(),
-  prompt: z.string(),
-  env_var: z.string(),
-});
+const SecretParamsSchema = z.object({ session_id: z.string(), prompt: z.string(), env_var: z.string() });
 
-const SudoPayloadSchema = z.object({ request_id: z.string() });
+const SudoParamsSchema = z.object({ session_id: z.string() });
+
+export type PromptControl = { readonly promptId: string; readonly generation: number };
 
 export type HermesPrompt =
-  | { readonly kind: "clarify"; readonly requestId: string; readonly question: string; readonly choices: readonly string[] }
+  | { readonly kind: "clarify"; readonly requestId: string; readonly control: PromptControl; readonly question: string; readonly choices: readonly string[] }
   | { readonly kind: "secret"; readonly requestId: string; readonly prompt: string; readonly envVar: string }
   | { readonly kind: "sudo"; readonly requestId: string };
 
 const ApprovalPayloadSchema = z.object({
+  ...ControlFields,
   command: z.string(),
   description: z.string().nullish(),
 });
@@ -97,7 +104,7 @@ export type HermesTurnEvent =
       readonly args: Readonly<Record<string, JsonValue>>;
       readonly result: ToolResultPayload;
     }
-  | { readonly type: "approval.request"; readonly command: string; readonly description: string | null }
+  | { readonly type: "approval.request"; readonly control: PromptControl; readonly command: string; readonly description: string | null }
   | { readonly type: "prompt.request"; readonly prompt: HermesPrompt }
   | { readonly type: "message.complete"; readonly text: string; readonly status: "complete" | "interrupted" }
   | { readonly type: "error"; readonly message: string };
@@ -131,23 +138,29 @@ export function parseTurnEvent(type: string, payload: unknown): HermesTurnEvent 
     }
     case "approval.request": {
       const parsed = ApprovalPayloadSchema.safeParse(payload);
-      return parsed.success ? { type, command: parsed.data.command, description: parsed.data.description ?? null } : null;
+      return parsed.success
+        ? {
+            type,
+            control: { promptId: parsed.data.prompt_id, generation: parsed.data.execution_generation },
+            command: parsed.data.command,
+            description: parsed.data.description ?? null,
+          }
+        : null;
     }
     case "clarify.request": {
       const parsed = ClarifyPayloadSchema.safeParse(payload);
       return parsed.success
-        ? { type: "prompt.request", prompt: { kind: "clarify", requestId: parsed.data.request_id, question: parsed.data.question, choices: parsed.data.choices ?? [] } }
+        ? {
+            type: "prompt.request",
+            prompt: {
+              kind: "clarify",
+              requestId: parsed.data.prompt_id,
+              control: { promptId: parsed.data.prompt_id, generation: parsed.data.execution_generation },
+              question: parsed.data.question,
+              choices: parsed.data.choices ?? [],
+            },
+          }
         : null;
-    }
-    case "secret.request": {
-      const parsed = SecretPayloadSchema.safeParse(payload);
-      return parsed.success
-        ? { type: "prompt.request", prompt: { kind: "secret", requestId: parsed.data.request_id, prompt: parsed.data.prompt, envVar: parsed.data.env_var } }
-        : null;
-    }
-    case "sudo.request": {
-      const parsed = SudoPayloadSchema.safeParse(payload);
-      return parsed.success ? { type: "prompt.request", prompt: { kind: "sudo", requestId: parsed.data.request_id } } : null;
     }
     case "message.complete": {
       const parsed = CompletePayloadSchema.safeParse(payload);
@@ -158,6 +171,25 @@ export function parseTurnEvent(type: string, payload: unknown): HermesTurnEvent 
     case "error": {
       const parsed = ErrorPayloadSchema.safeParse(payload);
       return parsed.success ? { type, message: parsed.data.message } : null;
+    }
+    default:
+      return null;
+  }
+}
+
+export type ServerPrompt = { readonly sessionId: string; readonly prompt: HermesPrompt };
+
+export function parseServerPrompt(request: ServerRequest): ServerPrompt | null {
+  switch (request.method) {
+    case "secret": {
+      const parsed = SecretParamsSchema.safeParse(request.params);
+      return parsed.success
+        ? { sessionId: parsed.data.session_id, prompt: { kind: "secret", requestId: request.id, prompt: parsed.data.prompt, envVar: parsed.data.env_var } }
+        : null;
+    }
+    case "sudo": {
+      const parsed = SudoParamsSchema.safeParse(request.params);
+      return parsed.success ? { sessionId: parsed.data.session_id, prompt: { kind: "sudo", requestId: request.id } } : null;
     }
     default:
       return null;

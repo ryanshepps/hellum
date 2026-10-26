@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 export type ModelState = { model: string; provider: string; keys: Record<string, boolean> };
 
-export type ModelsRequest = { action: string; provider?: string; api_key?: string };
+export type ModelsRequest = { action: string; provider?: string; api_key?: string; model?: string };
 
 const PROVIDERS = [
   { slug: "openrouter", name: "OpenRouter", key: true, virtual: false, models: ["@preset/vellum-main", "anthropic/claude-sonnet-5"] },
@@ -54,6 +54,12 @@ export function handleModels(request: ModelsRequest): object {
         return { success: false, error: `No credentials found for ${request.provider}` };
       }
       writeModelState({ ...state, keys: { ...state.keys, [provider.slug]: false } });
+      return { success: true, error: null };
+    case "set_default":
+      if (!provider || !state.keys[provider.slug]) {
+        return { success: false, error: `No credentials for provider '${request.provider}'` };
+      }
+      writeModelState({ ...state, model: request.model ?? "", provider: provider.slug });
       return { success: true, error: null };
     default:
       return { success: false, error: `unknown action ${request.action}` };
