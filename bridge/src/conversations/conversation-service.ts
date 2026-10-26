@@ -29,7 +29,7 @@ import {
 import { LiveSessions, type LiveSession } from "./live-sessions";
 import { SessionCatalog } from "./session-catalog";
 
-type Fence = "revision" | "execution_generation";
+type Fences = { readonly revision: number; readonly execution_generation: number };
 const MessageTimesResultSchema = z.object({ success: z.literal(true), times: z.record(z.string(), z.number()) });
 
 export type ArchiveFilter = "active" | "archived" | "all";
@@ -205,9 +205,8 @@ export class ConversationService {
     if (!live || !this.processing.has(conversationId)) {
       return false;
     }
-    const known = (await this.catalog.find(conversationId))?.runtime_generation ?? 0;
-    await this.fenced("execution_generation", known, (generation) =>
-      this.gateway.request("session.interrupt", { session_id: live.sid, execution_generation: generation }, z.unknown()),
+    await this.fenced(await this.knownFences(conversationId), (fences) =>
+      this.gateway.request("session.interrupt", { session_id: live.sid, execution_generation: fences.execution_generation }, z.unknown()),
     );
     return true;
   }
@@ -295,24 +294,42 @@ export class ConversationService {
   }
 
   private async mutate(conversationId: string, operation: "rename" | "delete", payload: Readonly<Record<string, string>>): Promise<void> {
-    this.catalog.invalidate();
-    const known = (await this.catalog.find(conversationId))?.runtime_revision ?? 0;
     const requestId = randomUUID();
-    await this.fenced("revision", known, (revision) =>
+    await this.fenced(await this.knownFences(conversationId), (fences) =>
       this.gateway.request(
         "session.mutate",
-        { session_id: conversationId, request_id: requestId, expected_revision: revision, operation, payload },
+        {
+          session_id: conversationId,
+          request_id: requestId,
+          expected_revision: fences.revision,
+          expected_generation: fences.execution_generation,
+          operation,
+          payload,
+        },
         z.unknown(),
       ),
     );
   }
 
-  private async fenced<T>(fence: Fence, known: number, attempt: (value: number) => Promise<T>): Promise<T> {
+  private async knownFences(conversationId: string): Promise<Fences> {
+    this.catalog.invalidate();
+    const row = await this.catalog.find(conversationId);
+    return { revision: row?.runtime_revision ?? 0, execution_generation: row?.runtime_generation ?? 0 };
+  }
+
+  private async fenced<T>(known: Fences, attempt: (fences: Fences) => Promise<T>): Promise<T> {
     try {
       return await attempt(known);
     } catch (error) {
-      const current = error instanceof HermesRpcError ? error.data[fence] : undefined;
-      if (typeof current !== "number" || current === known) {
+      if (!(error instanceof HermesRpcError)) {
+        throw error;
+      }
+      const { revision, execution_generation: generation } = error.data;
+      const current: Fences = {
+        revision: typeof revision === "number" ? revision : known.revision,
+        execution_generation: typeof generation === "number" ? generation : known.execution_generation,
+      };
+      if (current.revision === known.revision && current.execution_generation === known.execution_generation) {
         throw error;
       }
       return attempt(current);

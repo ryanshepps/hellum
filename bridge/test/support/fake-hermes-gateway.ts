@@ -196,8 +196,12 @@ function answerControl(id: string, params: Params, value: string): void {
 }
 
 function mutate(id: string, sid: string, session: StoredSession, params: Params): void {
-  if (params.expected_revision !== session.revision) {
-    return fail(id, 4001, "revision_conflict", { revision: session.revision });
+  if (params.operation === "delete" && typeof params.expected_generation !== "number") {
+    return fail(id, 4001, "invalid_params");
+  }
+  const generationMatches = params.expected_generation === undefined || params.expected_generation === session.generation;
+  if (params.expected_revision !== session.revision || !generationMatches) {
+    return fail(id, 4001, "revision_conflict", { revision: session.revision, execution_generation: session.generation });
   }
   const payload = (params.payload ?? {}) as Params;
   switch (params.operation) {
