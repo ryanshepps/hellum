@@ -21,7 +21,7 @@ from tools.skill_usage import (  # noqa: E402
     is_hub_installed,
     restore_skill,
 )
-from tools.skills_tool import _find_all_skills  # noqa: E402
+from tools.skills_tool import find_all_skills  # noqa: E402
 
 FILE_LIMIT = 200
 CONTENT_LIMIT = 512 * 1024
@@ -68,7 +68,7 @@ def list_skills():
             "provenance": provenance(skill["name"]),
             "state": "disabled" if skill["name"] in disabled else "enabled",
         }
-        for skill in _find_all_skills(skip_disabled=True)
+        for skill in find_all_skills(skip_disabled=True)
     ]
     active_names = {skill["name"] for skill in active}
     categories = bundled_categories()
