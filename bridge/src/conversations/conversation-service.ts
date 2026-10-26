@@ -5,11 +5,12 @@ import { resolveAttachments, stageAttachments } from "../attachments/attachment-
 import { attachmentsByMessage, messageAttachmentView } from "../attachments/attachment-views";
 import type { EventHub } from "../events/event-hub";
 import type { HermesGateway } from "../hermes/hermes-gateway";
+import { runHermesHelper, type HelperCommand } from "../hermes/helper-process";
 import { parseTurnEvent, type SessionRow } from "../hermes/schemas";
 import type { HermesEvent } from "../hermes/wire";
 import { log } from "../log";
 import { toConversationSummary, type ConversationActivity, type ConversationSummary } from "../translate/conversations";
-import { historyToMessages } from "../translate/history";
+import { historyToMessages, type TurnTimes } from "../translate/history";
 import { foldLiveTurn, mergeLiveTurn, openLiveTurn, type LiveTurn } from "../translate/live-turn";
 import { decorateUserMessages, promptWithFileRefs } from "../translate/message-attachments";
 import { assistantMessageId, userMessageId } from "../translate/message-ids";
@@ -27,6 +28,10 @@ import { LiveSessions, type LiveSession } from "./live-sessions";
 import { SessionCatalog } from "./session-catalog";
 
 const TitleResultSchema = z.object({ title: z.string() });
+const MessageTimesResultSchema = z.object({
+  success: z.literal(true),
+  turns: z.array(z.object({ user_at: z.number(), last_at: z.number() })),
+});
 
 export type ArchiveFilter = "active" | "archived" | "all";
 
@@ -76,6 +81,7 @@ export class ConversationService {
     private readonly hub: EventHub,
     private readonly store: ConversationStore,
     private readonly attachments: AttachmentStore,
+    private readonly helpers: HelperCommand,
     private state: ConversationState,
   ) {
     this.live = new LiveSessions(gateway);
@@ -89,8 +95,9 @@ export class ConversationService {
     hub: EventHub,
     store: ConversationStore,
     attachments: AttachmentStore,
+    helpers: HelperCommand,
   ): Promise<ConversationService> {
-    return new ConversationService(gateway, hub, store, attachments, await store.load());
+    return new ConversationService(gateway, hub, store, attachments, helpers, await store.load());
   }
 
   async releaseIdleSessions(): Promise<void> {
@@ -133,13 +140,23 @@ export class ConversationService {
     if (!row && !this.live.get(conversationId)) {
       return { messages: [], processing: false };
     }
-    const history = await this.live.history(conversationId);
+    const [history, turnTimes] = await Promise.all([this.live.history(conversationId), this.turnTimes(conversationId)]);
     const startedAtMs = row ? Math.round(row.started_at * 1000) : Date.now();
-    const messages = mergeLiveTurn(historyToMessages(conversationId, startedAtMs, history), this.liveTurns.get(conversationId) ?? null);
+    const messages = mergeLiveTurn(historyToMessages(conversationId, startedAtMs, history, turnTimes), this.liveTurns.get(conversationId) ?? null);
     return {
       messages: decorateUserMessages(messages, await attachmentsByMessage(this.attachments, messages), this.state.promptTexts),
       processing: this.processing.has(conversationId),
     };
+  }
+
+  private async turnTimes(conversationId: string): Promise<readonly TurnTimes[]> {
+    try {
+      const { turns } = await runHermesHelper(this.helpers, "sessions", { action: "message_times", session_id: conversationId }, MessageTimesResultSchema);
+      return turns.map((turn) => ({ userAtMs: Math.round(turn.user_at * 1000), lastAtMs: Math.round(turn.last_at * 1000) }));
+    } catch (error) {
+      log.warn("message times unavailable", { conversationId, error: error instanceof Error ? error.message : String(error) });
+      return [];
+    }
   }
 
   async send(

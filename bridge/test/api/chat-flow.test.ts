@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { AssistantEventEnvelopeSchema, ConversationMessageSchema, type AssistantEventEnvelope } from "@vellumai/assistant-api";
 import { isType, sendMessage } from "../support/chat";
 import { authedClient, openEventStream, pairDevice, startTestBridge, type AuthedClient, type EventStreamReader, type TestBridge } from "../support/test-bridge";
@@ -51,6 +52,18 @@ describe("sending a message", () => {
     expect(body.processing).toBe(false);
     expect(body.messages.map((message) => ConversationMessageSchema.parse(message).id)).toEqual(["fake_1:u0", "fake_1:a0"]);
     expect(body.messages[1]).toMatchObject({ contentBlocks: [{ type: "text", text: "echo: hi there" }] });
+  });
+
+  test("transcript messages carry the times Hermes recorded for each turn", async () => {
+    const { api, events, target } = await start();
+    const sent = await sendMessage(api, "hi there");
+    await events.until(isType("message_complete", sent.conversationId));
+    const userAt = Date.UTC(2026, 9, 26, 11, 17, 32);
+    const replyAt = Date.UTC(2026, 9, 26, 11, 18, 14);
+    await Bun.write(join(target.stateDir, "fake-message-times.json"), JSON.stringify({ [sent.conversationId]: [{ user_at: userAt / 1000, last_at: replyAt / 1000 }] }));
+
+    const body = (await (await api.get(`messages?conversationId=${sent.conversationId}`)).json()) as { messages: { timestamp: string }[] };
+    expect(body.messages.map((message) => Date.parse(message.timestamp))).toEqual([userAt, replyAt]);
   });
 
   test("a follow-up continues the turn numbering", async () => {

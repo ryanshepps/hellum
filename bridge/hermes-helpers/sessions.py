@@ -1,4 +1,5 @@
-"""Find finished assistant replies in Hermes sessions that Hellum did not start.
+"""Read Hermes sessions for Hellum: finished replies in sessions Hellum did not
+start, and when each turn of a session happened.
 
 Run with the Hermes virtualenv and the hermes-agent checkout on sys.path.
 Reads one JSON request from stdin and writes one JSON response to stdout.
@@ -60,6 +61,39 @@ def finished_replies(sources, since):
     return replies
 
 
+def row_key(message):
+    return (
+        message.get("role"),
+        json.dumps(message.get("content"), default=str),
+        json.dumps(message.get("tool_calls"), default=str),
+        message.get("tool_call_id"),
+    )
+
+
+def active_row_times(rows):
+    retired = {}
+    times = []
+    for row in rows:
+        stamp = row.get("timestamp") or 0
+        if not row.get("active"):
+            retired.setdefault(row_key(row), []).append(stamp)
+            continue
+        earlier = retired.get(row_key(row))
+        times.append((row, earlier.pop(0) if earlier else stamp))
+    return times
+
+
+def message_times(session_id):
+    db = SessionDB(read_only=True)
+    turns = []
+    for row, at in active_row_times(db.get_messages(session_id, include_inactive=True)):
+        if row.get("role") == "user":
+            turns.append({"user_at": at, "last_at": at})
+        elif row.get("role") == "assistant" and turns:
+            turns[-1]["last_at"] = max(turns[-1]["last_at"], at)
+    return turns
+
+
 def main():
     request = json.loads(sys.stdin.read() or "{}")
     action = request.get("action")
@@ -68,6 +102,8 @@ def main():
             "success": True,
             "replies": finished_replies(set(request.get("sources") or []), float(request.get("since") or 0)),
         }
+    elif action == "message_times":
+        result = {"success": True, "turns": message_times(str(request.get("session_id") or ""))}
     else:
         result = {"success": False, "error": f"unknown action {action!r}"}
     sys.stdout.write(json.dumps(result, default=str))
