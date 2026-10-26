@@ -8,24 +8,42 @@ type Draft = {
   readonly blocks: readonly ConversationContentBlock[];
 };
 
+export type TurnTimes = {
+  readonly userAtMs: number;
+  readonly lastAtMs: number;
+};
+
 type Fold = {
   readonly messages: readonly ConversationMessage[];
   readonly turn: number;
   readonly draft: Draft | null;
 };
 
-function timestampAt(startedAtMs: number, index: number): string {
-  return new Date(startedAtMs + index).toISOString();
+type Clock = {
+  readonly startedAtMs: number;
+  readonly turnTimes: readonly TurnTimes[];
+};
+
+function placeholderMs(clock: Clock, fold: Fold): number {
+  return clock.startedAtMs + fold.messages.length;
 }
 
-function flush(fold: Fold, startedAtMs: number): readonly ConversationMessage[] {
+function userAtMs(clock: Clock, fold: Fold, turn: number): number {
+  return clock.turnTimes[turn]?.userAtMs ?? placeholderMs(clock, fold);
+}
+
+function replyAtMs(clock: Clock, fold: Fold): number {
+  return clock.turnTimes[fold.turn]?.lastAtMs ?? placeholderMs(clock, fold);
+}
+
+function flush(fold: Fold, clock: Clock): readonly ConversationMessage[] {
   if (!fold.draft || fold.draft.blocks.length === 0) {
     return fold.messages;
   }
   const message: ConversationMessage = {
     id: fold.draft.id,
     role: "assistant",
-    timestamp: timestampAt(startedAtMs, fold.messages.length),
+    timestamp: new Date(replyAtMs(clock, fold)).toISOString(),
     attachments: [],
     contentBlocks: [...fold.draft.blocks],
   };
@@ -49,19 +67,21 @@ export function historyToMessages(
   conversationId: string,
   startedAtMs: number,
   history: readonly HistoryMessage[],
+  turnTimes: readonly TurnTimes[] = [],
 ): readonly ConversationMessage[] {
+  const clock: Clock = { startedAtMs, turnTimes };
   const initial: Fold = { messages: [], turn: -1, draft: null };
   const folded = history.reduce<Fold>((fold, entry) => {
     switch (entry.role) {
       case "system":
         return fold;
       case "user": {
-        const messages = flush(fold, startedAtMs);
+        const messages = flush(fold, clock);
         const turn = fold.turn + 1;
         const message: ConversationMessage = {
           id: userMessageId(conversationId, turn),
           role: "user",
-          timestamp: timestampAt(startedAtMs, messages.length),
+          timestamp: new Date(userAtMs(clock, { ...fold, messages }, turn)).toISOString(),
           attachments: [],
           contentBlocks: [{ type: "text", text: entry.text }],
           textSegments: [entry.text],
@@ -72,7 +92,7 @@ export function historyToMessages(
         const draft = draftFor(fold, conversationId);
         const toolIndex = draft.blocks.filter((block) => block.type === "tool_use").length;
         const tool = toVellumToolCall(entry.name, entry.context ?? null);
-        const at = startedAtMs + fold.messages.length;
+        const at = fold.turn >= 0 ? userAtMs(clock, fold, fold.turn) : placeholderMs(clock, fold);
         return appendBlocks(fold, conversationId, [
           {
             type: "tool_use",
@@ -91,5 +111,5 @@ export function historyToMessages(
       }
     }
   }, initial);
-  return flush(folded, startedAtMs);
+  return flush(folded, clock);
 }

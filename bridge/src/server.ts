@@ -81,7 +81,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
   const outsideChats = await OutsideChatWatcher.start(config.stateDir, config.hermesHelpers, notifications, config.outsideChatPollMs);
   const gateway = new HermesGateway(config.hermesGateway, spawnGatewayProcess);
   const attachments = await AttachmentStore.open(config.stateDir);
-  const conversations = await ConversationService.open(gateway, hub, createFileConversationStore(config.stateDir), attachments);
+  const conversations = await ConversationService.open(gateway, hub, createFileConversationStore(config.stateDir), attachments, config.hermesHelpers);
   gateway.start().catch((error: unknown) => {
     log.error("hermes gateway failed to start", { error: error instanceof Error ? error.message : String(error) });
   });

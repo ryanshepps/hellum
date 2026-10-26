@@ -1,15 +1,26 @@
 import { existsSync, readFileSync } from "node:fs";
 
 type Reply = { id: string; source: string; replied_at: number };
+type TurnTimes = { user_at: number; last_at: number };
 
-export type SessionsRequest = { action: string; sources?: string[]; since?: number };
+export type SessionsRequest = { action: string; sources?: string[]; since?: number; session_id?: string };
+
+function readJson<T>(path: string | undefined, empty: T): T {
+  return path && existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as T) : empty;
+}
 
 export function handleSessions(request: SessionsRequest): object {
-  const stateFile = process.env.FAKE_HERMES_SESSIONS_FILE ?? "";
-  const replies: Reply[] = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, "utf8")) : [];
-  if (request.action !== "finished_replies") {
-    return { success: false, error: `unknown action ${request.action}` };
+  switch (request.action) {
+    case "finished_replies": {
+      const replies = readJson<Reply[]>(process.env.FAKE_HERMES_SESSIONS_FILE, []);
+      const sources = new Set(request.sources ?? []);
+      return { success: true, replies: replies.filter((reply) => sources.has(reply.source) && reply.replied_at > (request.since ?? 0)) };
+    }
+    case "message_times": {
+      const times = readJson<Record<string, TurnTimes[]>>(process.env.FAKE_HERMES_MESSAGE_TIMES_FILE, {});
+      return { success: true, turns: times[request.session_id ?? ""] ?? [] };
+    }
+    default:
+      return { success: false, error: `unknown action ${request.action}` };
   }
-  const sources = new Set(request.sources ?? []);
-  return { success: true, replies: replies.filter((reply) => sources.has(reply.source) && reply.replied_at > (request.since ?? 0)) };
 }

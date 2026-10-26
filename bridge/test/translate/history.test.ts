@@ -50,6 +50,21 @@ describe("historyToMessages", () => {
     expect(times).toEqual(times.toSorted((left, right) => left - right));
   });
 
+  test("recorded turn times replace the placeholder times", () => {
+    const turnTimes = [
+      { userAtMs: STARTED_AT + 60_000, lastAtMs: STARTED_AT + 90_000 },
+      { userAtMs: STARTED_AT + 3_600_000, lastAtMs: STARTED_AT + 3_605_000 },
+    ];
+    const messages = historyToMessages(CONVERSATION, STARTED_AT, toolTurn, turnTimes);
+    expect(messages.map((message) => Date.parse(message.timestamp))).toEqual([STARTED_AT + 60_000, STARTED_AT + 90_000, STARTED_AT + 3_600_000, STARTED_AT + 3_605_000]);
+    expect(messages[1]?.contentBlocks?.[0]).toMatchObject({ toolCall: { startedAt: STARTED_AT + 60_000 } });
+  });
+
+  test("turns without a recorded time keep placeholder times", () => {
+    const messages = historyToMessages(CONVERSATION, STARTED_AT, toolTurn, [{ userAtMs: STARTED_AT + 60_000, lastAtMs: STARTED_AT + 90_000 }]);
+    expect(messages.slice(2).map((message) => Date.parse(message.timestamp))).toEqual([STARTED_AT + 2, STARTED_AT + 3]);
+  });
+
   const edgeCases: ReadonlyArray<readonly [string, readonly HistoryMessage[], string[]]> = [
     ["empty history", [], []],
     ["system prompts are hidden", [{ role: "system", text: "be nice" }, { role: "user", text: "hi" }], ["conv:u0"]],
