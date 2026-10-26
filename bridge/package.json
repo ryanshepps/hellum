@@ -8,7 +8,8 @@
     "hellum": "bun run src/cli.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "test:e2e": "bun run e2e/chat.e2e.ts"
+    "test:e2e": "bun run e2e/chat.e2e.ts",
+    "check:hermes": "bun run scripts/check-hermes.ts"
   },
   "dependencies": {
     "@vellumai/assistant-api": "workspace:*",

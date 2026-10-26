@@ -5,7 +5,7 @@ Hellum is an iPhone app for the [Hermes agent](https://github.com/nousresearch/h
 A small **bridge** runs on your Mac next to Hermes. It serves the Vellum web UI, speaks Vellum's assistant API to it, and translates every call into Hermes' JSON-RPC gateway. The iOS app is Vellum's Capacitor shell, rebranded and pointed at your bridge.
 
 ```
-iPhone (Hellum app) ──https──▶ tailscale serve ──▶ bridge (Bun) ──stdio JSON-RPC──▶ Hermes tui_gateway
+iPhone (Hellum app) ──https──▶ tailscale serve ──▶ bridge (Bun) ──WebSocket JSON-RPC──▶ Hermes gateway
                                                       └──HTTP/2──▶ Apple Push Notification service
 ```
 
@@ -133,6 +133,7 @@ Useful scripts in `bridge/scripts/`:
 
 | Script | Does |
 | --- | --- |
+| `check-hermes.ts` | Starts a throwaway bridge against the running Hermes gateway and checks it attaches and serves chats, skills, schedules, and model settings. Exits non-zero on failure. Run with `bun run check:hermes`. |
 | `record-hermes-trace.ts` | Records raw Hermes gateway output for a prompt, to refresh test fixtures. |
 | `probe-ui.ts` | Loads the UI headlessly and lists every request and console error. |
 | `probe-shot.ts` | Screenshots the UI at a given viewport. |
