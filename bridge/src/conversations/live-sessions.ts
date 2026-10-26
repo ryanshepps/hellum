@@ -63,13 +63,14 @@ export class LiveSessions {
     return result.messages;
   }
 
-  claimTurn(conversationId: string): number {
+  claimTurn(conversationId: string, recordedTurns: number, turnInFlight: boolean): number {
     const live = this.byConversation.get(conversationId);
     if (!live) {
       throw new Error(`Conversation ${conversationId} is not open`);
     }
-    this.byConversation.set(conversationId, { ...live, nextTurn: live.nextTurn + 1 });
-    return live.nextTurn;
+    const turn = turnInFlight ? Math.max(recordedTurns, live.nextTurn) : recordedTurns;
+    this.byConversation.set(conversationId, { ...live, nextTurn: turn + 1 });
+    return turn;
   }
 
   forget(conversationId: string): void {
