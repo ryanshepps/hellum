@@ -74,6 +74,7 @@ export class ConversationService {
   private readonly turns = new Map<string, TurnState>();
   private readonly liveTurns = new Map<string, LiveTurn>();
   private readonly processing = new Set<string>();
+  private credentialsChanged = false;
 
   private constructor(
     private readonly gateway: HermesGateway,
@@ -98,6 +99,10 @@ export class ConversationService {
     helpers: HelperCommand,
   ): Promise<ConversationService> {
     return new ConversationService(gateway, hub, store, attachments, helpers, await store.load());
+  }
+
+  markCredentialsChanged(): void {
+    this.credentialsChanged = true;
   }
 
   async releaseIdleSessions(): Promise<void> {
@@ -161,6 +166,7 @@ export class ConversationService {
   ): Promise<SentMessage> {
     const attached = resolveAttachments(this.attachments, attachmentIds);
     const live = conversationId && (await this.isKnown(conversationId)) ? await this.live.open(conversationId) : await this.createSession();
+    await this.reloadCredentials(live);
     const staged = await stageAttachments(this.gateway, this.attachments, live.sid, attached);
     const recordedTurns = userTurnCount(await this.live.history(live.conversationId));
     const turn = this.live.claimTurn(live.conversationId, recordedTurns, this.processing.has(live.conversationId));
@@ -291,6 +297,14 @@ export class ConversationService {
       throw new ConversationNotFoundError(conversationId);
     }
     await this.updateState((state) => withArchived(state, conversationId, archived ? Date.now() : null));
+  }
+
+  private async reloadCredentials(live: LiveSession): Promise<void> {
+    if (!this.credentialsChanged) {
+      return;
+    }
+    await this.gateway.request("reload.env", { session_id: live.sid }, z.unknown());
+    this.credentialsChanged = false;
   }
 
   private async mutate(conversationId: string, operation: "rename" | "delete", payload: Readonly<Record<string, string>>): Promise<void> {

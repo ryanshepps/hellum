@@ -96,9 +96,9 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
     ...modelRoutes(
       new ModelService(
         config.hermesHelpers,
-        gateway,
         privateJsonFile(join(config.stateDir, "llm-profiles.json"), ProfileStoreSchema, EMPTY_PROFILE_STORE),
         () => conversations.releaseIdleSessions(),
+        () => conversations.markCredentialsChanged(),
       ),
       DEFAULT_CONFIG,
     ),

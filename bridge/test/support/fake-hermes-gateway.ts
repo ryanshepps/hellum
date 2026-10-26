@@ -266,7 +266,7 @@ function handle({ id, method, params }: Request): void {
     case "config.set":
       return text(params, "key") === "model" ? fail(id, 4001, "use_session_mutation_model") : ok(id, { key: text(params, "key") });
     case "reload.env":
-      return ok(id, { updated: 1 });
+      return session && subscriptions.has(sid) ? ok(id, { updated: 1 }) : fail(id, 4001, "invalid_params");
     case "session.interrupt": {
       if (!session) return fail(id, 4001, "not_found");
       if (params.execution_generation !== session.generation) {

@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { runHermesHelper, type HelperCommand } from "../hermes/helper-process";
-import type { HermesGateway } from "../hermes/hermes-gateway";
 import type { JsonFile } from "../storage/json-file";
 import {
   HermesProviderSchema,
@@ -44,9 +43,9 @@ export type LlmConfigPatch = LlmPatch & { readonly activeProfile?: string | unde
 export class ModelService {
   constructor(
     private readonly helper: HelperCommand,
-    private readonly gateway: HermesGateway,
     private readonly store: JsonFile<ProfileStore>,
     private readonly onModelChanged: () => Promise<void>,
+    private readonly onCredentialsChanged: () => void,
   ) {}
 
   async llm() {
@@ -153,6 +152,6 @@ export class ModelService {
     if (!result.success) {
       throw new ModelSettingRejectedError(result.error ?? "Hermes rejected the change");
     }
-    await this.gateway.request("reload.env", {}, z.unknown());
+    this.onCredentialsChanged();
   }
 }
