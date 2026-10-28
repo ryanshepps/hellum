@@ -48,7 +48,8 @@ export function addDevice(registry: DeviceRegistry, device: NewDevice, now: numb
 
 export type RotateOutcome =
   | { readonly kind: "rotated"; readonly registry: DeviceRegistry; readonly device: Device }
-  | { readonly kind: "rejected" };
+  | { readonly kind: "rejected"; readonly reason: "unknown_token" }
+  | { readonly kind: "rejected"; readonly reason: "refresh_expired"; readonly deviceId: string };
 
 export function rotateRefreshToken(
   registry: DeviceRegistry,
@@ -57,8 +58,11 @@ export function rotateRefreshToken(
   now: number,
 ): RotateOutcome {
   const device = registry.devices.find((candidate) => candidate.refreshTokenHash === presentedHash);
-  if (!device || device.refreshExpiresAt <= now) {
-    return { kind: "rejected" };
+  if (!device) {
+    return { kind: "rejected", reason: "unknown_token" };
+  }
+  if (device.refreshExpiresAt <= now) {
+    return { kind: "rejected", reason: "refresh_expired", deviceId: device.deviceId };
   }
   const rotated: Device = {
     ...device,

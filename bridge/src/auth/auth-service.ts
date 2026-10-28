@@ -17,6 +17,7 @@ import {
   type Device,
   type DeviceRegistry,
   type Platform,
+  type RotateOutcome,
 } from "./devices";
 import type { DeviceStore } from "./device-store";
 import {
@@ -55,6 +56,10 @@ export type DeviceInfo = {
   readonly platform: Platform;
   readonly name: string;
 };
+
+export type RefreshOutcome =
+  | { readonly kind: "issued"; readonly session: IssuedSession }
+  | Extract<RotateOutcome, { readonly kind: "rejected" }>;
 
 export type ExchangeOutcome =
   | { readonly kind: "pending"; readonly expiresAt: number; readonly intervalSeconds: number }
@@ -129,14 +134,14 @@ export class AuthService {
     }
   }
 
-  async refresh(refreshToken: string): Promise<IssuedSession | null> {
+  async refresh(refreshToken: string): Promise<RefreshOutcome> {
     const nextRefreshToken = generateSecret();
     const outcome = rotateRefreshToken(this.registry, hashSecret(refreshToken), hashSecret(nextRefreshToken), this.now());
     if (outcome.kind === "rejected") {
-      return null;
+      return outcome;
     }
     await this.saveRegistry(outcome.registry);
-    return this.issueSession(outcome.device.deviceId, nextRefreshToken);
+    return { kind: "issued", session: await this.issueSession(outcome.device.deviceId, nextRefreshToken) };
   }
 
   authenticate(accessToken: string): AccessSession | null {

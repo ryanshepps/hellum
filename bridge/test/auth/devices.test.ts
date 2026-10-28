@@ -23,7 +23,11 @@ describe("device registry", () => {
   });
 
   test("an expired refresh token is rejected", () => {
-    expect(rotateRefreshToken(registry, first, second, T0 + REFRESH_TOKEN_TTL_MS).kind).toBe("rejected");
+    expect(rotateRefreshToken(registry, first, second, T0 + REFRESH_TOKEN_TTL_MS)).toEqual({ kind: "rejected", reason: "refresh_expired", deviceId: "phone" });
+  });
+
+  test("an unknown refresh token is rejected", () => {
+    expect(rotateRefreshToken(registry, third, second, T0)).toEqual({ kind: "rejected", reason: "unknown_token" });
   });
 
   test("re-pairing a device id replaces its old credentials", () => {

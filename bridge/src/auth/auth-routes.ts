@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { clearedRefreshCookie, isSecureRequest, readCookie, REFRESH_COOKIE_NAME, refreshCookie } from "../http/cookies";
 import { errorResponse, readJsonBody } from "../http/json";
+import { log } from "../log";
 import type { AuthService, IssuedSession } from "./auth-service";
 import { PLATFORMS } from "./devices";
 import { describeUserAgent } from "./user-agent";
@@ -96,13 +97,15 @@ export function createAuthRoutes(auth: AuthService, assistantId: string): AuthRo
 
   async function handleRefresh(request: Request): Promise<Response> {
     const presented = readCookie(request, REFRESH_COOKIE_NAME);
-    const session = presented ? await auth.refresh(presented) : null;
-    if (!session) {
+    const outcome = presented ? await auth.refresh(presented) : { kind: "rejected", reason: "missing_cookie" } as const;
+    if (outcome.kind === "rejected") {
+      log.warn("refresh token rotation failed", { reason: outcome.reason, deviceId: "deviceId" in outcome ? outcome.deviceId : undefined, userAgent: request.headers.get("user-agent") });
       const response = errorResponse(401, "unauthorized", "Pair this device again");
       response.headers.set("Set-Cookie", clearedRefreshCookie(isSecureRequest(request)));
       return response;
     }
-    return sessionResponse(session, assistantId, request);
+    log.info("refresh token rotation succeeded", { deviceId: outcome.session.deviceId });
+    return sessionResponse(outcome.session, assistantId, request);
   }
 
   return async (request) => {
