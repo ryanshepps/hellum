@@ -168,7 +168,7 @@ export class AuthService {
   private async issueSession(deviceId: string, refreshToken: string): Promise<IssuedSession> {
     const accessToken = generateSecret();
     const now = this.now();
-    await this.saveAccess(grantAccess(this.accessSessions, hashSecret(accessToken), deviceId, now));
+    await this.saveAccess(grantAccess(revokeDeviceAccess(this.accessSessions, deviceId), hashSecret(accessToken), deviceId, now));
     return {
       accessToken,
       accessTokenExpiresAt: now + ACCESS_TOKEN_TTL_MS,

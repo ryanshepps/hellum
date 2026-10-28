@@ -120,6 +120,7 @@ describe("sessions", () => {
     expect(refreshed.status).toBe(200);
     const body = (await refreshed.json()) as { accessToken: string };
     expect((await bridge.request(API_PATH, withBearer(body.accessToken))).status).not.toBe(401);
+    expect((await bridge.request(API_PATH, withBearer(session.accessToken))).status).toBe(401);
 
     const replayed = await bridge.request("/v1/guardian/refresh", postJson({}, { Cookie: session.refreshCookie }));
     expect(replayed.status).toBe(401);
