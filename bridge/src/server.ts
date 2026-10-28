@@ -12,6 +12,7 @@ import { skillRoutes } from "./api/skill-routes";
 import { voiceRoutes } from "./api/voice-routes";
 import { DEFAULT_CONFIG, systemRoutes } from "./api/system-routes";
 import { createAuthRoutes } from "./auth/auth-routes";
+import { createFileAccessStore } from "./auth/access-store";
 import { AuthService } from "./auth/auth-service";
 import { createFileDeviceStore } from "./auth/device-store";
 import type { BridgeConfig } from "./config";
@@ -73,7 +74,7 @@ async function startPlatformPush(config: BridgeConfig, tokens: PushTokenRegistry
 }
 
 export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
-  const auth = await AuthService.open(createFileDeviceStore(config.stateDir));
+  const auth = await AuthService.open(createFileDeviceStore(config.stateDir), createFileAccessStore(config.stateDir));
   const identity = await loadIdentity(config.stateDir);
   const pushTokens = await PushTokenRegistry.open(config.stateDir);
   const hub = new EventHub();

@@ -10,8 +10,6 @@ export type AccessSession = {
 
 export type AccessSessions = ReadonlyMap<TokenHash, AccessSession>;
 
-export const EMPTY_ACCESS_SESSIONS: AccessSessions = new Map();
-
 export function grantAccess(sessions: AccessSessions, tokenHash: TokenHash, deviceId: string, now: number): AccessSessions {
   const live = [...sessions].filter(([, session]) => session.expiresAt > now);
   return new Map([...live, [tokenHash, { deviceId, expiresAt: now + ACCESS_TOKEN_TTL_MS }]]);

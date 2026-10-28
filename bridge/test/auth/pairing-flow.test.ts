@@ -126,14 +126,14 @@ describe("sessions", () => {
     expect((await bridge.request("/v1/guardian/refresh", postJson({}, { Cookie: refreshCookieFrom(refreshed) }))).status).toBe(200);
   });
 
-  test("paired devices survive a bridge restart", async () => {
+  test("paired devices and their access tokens survive a bridge restart", async () => {
     bridge = await startTestBridge();
     const session = await pairWithApprovedCode(bridge);
     const { stateDir } = bridge;
     await bridge.stop();
 
     bridge = await startTestBridge({ HELLUM_STATE_DIR: stateDir });
-    expect((await bridge.request(API_PATH, withBearer(session.accessToken))).status).toBe(401);
+    expect((await bridge.request(API_PATH, withBearer(session.accessToken))).status).not.toBe(401);
     expect((await bridge.request("/v1/guardian/refresh", postJson({}, { Cookie: session.refreshCookie }))).status).toBe(200);
   });
 
@@ -151,10 +151,11 @@ describe("sessions", () => {
 });
 
 describe("host files", () => {
-  test("the admin socket and device registry are private to the owner", async () => {
+  test("the admin socket, device registry and access tokens are private to the owner", async () => {
     bridge = await startTestBridge();
     await pairWithApprovedCode(bridge);
     expect((await stat(bridge.adminSocketPath)).mode & 0o777).toBe(0o600);
     expect((await stat(`${bridge.stateDir}/devices.json`)).mode & 0o777).toBe(0o600);
+    expect((await stat(`${bridge.stateDir}/access-tokens.json`)).mode & 0o777).toBe(0o600);
   });
 });

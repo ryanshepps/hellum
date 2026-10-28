@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import {
   ACCESS_TOKEN_TTL_MS,
-  EMPTY_ACCESS_SESSIONS,
   findAccess,
   grantAccess,
   REFRESH_AFTER_FRACTION,
   revokeDeviceAccess,
   type AccessSession,
+  type AccessSessions,
 } from "./access-sessions";
+import type { AccessStore } from "./access-store";
 import {
   addDevice,
   REFRESH_TOKEN_TTL_MS,
@@ -62,16 +63,17 @@ export type ExchangeOutcome =
 
 export class AuthService {
   private pairings = EMPTY_PAIRING_BOOK;
-  private accessSessions = EMPTY_ACCESS_SESSIONS;
 
   private constructor(
     private registry: DeviceRegistry,
     private readonly store: DeviceStore,
+    private accessSessions: AccessSessions,
+    private readonly accessStore: AccessStore,
     private readonly now: Clock,
   ) {}
 
-  static async open(store: DeviceStore, now: Clock = Date.now): Promise<AuthService> {
-    return new AuthService(await store.load(), store, now);
+  static async open(store: DeviceStore, accessStore: AccessStore, now: Clock = Date.now): Promise<AuthService> {
+    return new AuthService(await store.load(), store, await accessStore.load(), accessStore, now);
   }
 
   createChallenge(): IssuedPairing {
@@ -118,7 +120,7 @@ export class AuthService {
             this.now(),
           ),
         );
-        return { kind: "approved", session: this.issueSession(deviceId, refreshToken) };
+        return { kind: "approved", session: await this.issueSession(deviceId, refreshToken) };
       }
       default: {
         const exhaustive: never = outcome;
@@ -145,7 +147,7 @@ export class AuthService {
     const known = this.registry.devices.some((device) => device.deviceId === deviceId);
     if (known) {
       await this.saveRegistry(revokeDevice(this.registry, deviceId));
-      this.accessSessions = revokeDeviceAccess(this.accessSessions, deviceId);
+      await this.saveAccess(revokeDeviceAccess(this.accessSessions, deviceId));
     }
     return known;
   }
@@ -158,10 +160,10 @@ export class AuthService {
     return { deviceCode, userCode, expiresAt: now + PAIRING_TTL_MS, intervalSeconds: PAIRING_POLL_INTERVAL_SECONDS };
   }
 
-  private issueSession(deviceId: string, refreshToken: string): IssuedSession {
+  private async issueSession(deviceId: string, refreshToken: string): Promise<IssuedSession> {
     const accessToken = generateSecret();
     const now = this.now();
-    this.accessSessions = grantAccess(this.accessSessions, hashSecret(accessToken), deviceId, now);
+    await this.saveAccess(grantAccess(this.accessSessions, hashSecret(accessToken), deviceId, now));
     return {
       accessToken,
       accessTokenExpiresAt: now + ACCESS_TOKEN_TTL_MS,
@@ -175,5 +177,10 @@ export class AuthService {
   private saveRegistry(registry: DeviceRegistry): Promise<void> {
     this.registry = registry;
     return this.store.save(registry);
+  }
+
+  private saveAccess(sessions: AccessSessions): Promise<void> {
+    this.accessSessions = sessions;
+    return this.accessStore.save(sessions);
   }
 }
