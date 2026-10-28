@@ -138,6 +138,9 @@ export class AuthService {
     const nextRefreshToken = generateSecret();
     const outcome = rotateRefreshToken(this.registry, hashSecret(refreshToken), hashSecret(nextRefreshToken), this.now());
     if (outcome.kind === "rejected") {
+      if (outcome.reason === "refresh_reuse_detected") {
+        await this.revoke(outcome.deviceId);
+      }
       return outcome;
     }
     await this.saveRegistry(outcome.registry);

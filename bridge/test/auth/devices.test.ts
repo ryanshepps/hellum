@@ -22,6 +22,12 @@ describe("device registry", () => {
     expect(rotateRefreshToken(rotated.registry, second, third, T0 + 2).kind).toBe("rotated");
   });
 
+  test("presenting a rotated refresh token is reported as reuse", () => {
+    const rotated = rotateRefreshToken(registry, first, second, T0 + 1);
+    if (rotated.kind !== "rotated") throw new Error("expected rotation");
+    expect(rotateRefreshToken(rotated.registry, first, third, T0 + 2)).toEqual({ kind: "rejected", reason: "refresh_reuse_detected", deviceId: "phone" });
+  });
+
   test("an expired refresh token is rejected", () => {
     expect(rotateRefreshToken(registry, first, second, T0 + REFRESH_TOKEN_TTL_MS)).toEqual({ kind: "rejected", reason: "refresh_expired", deviceId: "phone" });
   });

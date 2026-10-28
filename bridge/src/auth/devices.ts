@@ -12,6 +12,7 @@ const DeviceSchema = z.object({
   platform: z.enum(PLATFORMS),
   refreshTokenHash: z.string().regex(/^[0-9a-f]{64}$/),
   refreshExpiresAt: z.number(),
+  rotatedTokenHashes: z.array(z.string().regex(/^[0-9a-f]{64}$/)).default([]),
   pairedAt: z.number(),
   lastSeenAt: z.number(),
 });
@@ -24,6 +25,7 @@ export type Device = {
   readonly platform: Platform;
   readonly refreshTokenHash: TokenHash;
   readonly refreshExpiresAt: number;
+  readonly rotatedTokenHashes: readonly TokenHash[];
   readonly pairedAt: number;
   readonly lastSeenAt: number;
 };
@@ -42,14 +44,14 @@ export type NewDevice = {
 export function addDevice(registry: DeviceRegistry, device: NewDevice, now: number): DeviceRegistry {
   const others = registry.devices.filter((existing) => existing.deviceId !== device.deviceId);
   return {
-    devices: [...others, { ...device, refreshExpiresAt: now + REFRESH_TOKEN_TTL_MS, pairedAt: now, lastSeenAt: now }],
+    devices: [...others, { ...device, refreshExpiresAt: now + REFRESH_TOKEN_TTL_MS, rotatedTokenHashes: [], pairedAt: now, lastSeenAt: now }],
   };
 }
 
 export type RotateOutcome =
   | { readonly kind: "rotated"; readonly registry: DeviceRegistry; readonly device: Device }
   | { readonly kind: "rejected"; readonly reason: "unknown_token" }
-  | { readonly kind: "rejected"; readonly reason: "refresh_expired"; readonly deviceId: string };
+  | { readonly kind: "rejected"; readonly reason: "refresh_expired" | "refresh_reuse_detected"; readonly deviceId: string };
 
 export function rotateRefreshToken(
   registry: DeviceRegistry,
@@ -59,7 +61,8 @@ export function rotateRefreshToken(
 ): RotateOutcome {
   const device = registry.devices.find((candidate) => candidate.refreshTokenHash === presentedHash);
   if (!device) {
-    return { kind: "rejected", reason: "unknown_token" };
+    const reused = registry.devices.find((candidate) => candidate.rotatedTokenHashes.includes(presentedHash));
+    return reused ? { kind: "rejected", reason: "refresh_reuse_detected", deviceId: reused.deviceId } : { kind: "rejected", reason: "unknown_token" };
   }
   if (device.refreshExpiresAt <= now) {
     return { kind: "rejected", reason: "refresh_expired", deviceId: device.deviceId };
@@ -68,6 +71,7 @@ export function rotateRefreshToken(
     ...device,
     refreshTokenHash: nextHash,
     refreshExpiresAt: now + REFRESH_TOKEN_TTL_MS,
+    rotatedTokenHashes: [...device.rotatedTokenHashes, presentedHash],
     lastSeenAt: now,
   };
   return {
@@ -84,6 +88,10 @@ export function revokeDevice(registry: DeviceRegistry, deviceId: string): Device
 export function parseDeviceRegistry(raw: unknown): DeviceRegistry {
   const parsed = DeviceRegistrySchema.parse(raw);
   return {
-    devices: parsed.devices.map((device) => ({ ...device, refreshTokenHash: device.refreshTokenHash as TokenHash })),
+    devices: parsed.devices.map((device) => ({
+      ...device,
+      refreshTokenHash: device.refreshTokenHash as TokenHash,
+      rotatedTokenHashes: device.rotatedTokenHashes as TokenHash[],
+    })),
   };
 }

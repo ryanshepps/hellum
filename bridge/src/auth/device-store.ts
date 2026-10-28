@@ -11,6 +11,6 @@ export function createFileDeviceStore(stateDir: string): DeviceStore {
   const file = privateJsonFile(join(stateDir, "devices.json"), DeviceRegistrySchema, { devices: [] });
   return {
     load: async () => parseDeviceRegistry(await file.read()),
-    save: (registry) => file.write({ devices: [...registry.devices] }),
+    save: (registry) => file.write({ devices: registry.devices.map((device) => ({ ...device, rotatedTokenHashes: [...device.rotatedTokenHashes] })) }),
   };
 }

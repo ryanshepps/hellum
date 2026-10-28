@@ -112,7 +112,7 @@ describe("sessions", () => {
     expect(Math.round((Date.parse(body.refreshAfter) - before) / day)).toBe(24);
   });
 
-  test("refresh rotates the cookie and rejects the spent one", async () => {
+  test("refresh rotates the cookie", async () => {
     bridge = await startTestBridge();
     const session = await pairWithApprovedCode(bridge);
 
@@ -122,9 +122,19 @@ describe("sessions", () => {
     expect((await bridge.request(API_PATH, withBearer(body.accessToken))).status).not.toBe(401);
     expect((await bridge.request(API_PATH, withBearer(session.accessToken))).status).toBe(401);
 
-    const replayed = await bridge.request("/v1/guardian/refresh", postJson({}, { Cookie: session.refreshCookie }));
-    expect(replayed.status).toBe(401);
     expect((await bridge.request("/v1/guardian/refresh", postJson({}, { Cookie: refreshCookieFrom(refreshed) }))).status).toBe(200);
+  });
+
+  test("replaying a spent refresh cookie revokes the device", async () => {
+    bridge = await startTestBridge();
+    const session = await pairWithApprovedCode(bridge);
+    const refreshed = await bridge.request("/v1/guardian/refresh", postJson({}, { Cookie: session.refreshCookie }));
+    const { accessToken } = (await refreshed.json()) as { accessToken: string };
+
+    expect((await bridge.request("/v1/guardian/refresh", postJson({}, { Cookie: session.refreshCookie }))).status).toBe(403);
+    expect((await bridge.request(API_PATH, withBearer(accessToken))).status).toBe(401);
+    expect((await bridge.request("/v1/guardian/refresh", postJson({}, { Cookie: refreshCookieFrom(refreshed) }))).status).toBe(401);
+    expect(((await (await bridge.admin("GET", "/devices")).json()) as { devices: unknown[] }).devices).toEqual([]);
   });
 
   test("paired devices and their access tokens survive a bridge restart", async () => {

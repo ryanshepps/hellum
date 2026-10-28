@@ -100,7 +100,10 @@ export function createAuthRoutes(auth: AuthService, assistantId: string): AuthRo
     const outcome = presented ? await auth.refresh(presented) : { kind: "rejected", reason: "missing_cookie" } as const;
     if (outcome.kind === "rejected") {
       log.warn("refresh token rotation failed", { reason: outcome.reason, deviceId: "deviceId" in outcome ? outcome.deviceId : undefined, userAgent: request.headers.get("user-agent") });
-      const response = errorResponse(401, "unauthorized", "Pair this device again");
+      const response =
+        outcome.reason === "refresh_reuse_detected"
+          ? errorResponse(403, "forbidden", "Refresh token reuse detected; pair this device again")
+          : errorResponse(401, "unauthorized", "Pair this device again");
       response.headers.set("Set-Cookie", clearedRefreshCookie(isSecureRequest(request)));
       return response;
     }
