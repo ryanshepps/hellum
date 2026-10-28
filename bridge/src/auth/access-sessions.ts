@@ -1,7 +1,7 @@
 import type { TokenHash } from "./tokens";
 
-export const ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000;
-export const ACCESS_TOKEN_REFRESH_LEAD_MS = 10 * 60 * 1000;
+export const ACCESS_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const REFRESH_AFTER_FRACTION = 0.8;
 
 export type AccessSession = {
   readonly deviceId: string;

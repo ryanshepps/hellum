@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
-  ACCESS_TOKEN_REFRESH_LEAD_MS,
   ACCESS_TOKEN_TTL_MS,
   EMPTY_ACCESS_SESSIONS,
   findAccess,
   grantAccess,
+  REFRESH_AFTER_FRACTION,
   revokeDeviceAccess,
   type AccessSession,
 } from "./access-sessions";
@@ -165,7 +165,7 @@ export class AuthService {
     return {
       accessToken,
       accessTokenExpiresAt: now + ACCESS_TOKEN_TTL_MS,
-      refreshAfter: now + ACCESS_TOKEN_TTL_MS - ACCESS_TOKEN_REFRESH_LEAD_MS,
+      refreshAfter: now + Math.floor(ACCESS_TOKEN_TTL_MS * REFRESH_AFTER_FRACTION),
       refreshToken,
       refreshTokenExpiresAt: now + REFRESH_TOKEN_TTL_MS,
       deviceId,

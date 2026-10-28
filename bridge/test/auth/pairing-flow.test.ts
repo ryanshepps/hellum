@@ -101,6 +101,17 @@ describe("sessions", () => {
     expect(header).toContain("Secure");
   });
 
+  test("access tokens last 30 days and ask for a refresh after 24", async () => {
+    bridge = await startTestBridge();
+    const created = (await (await bridge.admin("POST", "/pairings")).json()) as { deviceCode: string };
+    const before = Date.now();
+    const response = await bridge.request("/v1/remote-web/pairing-token", postJson({ deviceCode: created.deviceCode }));
+    const body = (await response.json()) as { accessTokenExpiresAt: string; refreshAfter: string };
+    const day = 24 * 60 * 60 * 1000;
+    expect(Date.parse(body.accessTokenExpiresAt) - before).toBeGreaterThanOrEqual(30 * day);
+    expect(Math.round((Date.parse(body.refreshAfter) - before) / day)).toBe(24);
+  });
+
   test("refresh rotates the cookie and rejects the spent one", async () => {
     bridge = await startTestBridge();
     const session = await pairWithApprovedCode(bridge);
