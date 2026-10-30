@@ -85,7 +85,7 @@
     "apply": "Set app icon",
     "change": "Change",
     "color": "Color",
-    "description": "Choose the icon Vellum shows on your home screen.",
+    "description": "Choose the icon Hellum shows on your home screen.",
     "error": "iOS did not change your home screen icon. You can try again.",
     "eyes": "Eyes",
     "matchAvatar": "Match avatar",
@@ -836,7 +836,7 @@
     "computeResourcesTitle": "Compute & Resources",
     "current": "Current",
     "customize": "Customize",
-    "preferencesSubtitle": "Customize how Vellum looks and behaves on this device.",
+    "preferencesSubtitle": "Customize how Hellum looks and behaves on this device.",
     "preferencesTitle": "Preferences",
     "sleepPolicyLoginNotice": "Log in to the Vellum platform to manage sleep policy.",
     "sleepPolicySubtitle": "Control how long this assistant stays awake when idle.",
@@ -1181,7 +1181,7 @@
     "titleGeneric": "Get the Vellum Mobile App"
   },
   "notificationsPage": {
-    "description": "Manage how Vellum notifies you on this device.",
+    "description": "Manage how Hellum notifies you on this device.",
     "title": "Notifications"
   },
   "overridesCallSiteList": {
@@ -1364,12 +1364,12 @@
   },
   "preferencesModal": {
     "composerTitle": "Composer",
-    "description": "Customize shortcuts and how Vellum behaves on this device.",
-    "keyboardShortcutsDescription": "Customize the shortcuts for Vellum's commands.",
+    "description": "Customize shortcuts and how Hellum behaves on this device.",
+    "keyboardShortcutsDescription": "Customize the shortcuts for Hellum's commands.",
     "keyboardShortcutsTitle": "Keyboard Shortcuts",
     "launchAtLoginAriaLabel": "Launch at Login",
-    "launchAtLoginDescription": "Automatically start Vellum when you log in to your Mac.",
-    "launchAtLoginDescriptionWindows": "Automatically start Vellum when you log in to Windows.",
+    "launchAtLoginDescription": "Automatically start Hellum when you log in to your Mac.",
+    "launchAtLoginDescriptionWindows": "Automatically start Hellum when you log in to Windows.",
     "launchAtLoginTitle": "Launch at Login",
     "sendWithCmdEnter": "Send with Cmd+Enter",
     "sendWithCmdEnterHelper": "When enabled, Enter inserts a new line and Cmd+Enter sends.",
@@ -1849,13 +1849,13 @@
   },
   "shortcutsSections": {
     "alreadyUsedBy": "Already used by {label}",
-    "appDescription": "Work while a Vellum window is focused.",
+    "appDescription": "Work while a Hellum window is focused.",
     "appTitle": "App shortcuts",
     "cancel": "Cancel",
     "conflictNoticePrefix": "That shortcut is already used by {label}.",
     "conflictRecordingHint": "Pick a different combination, or press Esc to cancel.",
     "conflictResetHint": "Remove or change that binding before resetting.",
-    "globalDescription": "Work anywhere, even when Vellum is in the background.",
+    "globalDescription": "Work anywhere, even when Hellum is in the background.",
     "globalTitle": "Global shortcuts",
     "none": "None",
     "record": "Record",
@@ -2256,7 +2256,7 @@
     "customKey": "Custom",
     "defaultBadge": "Default",
     "enableVoiceShortcut": "Enable voice mode shortcut",
-    "focusedTabNote": "Push-to-Talk only works while this tab is focused, and browsers may intercept some shortcuts (e.g. Ctrl+T) before the page can see them. For always-on PTT, use the Vellum desktop app.",
+    "focusedTabNote": "Push-to-Talk only works while this tab is focused, and browsers may intercept some shortcuts (e.g. Ctrl+T) before the page can see them.",
     "grantMicrophoneAccessHint": "Grant microphone access to list your available input devices.",
     "interruptSensitivityAriaLabel": "Interrupt sensitivity",
     "interruptSensitivityDescription": "How easily talking over the assistant interrupts it. Lower it if the assistant cuts itself off on background noise or filler words; raise it to interrupt more quickly.",
@@ -2531,7 +2531,7 @@
     "unsupportedDescription": "This browser does not support system notifications.",
     "promptDescription": "Enable notifications to know when an answer or requested task is ready.",
     "checkingDescription": "Checking notification permission…",
-    "openTabDescription": "Keep a Vellum tab open to receive alerts. Closing or suspending the tab, or going offline, pauses delivery.",
+    "openTabDescription": "Keep a Hellum tab open to receive alerts. Closing or suspending the tab, or going offline, pauses delivery.",
     "enable": "Enable notifications"
   }
 }
