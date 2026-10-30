@@ -744,7 +744,6 @@
     "saveSuccess": "语音转文本设置已保存",
     "spokenLanguage": "口语语言",
     "spokenLanguageApplies": "从您下次语音输入开始生效。",
-    "vellumTranscription": "转录通过您的 Vellum 账户运行。",
     "windowsNativeDisplayName": "Windows 本机听写",
     "windowsNativeSetupWarning": "需要为您的 Windows 显示语言启用基本语音识别：打开“设置”>“时间和语言”>“语言和区域”，选择显示语言旁边的三个点，选择“语言选项”，然后在“语言功能”下下载“基本语音识别”。",
     "windowsNativeSubtitle": "Windows 设备上的语音识别，通过 Windows 助手在本地运行。可离线工作，无需 API 密钥。"
@@ -851,7 +850,6 @@
   },
   "ttsProviderForm": {
     "apiKey": "API 密钥",
-    "apiKeyRequired": "测试前请为此提供商保存 API 密钥。",
     "chooseFromCatalog": "从目录中选择",
     "customVoiceIdAriaLabel": "自定义语音 ID",
     "noManagedVoices": "目前没有可用的托管语音。",

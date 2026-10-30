@@ -32,28 +32,22 @@ export interface TTSProvider {
 
 export const TTS_PROVIDERS: readonly TTSProvider[] = [
   {
-    id: "vellum",
-    displayName: "Vellum",
-    subtitle:
-      "Text-to-speech through your Vellum account — billed to Vellum credits, no separate API key needed.",
-    // Deliberately false in the static fallback: this entry stands in for
-    // daemons whose live catalog is unavailable or predates managed voice
-    // selection, and those daemons ignore `providers.vellum.model` writes.
-    // New daemons advertise true via the live catalog fetch.
-    supportsVoiceSelection: false,
-    apiKeyPlaceholder: "Connected via your Vellum account",
+    id: "edge",
+    displayName: "Edge",
+    subtitle: "Microsoft Edge's free neural voices. No API key needed.",
+    supportsVoiceSelection: true,
+    apiKeyPlaceholder: "",
     credentialsGuide: {
       description:
-        "Connect this assistant to your Vellum account; managed speech uses that connection instead of a provider API key.",
-      url: "https://platform.vellum.ai/",
-      linkLabel: "Open Vellum Platform",
+        "Edge voices need no key. Enter a voice name such as en-US-AriaNeural to change it.",
+      url: "https://github.com/NousResearch/hermes-agent",
+      linkLabel: "Read the docs",
     },
   },
   {
     id: "elevenlabs",
     displayName: "ElevenLabs",
-    subtitle:
-      "High-quality voice synthesis for conversations and read-aloud. Requires an ElevenLabs API key.",
+    subtitle: "High-quality voice synthesis. Requires an ElevenLabs API key.",
     supportsVoiceSelection: true,
     apiKeyPlaceholder: "sk_…",
     credentialsGuide: {
@@ -61,48 +55,6 @@ export const TTS_PROVIDERS: readonly TTSProvider[] = [
         "Sign in to ElevenLabs, go to your Profile, and copy your API key.",
       url: "https://elevenlabs.io/app/settings/api-keys",
       linkLabel: "Open ElevenLabs API Keys",
-    },
-  },
-  {
-    id: "fish-audio",
-    displayName: "Fish Audio",
-    subtitle:
-      "Natural-sounding voice synthesis with custom voice cloning. Requires a Fish Audio API key and voice reference ID.",
-    supportsVoiceSelection: true,
-    apiKeyPlaceholder: "Enter your Fish Audio API key",
-    credentialsGuide: {
-      description:
-        "Sign in to Fish Audio, navigate to API Keys in your dashboard, and create a new key.",
-      url: "https://fish.audio/app/api-keys/",
-      linkLabel: "Open Fish Audio API Keys",
-    },
-  },
-  {
-    id: "deepgram",
-    displayName: "Deepgram",
-    subtitle:
-      "Fast, accurate text-to-speech synthesis. Uses the same API key as Deepgram speech-to-text.",
-    supportsVoiceSelection: false,
-    apiKeyPlaceholder: "Enter your Deepgram API key",
-    credentialsGuide: {
-      description:
-        "Sign in to Deepgram, navigate to your API Keys page, and create or copy an existing key. This is the same key used for speech-to-text.",
-      url: "https://console.deepgram.com/",
-      linkLabel: "Open Deepgram Console",
-    },
-  },
-  {
-    id: "xai",
-    displayName: "xAI",
-    subtitle:
-      "Text-to-speech from xAI with expressive voices (eve, ara, rex, sal, leo). Requires an xAI API key.",
-    supportsVoiceSelection: false,
-    apiKeyPlaceholder: "Enter your xAI API key",
-    credentialsGuide: {
-      description:
-        "Sign in to the xAI console, navigate to API Keys, and create a new key.",
-      url: "https://console.x.ai/",
-      linkLabel: "Open xAI Console",
     },
   },
 ];
@@ -147,34 +99,80 @@ export const MACOS_NATIVE_STT_PROVIDER_ID = "macos-native";
 
 export const STT_PROVIDERS: readonly STTProvider[] = [
   {
-    id: "vellum",
-    displayName: "Vellum",
-    subtitle:
-      "Transcription through your Vellum account — billed to Vellum credits, no separate API key needed.",
+    id: "local",
+    displayName: "Local Whisper",
+    subtitle: "Whisper running on this Mac. Works offline and needs no API key.",
   },
   {
-    id: "deepgram",
-    displayName: "Deepgram",
-    subtitle:
-      "Fast, accurate speech-to-text transcription. Uses the same API key as Deepgram text-to-speech.",
-    apiKeyPlaceholder: "Enter your Deepgram API key",
+    id: "groq",
+    displayName: "Groq",
+    subtitle: "Fast hosted Whisper from Groq. Requires a Groq API key.",
+    apiKeyPlaceholder: "gsk_…",
     credentialsGuide: {
       description:
-        "Sign in to Deepgram, navigate to your API Keys page, and create or copy an existing key. This is the same key used for text-to-speech.",
-      url: "https://console.deepgram.com/",
-      linkLabel: "Open Deepgram Console",
+        "Sign in to the Groq console and create an API key.",
+      url: "https://console.groq.com/keys",
+      linkLabel: "Open Groq Console",
     },
   },
   {
     id: "openai",
     displayName: "OpenAI",
-    subtitle: "OpenAI Whisper transcription. Requires an OpenAI API key.",
+    subtitle: "OpenAI's transcription models. Requires an OpenAI API key.",
     apiKeyPlaceholder: "sk-…",
     credentialsGuide: {
       description:
         "Sign in to the OpenAI platform, navigate to API Keys, and create a new secret key.",
       url: "https://platform.openai.com/api-keys",
       linkLabel: "Open OpenAI API Keys",
+    },
+  },
+  {
+    id: "elevenlabs",
+    displayName: "ElevenLabs",
+    subtitle: "ElevenLabs Scribe. Requires an ElevenLabs API key.",
+    apiKeyPlaceholder: "sk_…",
+    credentialsGuide: {
+      description:
+        "Sign in to ElevenLabs, go to your Profile, and copy your API key.",
+      url: "https://elevenlabs.io/app/settings/api-keys",
+      linkLabel: "Open ElevenLabs API Keys",
+    },
+  },
+  {
+    id: "mistral",
+    displayName: "Mistral",
+    subtitle: "Mistral's Voxtral transcription. Requires a Mistral API key.",
+    apiKeyPlaceholder: "Enter your Mistral API key",
+    credentialsGuide: {
+      description:
+        "Sign in to the Mistral console and create an API key.",
+      url: "https://console.mistral.ai/api-keys",
+      linkLabel: "Open Mistral Console",
+    },
+  },
+  {
+    id: "deepinfra",
+    displayName: "DeepInfra",
+    subtitle: "Open Whisper models hosted by DeepInfra. Requires a DeepInfra API key.",
+    apiKeyPlaceholder: "Enter your DeepInfra API key",
+    credentialsGuide: {
+      description:
+        "Sign in to DeepInfra and create an API key.",
+      url: "https://deepinfra.com/dash/api_keys",
+      linkLabel: "Open DeepInfra",
+    },
+  },
+  {
+    id: "xai",
+    displayName: "xAI",
+    subtitle: "Transcription from xAI. Requires an xAI API key.",
+    apiKeyPlaceholder: "Enter your xAI API key",
+    credentialsGuide: {
+      description:
+        "Sign in to the xAI console, navigate to API Keys, and create a new key.",
+      url: "https://console.x.ai/",
+      linkLabel: "Open xAI Console",
     },
   },
   {

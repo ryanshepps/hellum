@@ -22,7 +22,6 @@ type SttProvider = {
 
 const DEFAULT_TTS = "edge";
 const DEFAULT_STT = "local";
-const NO_KEY = "No API key needed";
 
 function keyGuide(service: string, url: string): Guide {
   return { description: `Create an API key in your ${service} account and paste it here. Hermes keeps it in ~/.hermes/.env.`, url, linkLabel: `Open ${service}` };
@@ -137,7 +136,7 @@ export function ttsCatalog() {
     displayName: provider.displayName,
     subtitle: provider.subtitle,
     supportsVoiceSelection: provider.voiceKey !== null,
-    apiKeyPlaceholder: provider.keyEnv ? `${provider.displayName} API key` : NO_KEY,
+    apiKeyPlaceholder: provider.keyEnv ? `${provider.displayName} API key` : "",
     credentialsGuide: provider.guide,
   }));
 }

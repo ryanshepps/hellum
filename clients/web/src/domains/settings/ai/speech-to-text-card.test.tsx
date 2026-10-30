@@ -221,12 +221,13 @@ describe("SpeechToTextCard — macOS Native Dictation option", () => {
     expect(screen.getByText(/Reconocimiento de voz básico/)).toBeTruthy();
   });
 
-  test("selecting Deepgram and saving provisions the daemon (CES key + services.stt)", async () => {
+  test("selecting Groq and saving provisions Hermes (key + services.stt)", async () => {
     renderCard();
 
-    // Deepgram is the default provider; a new key enables Save.
-    const keyInput = screen.getByPlaceholderText(/Enter your Deepgram API key/);
-    fireEvent.change(keyInput, { target: { value: "dg-secret" } });
+    openProviderSelect();
+    selectOption("Groq");
+    const keyInput = screen.getByPlaceholderText("gsk_…");
+    fireEvent.change(keyInput, { target: { value: "gsk-secret" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(configPatchCalls.length).toBe(1));
@@ -235,12 +236,12 @@ describe("SpeechToTextCard — macOS Native Dictation option", () => {
       assistant_id: ASSISTANT_ID,
     });
     expect(credentialsSetCalls[0]!.body).toMatchObject({
-      service: "deepgram",
+      service: "groq",
       field: "api_key",
-      value: "dg-secret",
+      value: "gsk-secret",
     });
     expect(configPatchCalls[0]!.body).toMatchObject({
-      services: { stt: { provider: "deepgram" } },
+      services: { stt: { provider: "groq" } },
     });
   });
 
@@ -251,12 +252,11 @@ describe("SpeechToTextCard — macOS Native Dictation option", () => {
     const trigger = document.querySelector<HTMLButtonElement>(
       'button[role="combobox"][aria-label="STT provider"]',
     );
-    expect(trigger?.textContent).toContain("Deepgram");
-    expect(screen.getByText("API Key")).toBeTruthy();
+    expect(trigger?.textContent).toContain("Local Whisper");
     // The fallback must also self-heal the persisted value — leaving
     // "macos-native" behind would diverge from what the UI shows, with
     // Save disabled so the user couldn't persist the correction.
-    expect(localStorage.getItem(LS_STT_PROVIDER)).toBe("deepgram");
+    expect(localStorage.getItem(LS_STT_PROVIDER)).toBe("local");
   });
 
   test("a legacy provider alias is not overwritten by the self-heal", () => {
@@ -271,12 +271,12 @@ describe("SpeechToTextCard — macOS Native Dictation option", () => {
 
   test("does not clobber a daemon-set provider when only the key changes", async () => {
     // Daemon already has a provider configured elsewhere (CLI/other client).
-    daemonConfigData = { services: { stt: { provider: "deepgram" } } };
+    daemonConfigData = { services: { stt: { provider: "groq" } } };
     renderCard();
 
     // Enter ONLY an API key; leave the dropdown on the daemon's provider.
-    const keyInput = screen.getByPlaceholderText(/Enter your Deepgram API key/);
-    fireEvent.change(keyInput, { target: { value: "dg-secret" } });
+    const keyInput = screen.getByPlaceholderText("gsk_…");
+    fireEvent.change(keyInput, { target: { value: "gsk-secret" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(credentialsSetCalls.length).toBe(1));
@@ -288,8 +288,8 @@ describe("SpeechToTextCard — macOS Native Dictation option", () => {
     expect(sttBody?.services?.stt ?? {}).not.toHaveProperty("provider");
   });
 
-  test("selecting a provider from a Vellum daemon writes that provider", async () => {
-    daemonConfigData = { services: { stt: { provider: "vellum" } } };
+  test("selecting another provider writes that provider", async () => {
+    daemonConfigData = { services: { stt: { provider: "local" } } };
     renderCard();
 
     openProviderSelect();
@@ -298,118 +298,9 @@ describe("SpeechToTextCard — macOS Native Dictation option", () => {
 
     await waitFor(() => expect(configPatchCalls.length).toBe(1));
     expect(configPatchCalls[0]!.body).toMatchObject({
-      services: { stt: { provider: "openai-whisper" } },
+      services: { stt: { provider: "openai" } },
     });
     expect(credentialsSetCalls).toHaveLength(0);
-  });
-});
-
-describe("SpeechToTextCard — Vellum provider", () => {
-  beforeEach(() => {
-    localStorage.clear();
-    nativeDictationSupported = false;
-    credentialsSetCalls.length = 0;
-    configPatchCalls.length = 0;
-    daemonConfigData = { services: {} };
-    providerCatalogData = { providers: [] };
-    orgReady = false;
-  });
-
-  afterEach(() => {
-    cleanup();
-    localStorage.clear();
-  });
-
-  test("Vellum is offered in the provider dropdown", () => {
-    renderCard();
-
-    openProviderSelect();
-    expect(visibleOptions()).toContain("Vellum");
-  });
-
-  test("a vellum daemon provider renders as the selected option with no API key field", () => {
-    daemonConfigData = { services: { stt: { provider: "vellum" } } };
-    renderCard();
-
-    const trigger = document.querySelector<HTMLButtonElement>(
-      'button[role="combobox"][aria-label="STT provider"]',
-    );
-    expect(trigger?.textContent).toContain("Vellum");
-    // Vellum authenticates via the platform connection — there is no key.
-    expect(screen.queryByText("API Key")).toBeNull();
-    expect(
-      screen.getByText(/Transcription runs through your Vellum account/),
-    ).toBeTruthy();
-  });
-
-  test("selecting Vellum saves provider vellum and stores no credential", async () => {
-    renderCard();
-
-    openProviderSelect();
-    selectOption("Vellum");
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(configPatchCalls.length).toBe(1));
-    // Written as a pair so the save stays valid on daemons whose schema
-    // still couples provider "vellum" to mode "managed".
-    expect(configPatchCalls[0]!.body).toMatchObject({
-      services: { stt: { provider: "vellum", mode: "managed" } },
-    });
-    expect(credentialsSetCalls).toHaveLength(0);
-    expect(localStorage.getItem(LS_STT_PROVIDER)).toBe("vellum");
-  });
-
-  // A config written by the legacy mode toggle marks managed via `mode` while
-  // `provider` holds the BYOK restore value.
-  test("a legacy managed-mode daemon renders as Vellum", () => {
-    daemonConfigData = {
-      services: { stt: { mode: "managed", provider: "deepgram" } },
-    };
-    renderCard();
-
-    const trigger = document.querySelector<HTMLButtonElement>(
-      'button[role="combobox"][aria-label="STT provider"]',
-    );
-    expect(trigger?.textContent).toContain("Vellum");
-    expect(screen.queryByText("API Key")).toBeNull();
-  });
-
-  test("escaping a legacy managed-mode daemon resets mode alongside the provider", async () => {
-    // Without the mode reset, the stale `mode: "managed"` would win over the
-    // BYOK provider choice and the user would silently stay on Vellum.
-    daemonConfigData = {
-      services: { stt: { mode: "managed", provider: "deepgram" } },
-    };
-    renderCard();
-
-    openProviderSelect();
-    selectOption("Deepgram");
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(configPatchCalls.length).toBe(1));
-    expect(configPatchCalls[0]!.body).toMatchObject({
-      services: { stt: { provider: "deepgram", mode: "your-own" } },
-    });
-  });
-
-  test("leaving Vellum for native dictation writes a daemon-backed fallback", async () => {
-    // Native is client-only (no daemon mapping), so without an explicit write
-    // the daemon would stay on Vellum and a refetch would snap the dropdown
-    // back to it.
-    nativeDictationSupported = true;
-    daemonConfigData = { services: { stt: { provider: "vellum" } } };
-    renderCard();
-
-    openProviderSelect();
-    selectOption("macOS Native Dictation");
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(configPatchCalls.length).toBe(1));
-    expect(configPatchCalls[0]!.body).toMatchObject({
-      services: { stt: { provider: "deepgram" } },
-    });
-    // The client keeps routing dictation locally.
-    expect(localStorage.getItem(LS_STT_PROVIDER)).toBe("macos-native");
   });
 });
 
@@ -570,19 +461,15 @@ describe("SpeechToTextCard: Spoken language picker", () => {
   });
 
   test("hides when the draft switches between manual providers", async () => {
-    // Saved provider deepgram (manual), dropdown switched to Vellum without
-    // saving: both are manual, but a pick would hot-apply to the still
-    // active deepgram config while the row advertises the draft's options,
-    // so any pending provider draft hides the picker.
-    daemonConfigData = { services: { stt: { provider: "deepgram" } } };
+    // Saved provider groq (manual), dropdown switched to xAI without saving:
+    // both are manual, but a pick would hot-apply to the still active groq
+    // config while the row advertises the draft's options, so any pending
+    // provider draft hides the picker.
+    daemonConfigData = { services: { stt: { provider: "groq" } } };
     providerCatalogData = {
       providers: [
-        {
-          id: "deepgram",
-          displayName: "Deepgram",
-          languageSelection: "manual",
-        },
-        { id: "vellum", displayName: "Vellum", languageSelection: "manual" },
+        { id: "groq", displayName: "Groq", languageSelection: "manual" },
+        { id: "xai", displayName: "xAI", languageSelection: "manual" },
       ],
     };
     renderCard();
@@ -590,7 +477,7 @@ describe("SpeechToTextCard: Spoken language picker", () => {
     await waitFor(() => expect(languageTrigger()).not.toBeNull());
 
     openProviderSelect();
-    selectOption("Vellum");
+    selectOption("xAI");
 
     expect(languageTrigger()).toBeNull();
   });

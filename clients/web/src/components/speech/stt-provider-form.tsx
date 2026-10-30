@@ -50,41 +50,42 @@ import { useSttLanguageSelection } from "@/components/speech/use-stt-language-se
  */
 
 /**
- * How the daemon addresses each card provider: `provider` is the
- * `services.stt.provider` value (the card id and daemon id differ for
- * Whisper), and `credentialService` is the CES namespace for its key.
- * Client-only providers (macOS native dictation) are absent — they never
- * touch the daemon. `vellum` authenticates via the platform connection, so
- * it has no credential service of its own.
+ * How the bridge addresses each card provider: `provider` is the
+ * `services.stt.provider` value, and `credentialService` is the service whose
+ * key Hermes needs. Client-only providers (macOS native dictation) are
+ * absent — they never touch the daemon. Local Whisper needs no key.
  */
 const STT_DAEMON_PROVIDER: Record<
   string,
   { provider: string; credentialService?: string }
 > = {
-  vellum: { provider: "vellum" },
-  deepgram: { provider: "deepgram", credentialService: "deepgram" },
-  openai: { provider: "openai-whisper", credentialService: "openai" },
+  local: { provider: "local" },
+  groq: { provider: "groq", credentialService: "groq" },
+  openai: { provider: "openai", credentialService: "openai" },
+  elevenlabs: { provider: "elevenlabs", credentialService: "elevenlabs" },
+  mistral: { provider: "mistral", credentialService: "mistral" },
+  deepinfra: { provider: "deepinfra", credentialService: "deepinfra" },
+  xai: { provider: "xai", credentialService: "xai" },
 };
 
 /**
  * Reverse of `STT_DAEMON_PROVIDER.provider`: maps a `services.stt.provider`
  * daemon id back to the card id used by the dropdown. Only representable
- * daemon providers appear here; ones the static dropdown can't show
- * (e.g. google-gemini/xai) are intentionally absent so we never coerce them.
+ * daemon providers appear here, so one the dropdown can't show is never
+ * coerced.
  */
-const CARD_ID_BY_DAEMON_PROVIDER: Record<string, string> = {
-  vellum: "vellum",
-  deepgram: "deepgram",
-  "openai-whisper": "openai",
-};
+const CARD_ID_BY_DAEMON_PROVIDER: Record<string, string> = Object.fromEntries(
+  Object.entries(STT_DAEMON_PROVIDER).map(([cardId, { provider }]) => [
+    provider,
+    cardId,
+  ]),
+);
 
 /**
- * Fallback provider, as both a card id and a daemon id. Mirrors the daemon's
- * `services.stt.provider` schema default. Deliberately not `providers[0]` —
- * the dropdown leads with Vellum, and an unconfigured client must not claim
- * the managed provider on its own.
+ * Fallback provider, as both a card id and a daemon id. Mirrors what the
+ * bridge reports when Hermes has no `stt.provider` stored.
  */
-const DEFAULT_PROVIDER_ID = "deepgram";
+const DEFAULT_PROVIDER_ID = "local";
 
 export interface SttProviderFormProps {
   /**
@@ -444,12 +445,6 @@ export function SttProviderForm({
 
       {!hideCredentialsGuide && selectedProvider.credentialsGuide && (
         <CredentialsGuide guide={selectedProvider.credentialsGuide} />
-      )}
-
-      {draftProvider === "vellum" && (
-        <p className="text-body-medium-lighter text-[var(--content-tertiary)]">
-          {t("sttProviderForm.vellumTranscription")}
-        </p>
       )}
 
       {(!hideSaveButton || providerHasKey) && (

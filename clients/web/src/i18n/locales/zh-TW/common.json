@@ -744,7 +744,6 @@
     "saveSuccess": "語音轉文字設定已儲存",
     "spokenLanguage": "口說語言",
     "spokenLanguageApplies": "從您下次語音輸入開始生效。",
-    "vellumTranscription": "轉錄會透過您的 Vellum 帳戶執行。",
     "windowsNativeDisplayName": "Windows 原生聽寫",
     "windowsNativeSetupWarning": "需要為您的 Windows 顯示語言啟用基本語音辨識：開啟「設定」>「時間與語言」>「語言與區域」，選取顯示語言旁邊的三個點，選擇「語言選項」，然後在「語言功能」下下載「基本語音辨識」。",
     "windowsNativeSubtitle": "Windows 裝置上的語音辨識，透過 Windows 輔助程式在本機執行。可離線運作且不需要 API 金鑰。"
@@ -851,7 +850,6 @@
   },
   "ttsProviderForm": {
     "apiKey": "API 金鑰",
-    "apiKeyRequired": "測試前請為此供應商儲存 API 金鑰。",
     "chooseFromCatalog": "從目錄中選擇",
     "customVoiceIdAriaLabel": "自訂語音 ID",
     "noManagedVoices": "目前沒有可用的受管理語音。",

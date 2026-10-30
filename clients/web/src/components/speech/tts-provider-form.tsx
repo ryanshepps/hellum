@@ -10,12 +10,15 @@ import {
   configGetQueryKey,
   ttsProvidersGetOptions,
 } from "@/generated/daemon/@tanstack/react-query.gen";
-import { configPatch, credentialsSetPost } from "@/generated/daemon/sdk.gen";
+import {
+  configPatch,
+  credentialsSetPost,
+  ttsSynthesizePost,
+} from "@/generated/daemon/sdk.gen";
 import { useDraftOverride } from "@/hooks/use-draft-override";
 import { useTranslation } from "@/i18n";
 import { useAssistantIdentityStore } from "@/stores/assistant-identity-store";
 import { useIsOrgReady } from "@/hooks/use-is-org-ready";
-import { synthesizeTTS } from "@/lib/tts-synthesize";
 import { getLocalSetting, setLocalSetting } from "@/utils/local-settings";
 import { Button } from "@vellumai/design-library/components/button";
 import { Select } from "@vellumai/design-library/components/select";
@@ -47,17 +50,6 @@ import { TTS_PROVIDERS } from "@/lib/provider-catalogs";
  * own: Settings → AI wraps it in a `ByoServiceCard`, the live-voice first-run
  * card renders it as a section of its modal.
  */
-
-/**
- * The daemon config key that the "Voice ID" input maps to, per provider, under
- * `services.tts.providers.<id>`. Providers absent here have no voice selection
- * (`supportsVoiceSelection: false`), so nothing is written for them.
- */
-const TTS_VOICE_CONFIG_FIELD: Record<string, "voiceId" | "referenceId"> = {
-  elevenlabs: "voiceId",
-  "fish-audio": "referenceId",
-  xai: "voiceId",
-};
 
 export interface TtsProviderFormProps {
   /**
@@ -102,20 +94,7 @@ export function TtsProviderForm({
     enabled: isOrgReady,
     staleTime: Infinity,
   });
-  const providers = useMemo(() => {
-    const fetched = catalogData?.providers;
-    if (!fetched) {
-      return TTS_PROVIDERS;
-    }
-    // Assistants running an older catalog omit vellum, but the managed option
-    // must still be offered (and a legacy managed config still renders as
-    // Vellum) — graft the static entry on.
-    if (fetched.some((p) => p.id === "vellum")) {
-      return fetched;
-    }
-    const vellum = TTS_PROVIDERS.find((p) => p.id === "vellum");
-    return vellum ? [vellum, ...fetched] : fetched;
-  }, [catalogData]);
+  const providers = catalogData?.providers ?? TTS_PROVIDERS;
 
   // Seed the provider from the daemon's live config so a Save doesn't clobber a
   // provider configured elsewhere (CLI/other client) when localStorage is stale.
@@ -139,10 +118,8 @@ export function TtsProviderForm({
   const daemonTtsProvider =
     daemonTts?.mode === "managed" ? "vellum" : daemonTts?.provider;
 
-  // Mirrors the daemon's `services.tts.provider` schema default. Deliberately
-  // not `providers[0]` — the catalog leads with Vellum, and an unconfigured
-  // client must not claim the managed provider on its own.
-  const defaultProviderId = "elevenlabs";
+  // Mirrors what the bridge reports when Hermes has no `tts.provider` stored.
+  const defaultProviderId = "edge";
   const serverProvider = useMemo(
     () =>
       daemonTtsProvider ?? getLocalSetting(LS_TTS_PROVIDER, defaultProviderId),
@@ -263,7 +240,6 @@ export function TtsProviderForm({
       trimmedKey.length > 0
         ? trimmedKey
         : getLocalSetting(LS_TTS_API_KEY_PREFIX + activeProvider, "");
-    const voiceField = TTS_VOICE_CONFIG_FIELD[activeProvider];
 
     setSaving(true);
     try {
@@ -301,10 +277,8 @@ export function TtsProviderForm({
               mode: activeProvider === "vellum" ? "managed" : "your-own",
             }
           : {}),
-        ...(voiceField
-          ? {
-              providers: { [activeProvider]: { [voiceField]: trimmedVoiceId } },
-            }
+        ...(selectedProvider.supportsVoiceSelection
+          ? { providers: { [activeProvider]: { voiceId: trimmedVoiceId } } }
           : {}),
         ...(managedVoiceChanged
           ? { providers: { vellum: { model: draftManagedVoice.trim() } } }
@@ -371,35 +345,17 @@ export function TtsProviderForm({
   const handleTest = useCallback(async () => {
     setTesting(true);
     try {
-      const storedApiKey = getLocalSetting(
-        LS_TTS_API_KEY_PREFIX + draftProvider,
-        "",
-      );
-      const pendingApiKey = apiKeyText.trim();
-      const apiKey = pendingApiKey.length > 0 ? pendingApiKey : storedApiKey;
-      if (apiKey.length === 0) {
-        toast.error(t("ttsProviderForm.apiKeyRequired"));
-        return;
-      }
-      const storedVoiceId = getLocalSetting(
-        LS_TTS_VOICE_ID_PREFIX + draftProvider,
-        "",
-      );
-      const pendingVoiceId = voiceIdText.trim();
-      const voiceId =
-        pendingVoiceId.length > 0 ? pendingVoiceId : storedVoiceId;
-      const text = `Hey! It's ${assistantName}. How does this sound?`;
-      const result = await synthesizeTTS({
-        provider: draftProvider,
-        apiKey,
-        voiceId,
-        text,
+      const { data, response } = await ttsSynthesizePost({
+        path: { assistant_id: assistantId },
+        body: { text: `Hey! It's ${assistantName}. How does this sound?` },
+        parseAs: "blob",
+        throwOnError: false,
       });
-      if (result.kind !== "audio") {
-        toast.error(result.message);
+      if (!response?.ok || !(data instanceof Blob) || data.size === 0) {
+        toast.error(t("ttsProviderForm.testFailed"));
         return;
       }
-      const url = URL.createObjectURL(result.blob);
+      const url = URL.createObjectURL(data);
       try {
         const audio = new Audio(url);
         await audio.play();
@@ -413,7 +369,7 @@ export function TtsProviderForm({
     } finally {
       setTesting(false);
     }
-  }, [assistantName, apiKeyText, draftProvider, voiceIdText, t]);
+  }, [assistantId, assistantName, t]);
 
   const apiKeyPlaceholder = providerHasKey
     ? "••••••••  (Enter a new key to replace)"
@@ -421,6 +377,7 @@ export function TtsProviderForm({
   // Vellum authenticates via the platform connection, so it has no key to enter
   // and nothing for the client-side Test path (a direct provider call) to use.
   const isManaged = draftProvider === "vellum";
+  const requiresApiKey = !isManaged && selectedProvider.apiKeyPlaceholder !== "";
   // Managed voice selection needs a daemon that persists
   // `services.tts.providers.vellum.model`. Old daemons (and the static
   // fallback catalog used before the live catalog loads) report
@@ -478,7 +435,7 @@ export function TtsProviderForm({
         />
       </div>
 
-      {!isManaged && (
+      {requiresApiKey && (
         <div className="space-y-1">
           <label className="block text-body-small-default text-[var(--content-tertiary)]">
             {t("ttsProviderForm.apiKey")}
@@ -554,7 +511,11 @@ export function TtsProviderForm({
 
       <div className="flex items-center gap-2">
         {!isManaged && (
-          <Button variant="outlined" onClick={handleTest} disabled={testing}>
+          <Button
+            variant="outlined"
+            onClick={handleTest}
+            disabled={testing || hasChanges}
+          >
             {testing
               ? t("ttsProviderForm.testing")
               : t("ttsProviderForm.test")}

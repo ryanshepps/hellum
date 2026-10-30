@@ -1,10 +1,8 @@
 /**
  * Tests that `TextToSpeechCard`'s Save provisions the *daemon* (not just
  * localStorage): it stores the API key in the credential store and PATCHes
- * `services.tts`, mapping the "Voice ID" input to the provider-specific config
- * field (`referenceId` for Fish Audio, `voiceId` for ElevenLabs/xAI). The
- * server-side live-voice session reads that config + CES, so this is what makes
- * a UI save actually reach live voice.
+ * `services.tts`, mapping the "Voice ID" input to `voiceId`. The bridge moves
+ * both into Hermes, so this is what makes a UI save actually reach Hermes.
  *
  * The providers query is disabled (useIsOrgReady → false) so the card falls
  * back to the static TTS catalog and performs no network fetch.
@@ -81,6 +79,7 @@ mock.module("@/generated/daemon/sdk.gen", () => ({
     configPatchCalls.push(opts);
     return Promise.resolve({ response: { ok: true, status: 200 } });
   },
+  ttsSynthesizePost: () => Promise.resolve({ response: { ok: false } }),
 }));
 
 const { TextToSpeechCard } =
@@ -130,12 +129,12 @@ describe("TextToSpeechCard — daemon provisioning on Save", () => {
     localStorage.clear();
   });
 
-  test("Fish Audio Save stores the key and maps Voice ID → services.tts.providers.fish-audio.referenceId", async () => {
+  test("ElevenLabs Save stores the key and maps Voice ID → services.tts.providers.elevenlabs.voiceId", async () => {
     renderCard();
 
-    selectProvider("Fish Audio");
-    fireEvent.change(screen.getByPlaceholderText(/Fish Audio API key/), {
-      target: { value: "fish-secret" },
+    selectProvider("ElevenLabs");
+    fireEvent.change(screen.getByPlaceholderText("sk_…"), {
+      target: { value: "el-secret" },
     });
     fireEvent.change(screen.getByPlaceholderText("Enter a voice ID"), {
       target: { value: "voice-123" },
@@ -148,15 +147,15 @@ describe("TextToSpeechCard — daemon provisioning on Save", () => {
       assistant_id: ASSISTANT_ID,
     });
     expect(credentialsSetCalls[0]!.body).toMatchObject({
-      service: "fish-audio",
+      service: "elevenlabs",
       field: "api_key",
-      value: "fish-secret",
+      value: "el-secret",
     });
     expect(configPatchCalls[0]!.body).toMatchObject({
       services: {
         tts: {
-          provider: "fish-audio",
-          providers: { "fish-audio": { referenceId: "voice-123" } },
+          provider: "elevenlabs",
+          providers: { elevenlabs: { voiceId: "voice-123" } },
         },
       },
     });
@@ -164,12 +163,12 @@ describe("TextToSpeechCard — daemon provisioning on Save", () => {
 
   test("does not clobber a daemon-set provider when only the key changes", async () => {
     // Daemon already has a provider configured elsewhere (CLI/other client).
-    daemonConfigData = { services: { tts: { provider: "fish-audio" } } };
+    daemonConfigData = { services: { tts: { provider: "elevenlabs" } } };
     renderCard();
 
     // Enter ONLY an API key; leave the dropdown on the daemon's provider.
-    fireEvent.change(screen.getByPlaceholderText(/Fish Audio API key/), {
-      target: { value: "fish-secret" },
+    fireEvent.change(screen.getByPlaceholderText("sk_…"), {
+      target: { value: "el-secret" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
@@ -181,29 +180,26 @@ describe("TextToSpeechCard — daemon provisioning on Save", () => {
     expect(ttsBody?.services?.tts ?? {}).not.toHaveProperty("provider");
   });
 
-  test("selecting a BYOK provider from a Vellum daemon writes that provider", async () => {
-    daemonConfigData = { services: { tts: { provider: "vellum" } } };
+  test("a keyless provider shows no API key field", () => {
+    daemonConfigData = { services: { tts: { provider: "edge" } } };
     renderCard();
 
-    selectProvider("Fish Audio");
-    fireEvent.change(screen.getByPlaceholderText(/Fish Audio API key/), {
-      target: { value: "fish-secret" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.queryByText("API Key")).toBeNull();
+    expect(screen.getByRole("button", { name: "Test" })).toBeTruthy();
+  });
 
-    await waitFor(() => expect(configPatchCalls.length).toBe(1));
-    expect(configPatchCalls[0]!.body).toMatchObject({
-      services: { tts: { provider: "fish-audio" } },
-    });
-    // The credential must land under the provider the PATCH activates.
-    expect(credentialsSetCalls).toHaveLength(1);
-    expect((credentialsSetCalls[0]!.body as { service: string }).service).toBe(
-      "fish-audio",
-    );
+  test("Test waits until the provider is saved, since Hermes speaks it", () => {
+    daemonConfigData = { services: { tts: { provider: "edge" } } };
+    renderCard();
+
+    selectProvider("ElevenLabs");
+
+    const test = screen.getByRole("button", { name: "Test" }) as HTMLButtonElement;
+    expect(test.disabled).toBe(true);
   });
 });
 
-describe("TextToSpeechCard — Vellum provider", () => {
+describe("TextToSpeechCard — managed voices", () => {
   beforeEach(() => {
     localStorage.clear();
     credentialsSetCalls.length = 0;
@@ -217,67 +213,6 @@ describe("TextToSpeechCard — Vellum provider", () => {
   afterEach(() => {
     cleanup();
     localStorage.clear();
-  });
-
-  test("a vellum daemon provider hides the API key field and the Test button", () => {
-    daemonConfigData = { services: { tts: { provider: "vellum" } } };
-    renderCard();
-
-    const trigger = document.querySelector<HTMLButtonElement>(
-      'button[role="combobox"][aria-label="TTS provider"]',
-    );
-    expect(trigger?.textContent).toContain("Vellum");
-    // Vellum authenticates via the platform connection, so there is no key to
-    // enter and nothing for the client-side Test path to use.
-    expect(screen.queryByText("API Key")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Test" })).toBeNull();
-  });
-
-  test("selecting Vellum saves provider vellum and stores no credential", async () => {
-    renderCard();
-
-    selectProvider("Vellum");
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(configPatchCalls.length).toBe(1));
-    // Written as a pair so the save stays valid on daemons whose schema
-    // still couples provider "vellum" to mode "managed".
-    expect(configPatchCalls[0]!.body).toMatchObject({
-      services: { tts: { provider: "vellum", mode: "managed" } },
-    });
-    expect(credentialsSetCalls).toHaveLength(0);
-  });
-
-  // A config written by the legacy mode toggle marks managed via `mode` while
-  // `provider` holds the BYOK restore value.
-  test("a legacy managed-mode daemon renders as Vellum", () => {
-    daemonConfigData = {
-      services: { tts: { mode: "managed", provider: "fish-audio" } },
-    };
-    renderCard();
-
-    const trigger = document.querySelector<HTMLButtonElement>(
-      'button[role="combobox"][aria-label="TTS provider"]',
-    );
-    expect(trigger?.textContent).toContain("Vellum");
-    expect(screen.queryByText("API Key")).toBeNull();
-  });
-
-  test("escaping a legacy managed-mode daemon resets mode alongside the provider", async () => {
-    // Without the mode reset, the stale `mode: "managed"` would win over the
-    // BYOK provider choice and the user would silently stay on Vellum.
-    daemonConfigData = {
-      services: { tts: { mode: "managed", provider: "fish-audio" } },
-    };
-    renderCard();
-
-    selectProvider("Fish Audio");
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(configPatchCalls.length).toBe(1));
-    expect(configPatchCalls[0]!.body).toMatchObject({
-      services: { tts: { provider: "fish-audio", mode: "your-own" } },
-    });
   });
 
   test("a fetched managed-voice catalog replaces the static list and default", () => {
@@ -421,36 +356,5 @@ describe("TextToSpeechCard — Vellum provider", () => {
     expect(
       screen.getByText("No managed voices are currently available."),
     ).toBeTruthy();
-  });
-
-  test("grafts the Vellum option onto a fetched catalog that lacks it", () => {
-    // A daemon serving the pre-vellum catalog omits the managed option; the
-    // card must still offer it, or a legacy managed config has no selectable
-    // representation and managed TTS becomes unreachable from this UI.
-    orgReady = true;
-    ttsCatalogData = {
-      providers: [
-        {
-          id: "elevenlabs",
-          displayName: "ElevenLabs",
-          subtitle: "High-quality voice synthesis.",
-          supportsVoiceSelection: true,
-          apiKeyPlaceholder: "sk_…",
-          credentialsGuide: { description: "", url: "", linkLabel: "" },
-        },
-      ],
-    };
-    renderCard();
-
-    const trigger = document.querySelector<HTMLButtonElement>(
-      'button[role="combobox"][aria-label="TTS provider"]',
-    );
-    expect(trigger).not.toBeNull();
-    fireEvent.click(trigger!);
-    const options = Array.from(
-      document.querySelectorAll<HTMLElement>('[role="option"]'),
-    ).map((o) => o.textContent?.trim());
-    expect(options).toContain("Vellum");
-    expect(options).toContain("ElevenLabs");
   });
 });

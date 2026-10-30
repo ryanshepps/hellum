@@ -744,7 +744,6 @@
     "saveSuccess": "Speech-to-text settings saved",
     "spokenLanguage": "Spoken language",
     "spokenLanguageApplies": "Applies from your next spoken turn.",
-    "vellumTranscription": "Transcription runs through your Vellum account.",
     "windowsNativeDisplayName": "Windows Native Dictation",
     "windowsNativeSetupWarning": "Requires Basic speech recognition for your Windows display language: open Settings > Time & language > Language & region, select the three dots next to the display language, choose Language options, then under Language features download Basic speech recognition.",
     "windowsNativeSubtitle": "Windows on-device speech recognition, running locally through the Windows helper. Works offline and needs no API key."
@@ -851,7 +850,6 @@
   },
   "ttsProviderForm": {
     "apiKey": "API Key",
-    "apiKeyRequired": "Save an API key for this provider before testing.",
     "chooseFromCatalog": "Choose from catalog",
     "customVoiceIdAriaLabel": "Custom voice ID",
     "noManagedVoices": "No managed voices are currently available.",
@@ -860,6 +858,7 @@
     "saveFailed": "Failed to save text-to-speech settings",
     "saved": "Text-to-speech settings saved",
     "test": "Test",
+    "testFailed": "Hermes could not speak with this provider. Check its key and voice.",
     "testing": "Testing…",
     "voice": "Voice",
     "voiceId": "Voice ID",

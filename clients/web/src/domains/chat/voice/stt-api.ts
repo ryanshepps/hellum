@@ -49,7 +49,7 @@ export interface SttTranscribeFailure {
 
 export type SttTranscribeOutcome = SttTranscribeOk | SttTranscribeFailure;
 
-const DEFAULT_STT_PROVIDER_ID = "deepgram";
+const DEFAULT_STT_PROVIDER_ID = "local";
 
 /**
  * True when the user explicitly chose macOS native dictation as the STT
