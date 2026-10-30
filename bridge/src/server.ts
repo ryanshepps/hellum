@@ -108,7 +108,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
     ...attachmentRoutes(attachments),
     ...memoryRoutes(new MemoryService(config.hermesHelpers)),
     ...modelRoutes(models, new CredentialService(models, hermesSettings, WEB_KEY_ENV)),
-    ...settingsRoutes(models, new SettingsService(hermesSettings, SETTINGS_SECTIONS)),
+    ...settingsRoutes(models, new SettingsService(hermesSettings, SETTINGS_SECTIONS), hermesSettings),
     ...scheduleRoutes(
       new ScheduleService(
         config.hermesHelpers,

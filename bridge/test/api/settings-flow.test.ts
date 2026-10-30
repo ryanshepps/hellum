@@ -102,3 +102,48 @@ describe("web search and fetch", () => {
     expect(await read.json()).toMatchObject({ found: true, value: "" });
   });
 });
+
+describe("speech", () => {
+  test("Settings shows Hermes' defaults until a provider is chosen", async () => {
+    const api = await start();
+    expect(await config(api)).toMatchObject({ services: { tts: { provider: "edge" }, stt: { provider: "local" } } });
+  });
+
+  test("the catalogs list what Hermes can speak and transcribe with", async () => {
+    const api = await start();
+    const tts = (await (await api.get("tts/providers")).json()) as { providers: { id: string }[] };
+    const stt = (await (await api.get("stt/providers")).json()) as { providers: { id: string }[] };
+    expect(tts.providers.map((provider) => provider.id)).toContain("edge");
+    expect(tts.providers.map((provider) => provider.id)).not.toContain("vellum");
+    expect(stt.providers.map((provider) => provider.id)).toContain("groq");
+  });
+
+  test("the chosen providers and voice become Hermes' speech settings", async () => {
+    const api = await start();
+    await api.send("PATCH", "config", {
+      services: { tts: { provider: "elevenlabs", mode: "your-own", providers: { elevenlabs: { voiceId: "adam" } } }, stt: { provider: "groq", mode: "your-own" } },
+    });
+    expect(hermes().values).toEqual({ "tts.provider": "elevenlabs", "tts.elevenlabs.voice_id": "adam", "stt.provider": "groq" });
+    expect(await config(api)).toMatchObject({ services: { tts: { provider: "elevenlabs", providers: { elevenlabs: { voiceId: "adam" } } }, stt: { provider: "groq" } } });
+  });
+
+  test.each([
+    ["speaking", { tts: { provider: "vellum" } }],
+    ["transcribing", { stt: { provider: "deepgram" } }],
+  ])("a provider Hermes lacks for %s is refused", async (_label, services) => {
+    const api = await start();
+    expect((await api.send("PATCH", "config", { services })).status).toBe(422);
+  });
+
+  test("a speech API key is saved to the variable Hermes reads", async () => {
+    const api = await start();
+    const response = await api.send("POST", "credentials/set", { service: "openai", field: "api_key", value: "sk-test" });
+    expect(response.status).toBe(200);
+    expect(hermes().env).toEqual({ VOICE_TOOLS_OPENAI_KEY: "sk-test" });
+  });
+
+  test("a credential Hermes has no place for is refused", async () => {
+    const api = await start();
+    expect((await api.send("POST", "credentials/set", { service: "google", field: "client_secret", value: "x" })).status).toBe(422);
+  });
+});
