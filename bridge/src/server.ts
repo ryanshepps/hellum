@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { adminSocketPath, startAdminServer } from "./admin/admin-server";
 import { attachmentRoutes } from "./api/attachment-routes";
+import { avatarRoutes } from "./api/avatar-routes";
 import { createAssistantApi } from "./api/assistant-api";
 import { mcpRoutes } from "./api/mcp-routes";
 import { memoryRoutes } from "./api/memory-routes";
@@ -109,6 +110,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
   const hermesSettings = new HermesSettings(config.hermesHelpers, () => conversations.markCredentialsChanged());
   const assistantApi = createAssistantApi(new Set([SELF_ASSISTANT_ID, config.assistantId, identity.platformAssistantId]), [
     ...systemRoutes(config.assistantName),
+    ...avatarRoutes(),
     ...pushRoutes(pushTokens, identity.platformAssistantId),
     ...attachmentRoutes(attachments),
     ...memoryRoutes(new MemoryService(config.hermesHelpers)),
