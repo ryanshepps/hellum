@@ -3,7 +3,8 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import type { AuthService } from "../auth/auth-service";
 import { errorResponse, readJsonBody } from "../http/json";
-import type { NotificationRouter } from "../notifications/notification-router";
+import { deliverySignal, HermesDeliverySchema } from "../notifications/hermes-delivery";
+import type { EmitResult, NotificationRouter } from "../notifications/notification-router";
 import { UrgencySchema } from "../notifications/signal";
 
 const ApproveBodySchema = z.object({ userCode: z.string().min(1) });
@@ -31,6 +32,10 @@ async function sendNotification(notifications: NotificationRouter, request: Requ
     requestedMessage: body.message,
     dedupeKey: body.dedupeKey,
   });
+  return emitted(result);
+}
+
+function emitted(result: EmitResult): Response {
   return Response.json({
     ok: true,
     dispatched: !result.deduplicated && result.channels.length > 0,
@@ -38,6 +43,15 @@ async function sendNotification(notifications: NotificationRouter, request: Requ
     selectedChannels: result.channels,
     remotePushAccepted: result.remotePushAccepted,
   });
+}
+
+async function deliverFromHermes(notifications: NotificationRouter, request: Request): Promise<Response> {
+  const body = await readJsonBody(request, HermesDeliverySchema);
+  if (!body) {
+    return errorResponse(400, "invalid_request", "message is required");
+  }
+  const signal = deliverySignal(body);
+  return signal ? emitted(await notifications.emit(signal)) : emitted({ deduplicated: false, channels: [], remotePushAccepted: false });
 }
 
 export function adminSocketPath(stateDir: string): string {
@@ -48,6 +62,9 @@ async function route(auth: AuthService, notifications: NotificationRouter, reque
   const { pathname } = new URL(request.url);
   if (request.method === "POST" && pathname === "/notifications") {
     return sendNotification(notifications, request);
+  }
+  if (request.method === "POST" && pathname === "/deliveries") {
+    return deliverFromHermes(notifications, request);
   }
   const deviceMatch = /^\/devices\/([^/]+)$/.exec(pathname);
   if (request.method === "POST" && pathname === "/pairings") {

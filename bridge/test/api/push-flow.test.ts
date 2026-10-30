@@ -121,6 +121,23 @@ describe("push notifications", () => {
     expect(fakeApns.received).toHaveLength(1);
   });
 
+  test("a scheduled run Hermes delivers to Hellum reaches the phone and opens the run", async () => {
+    const { api, fakeApns } = await startWithPush();
+    await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.example.hellum", apns_environment: "production" });
+    const delivered = await bridge?.admin("POST", "/deliveries", {
+      message: "**3 events** this week",
+      jobId: "job1",
+      jobName: "GTA tech events weekly",
+      sessionId: "cron_job1_20261101_140000",
+    });
+    expect(await delivered?.json()).toMatchObject({ dispatched: true, remotePushAccepted: true });
+    const [push] = await fakeApns.waitFor(1);
+    expect(JSON.parse(push?.body ?? "{}")).toMatchObject({
+      aps: { alert: { title: "GTA tech events weekly", body: "3 events this week" } },
+      conversationId: "cron_job1_20261101_140000",
+    });
+  });
+
   test("hellum notifications send --urgent reaches the phone and the open app", async () => {
     const { api, events, fakeApns } = await startWithPush();
     await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.example.hellum", apns_environment: "production" });
