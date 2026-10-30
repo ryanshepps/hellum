@@ -9,6 +9,7 @@ import { AttachmentStore } from "./attachments/attachment-store";
 import { conversationRoutes } from "./api/conversation-routes";
 import { pushRoutes } from "./api/push-routes";
 import { scheduleRoutes } from "./api/schedule-routes";
+import { DEFAULT_SOUNDS, soundRoutes, SoundsConfigSchema } from "./api/sound-routes";
 import { skillRoutes } from "./api/skill-routes";
 import { usageRoutes } from "./api/usage-routes";
 import { voiceRoutes } from "./api/voice-routes";
@@ -123,6 +124,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
       ),
     ),
     ...skillRoutes(new SkillService(config.hermesHelpers)),
+    ...soundRoutes(privateJsonFile(join(config.stateDir, "sounds.json"), SoundsConfigSchema, DEFAULT_SOUNDS)),
     ...usageRoutes(new UsageService(config.hermesHelpers), Intl.DateTimeFormat().resolvedOptions().timeZone),
     ...voiceRoutes(new VoiceService(config.hermesHelpers, join(config.stateDir, "voice"))),
     ...conversationRoutes(conversations, hub),

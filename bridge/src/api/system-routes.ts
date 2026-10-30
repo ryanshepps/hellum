@@ -2,8 +2,6 @@ import type { Route } from "./route-table";
 
 const VERSION = "hellum-0.1.0";
 
-const DEFAULT_SOUNDS = { globalEnabled: false, volume: 0.5, events: {} } as const;
-
 function json(body: object, status = 200): Response {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
@@ -27,8 +25,6 @@ export function systemRoutes(assistantName: string): readonly Route[] {
         }),
     },
     { method: "GET", pattern: "feature-flags", handle: () => json({ flags: [] }) },
-    { method: "GET", pattern: "sounds/config", handle: () => json(DEFAULT_SOUNDS) },
-    { method: "PUT", pattern: "sounds/config", handle: () => json(DEFAULT_SOUNDS) },
     { method: "GET", pattern: "workspace/theme", handle: () => json({ theme: null, source: "none", issues: [] }) },
     { method: "GET", pattern: "apps", handle: () => json({ apps: [] }) },
     { method: "GET", pattern: "groups", handle: () => json({ groups: [] }) },
