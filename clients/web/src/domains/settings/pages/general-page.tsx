@@ -11,7 +11,6 @@ import {
 import { PlatformLoginNotice } from "@/components/platform-login-notice";
 import { ProfileCard } from "@/components/profile-card";
 import { AppIconRow } from "@/domains/settings/components/app-icon-row";
-import { AssistantPicker } from "@/domains/settings/components/assistant-picker";
 import { AssistantSleepPolicy } from "@/domains/settings/components/assistant-sleep-policy";
 import { useAssistantWithHealthz } from "@/domains/settings/components/assistant-status-panel";
 import {
@@ -37,17 +36,13 @@ import {
   useActiveAssistantIsPlatformHosted,
   usePlatformGate,
 } from "@/hooks/use-platform-gate";
-import { remoteGatewayPublicBaseUrl } from "@/lib/auth/remote-gateway-session";
 import {
-  getRemoteAssistantDisplayName,
-  getRemoteGatewayHubUrl,
   getSelectedAssistant,
   isLocalAssistant,
   isLocalClient,
   isRemoteGatewayMode,
 } from "@/lib/local-mode";
 import { isElectron } from "@/runtime/is-electron";
-import { useIsNativeMobile } from "@/runtime/platform-detection";
 import { useAssistantFeatureFlagStore } from "@/stores/assistant-feature-flag-store";
 import { useIsAuthenticated } from "@/stores/auth-store";
 import { useClientFeatureFlagStore } from "@/stores/client-feature-flag-store";
@@ -65,23 +60,10 @@ export function GeneralPage() {
     refetch,
     refetchUntilResized,
   } = useAssistantWithHealthz();
-  const multiPlatformAssistant =
-    useClientFeatureFlagStore.use.multiPlatformAssistant();
   const accountMfaEnabled = useClientFeatureFlagStore.use.accountMfa();
   const settingsSleepPolicy =
     useAssistantFeatureFlagStore.use.settingsSleepPolicy();
   const isAuthenticated = useIsAuthenticated();
-  const isNativeMobile = useIsNativeMobile();
-  // The card supersedes the in-page picker so the two never render together.
-  //
-  // Deliberately wider than `useGatedSelectedAssistantId` in
-  // `assistant/selection.ts`: that gate closes under `isGatewayAuthMode()`,
-  // which is exactly where this card hands off to the hub chooser.
-  const showAssistantSwitcherCard =
-    isLocalClient() ||
-    isAuthenticated ||
-    isRemoteGatewayMode() ||
-    isNativeMobile;
   const navigate = useNavigate();
   const platformGate = usePlatformGate();
   const infraGate = usePlatformGate({ platformHostedOnly: true });
@@ -138,29 +120,6 @@ export function GeneralPage() {
 
   const versionValue =
     healthz?.version ?? assistant?.current_release_version ?? null;
-
-  const openAssistantChooser = () => {
-    const hubUrl = getRemoteGatewayHubUrl();
-    if (isRemoteGatewayMode() && !isNativeMobile && hubUrl) {
-      // Self-registration handoff: landing on the hub chooser records this
-      // origin in the hub's remembered list. `hubUrl` is the hub SPA's
-      // assistant root (`<origin>/assistant`), so the absolute chooser route
-      // hangs off its origin.
-      const params = new URLSearchParams({
-        register: remoteGatewayPublicBaseUrl(),
-      });
-      const assistantName = getRemoteAssistantDisplayName();
-      if (assistantName) {
-        params.set("name", assistantName);
-      }
-      const hubOrigin = new URL(hubUrl).origin;
-      window.location.assign(
-        `${hubOrigin}${routes.selectAssistant}?${params.toString()}`,
-      );
-      return;
-    }
-    void navigate(`${routes.selectAssistant}?noAutoSkip=1`);
-  };
 
   const showRetire =
     ((platformGate === "full" || canRetireLocally) && !!platformAssistant) ||
@@ -351,22 +310,6 @@ export function GeneralPage() {
             {t("generalPage.sleepPolicyLoginNotice")}
           </PlatformLoginNotice>
         </DetailCard>
-      )}
-
-      {multiPlatformAssistant && !showAssistantSwitcherCard && (
-        <AssistantPicker />
-      )}
-
-      {showAssistantSwitcherCard && (
-        <DetailCard
-          title={t("generalPage.switchAssistantTitle")}
-          subtitle={t("generalPage.switchAssistantSubtitle")}
-          accessory={
-            <Button variant="outlined" onClick={openAssistantChooser}>
-              {t("generalPage.chooseAssistant")}
-            </Button>
-          }
-        />
       )}
 
       {isElectron() && <TeleportCard />}

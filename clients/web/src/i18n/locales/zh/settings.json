@@ -839,7 +839,6 @@
     "title": "降级到基础版？"
   },
   "generalPage": {
-    "chooseAssistant": "选择助手",
     "computeResourcesLoginNotice": "登录 Vellum 平台以管理计算资源。",
     "computeResourcesSubtitle": "监控资源使用情况并管理助手的计算配置文件。",
     "computeResourcesTitle": "计算与资源",
@@ -854,8 +853,6 @@
     "sleepPolicyLoginNotice": "登录 Vellum 平台以管理休眠策略。",
     "sleepPolicySubtitle": "控制此助手在空闲时保持唤醒的时间。",
     "sleepPolicyTitle": "休眠策略",
-    "switchAssistantSubtitle": "选择此设备连接的助手。",
-    "switchAssistantTitle": "切换助手",
     "twoFactorDescription": "登录时需要身份验证器应用提供的代码。",
     "twoFactorLoginNotice": "登录 Vellum 平台以管理双重身份验证。",
     "twoFactorTitle": "双重身份验证",

@@ -839,7 +839,6 @@
     "title": "降級至基本版？"
   },
   "generalPage": {
-    "chooseAssistant": "選擇助理",
     "computeResourcesLoginNotice": "登入 Vellum 平台以管理運算資源。",
     "computeResourcesSubtitle": "監控資源使用情況並管理助理的運算設定檔。",
     "computeResourcesTitle": "運算與資源",
@@ -854,8 +853,6 @@
     "sleepPolicyLoginNotice": "登入 Vellum 平台以管理休眠策略。",
     "sleepPolicySubtitle": "控制此助理在閒置時保持喚醒的時間。",
     "sleepPolicyTitle": "休眠策略",
-    "switchAssistantSubtitle": "選擇此裝置連接的助理。",
-    "switchAssistantTitle": "切換助理",
     "twoFactorDescription": "登入時需要驗證器應用程式提供的驗證碼。",
     "twoFactorLoginNotice": "登入 Vellum 平台以管理雙重驗證。",
     "twoFactorTitle": "雙重驗證",

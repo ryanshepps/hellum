@@ -825,7 +825,6 @@
     "title": "Перейти на Base?"
   },
   "generalPage": {
-    "chooseAssistant": "Выбрать ассистента",
     "computeResourcesLoginNotice": "Вход на платформу Vellum для управления вычислительными ресурсами.",
     "computeResourcesSubtitle": "Использование ресурсов и управление вычислительным профилем ассистента.",
     "computeResourcesTitle": "Вычисления и ресурсы",
@@ -840,8 +839,6 @@
     "sleepPolicyLoginNotice": "Вход на платформу Vellum для управления политикой сна.",
     "sleepPolicySubtitle": "Настройка того, как долго этот ассистент остаётся активным в простое.",
     "sleepPolicyTitle": "Политика сна",
-    "switchAssistantSubtitle": "Выбор ассистента, к которому подключено это устройство.",
-    "switchAssistantTitle": "Сменить ассистента",
     "twoFactorDescription": "При входе потребуется код из приложения-аутентификатора.",
     "twoFactorLoginNotice": "Вход на платформу Vellum для управления двухфакторной аутентификацией.",
     "twoFactorTitle": "Двухфакторная аутентификация",

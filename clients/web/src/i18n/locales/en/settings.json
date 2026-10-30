@@ -846,7 +846,6 @@
     "title": "Downgrade to Base?"
   },
   "generalPage": {
-    "chooseAssistant": "Choose Assistant",
     "computeResourcesLoginNotice": "Log in to the Vellum platform to manage compute resources.",
     "computeResourcesSubtitle": "Monitor resource usage and manage your assistant's compute profile.",
     "computeResourcesTitle": "Compute & Resources",
@@ -861,8 +860,6 @@
     "sleepPolicyLoginNotice": "Log in to the Vellum platform to manage sleep policy.",
     "sleepPolicySubtitle": "Control how long this assistant stays awake when idle.",
     "sleepPolicyTitle": "Sleep Policy",
-    "switchAssistantSubtitle": "Choose which assistant this device is connected to.",
-    "switchAssistantTitle": "Switch Assistant",
     "twoFactorDescription": "Require a code from an authenticator app when you sign in.",
     "twoFactorLoginNotice": "Log in to the Vellum platform to manage two-factor authentication.",
     "twoFactorTitle": "Two-Factor Authentication",

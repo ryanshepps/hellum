@@ -839,7 +839,6 @@
     "title": "¿Bajar a Base?"
   },
   "generalPage": {
-    "chooseAssistant": "Elegir asistente",
     "computeResourcesLoginNotice": "Inicia sesión en la plataforma Vellum para administrar los recursos de cómputo.",
     "computeResourcesSubtitle": "Supervisa el uso de recursos y administra el perfil de cómputo de tu asistente.",
     "computeResourcesTitle": "Cómputo y recursos",
@@ -854,8 +853,6 @@
     "sleepPolicyLoginNotice": "Inicia sesión en la plataforma Vellum para administrar la política de suspensión.",
     "sleepPolicySubtitle": "Controla cuánto tiempo permanece activo este asistente cuando está inactivo.",
     "sleepPolicyTitle": "Política de suspensión",
-    "switchAssistantSubtitle": "Elige a qué asistente está conectado este dispositivo.",
-    "switchAssistantTitle": "Cambiar asistente",
     "twoFactorDescription": "Requiere un código de una aplicación de autenticación cuando inicias sesión.",
     "twoFactorLoginNotice": "Inicia sesión en la plataforma Vellum para administrar la autenticación de dos factores.",
     "twoFactorTitle": "Autenticación de dos factores",
