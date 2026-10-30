@@ -6,7 +6,7 @@ function json(body: object, status = 200): Response {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
 
-export function systemRoutes(assistantName: string): readonly Route[] {
+export function systemRoutes(assistantName: string, displayedVersion: string): readonly Route[] {
   return [
     {
       method: "GET",
@@ -15,7 +15,7 @@ export function systemRoutes(assistantName: string): readonly Route[] {
         json({
           status: "ok",
           timestamp: new Date().toISOString(),
-          version: VERSION,
+          version: displayedVersion,
           disk: null,
           memory: { currentMb: Math.round(process.memoryUsage().rss / 1_048_576), maxMb: 0 },
           cpu: { currentPercent: 0, maxCores: navigator.hardwareConcurrency },

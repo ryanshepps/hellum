@@ -50,6 +50,7 @@ import { SettingsService } from "./settings/settings-service";
 import { WEB_KEY_ENV } from "./settings/web";
 import { SkillService } from "./skills/skill-service";
 import { UsageService } from "./usage/usage-service";
+import { displayVersion } from "./version";
 import { VoiceService } from "./voice/voice-service";
 import { buildRemoteGatewayConfig } from "./spa/index-html";
 import { createSpaHandler } from "./spa/spa-handler";
@@ -109,7 +110,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
   );
   const hermesSettings = new HermesSettings(config.hermesHelpers, () => conversations.markCredentialsChanged());
   const assistantApi = createAssistantApi(new Set([SELF_ASSISTANT_ID, config.assistantId, identity.platformAssistantId]), [
-    ...systemRoutes(config.assistantName),
+    ...systemRoutes(config.assistantName, await displayVersion(config.hermesHelpers.cwd)),
     ...avatarRoutes(),
     ...pushRoutes(pushTokens, identity.platformAssistantId),
     ...attachmentRoutes(attachments),

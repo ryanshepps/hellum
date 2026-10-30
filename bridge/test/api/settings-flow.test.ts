@@ -174,3 +174,8 @@ describe("assistant access", () => {
     expect(hermes().values).toEqual({});
   });
 });
+
+test("the version names the running Hellum and Hermes", async () => {
+  const api = await start();
+  expect(((await (await api.get("healthz")).json()) as { version: string }).version).toMatch(/^Hellum \S+ · Hermes \S+$/);
+});
