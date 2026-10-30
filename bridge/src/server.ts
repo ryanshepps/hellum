@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { adminSocketPath, startAdminServer } from "./admin/admin-server";
 import { attachmentRoutes } from "./api/attachment-routes";
 import { createAssistantApi } from "./api/assistant-api";
+import { mcpRoutes } from "./api/mcp-routes";
 import { memoryRoutes } from "./api/memory-routes";
 import { modelRoutes } from "./api/model-routes";
 import { AttachmentStore } from "./attachments/attachment-store";
@@ -26,6 +27,7 @@ import { HermesGateway } from "./hermes/hermes-gateway";
 import { bearerToken, errorResponse } from "./http/json";
 import { loadIdentity } from "./identity";
 import { log } from "./log";
+import { McpService } from "./mcp/mcp-service";
 import { MemoryService } from "./memory/memory-service";
 import { ModelService } from "./models/model-service";
 import { EMPTY_PROFILE_STORE, ProfileStoreSchema } from "./translate/inference";
@@ -107,6 +109,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
     ...pushRoutes(pushTokens, identity.platformAssistantId),
     ...attachmentRoutes(attachments),
     ...memoryRoutes(new MemoryService(config.hermesHelpers)),
+    ...mcpRoutes(new McpService(config.hermesHelpers, () => conversations.markMcpChanged())),
     ...modelRoutes(models, new CredentialService(models, hermesSettings, WEB_KEY_ENV)),
     ...settingsRoutes(models, new SettingsService(hermesSettings, SETTINGS_SECTIONS), hermesSettings),
     ...scheduleRoutes(

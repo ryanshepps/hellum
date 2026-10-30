@@ -2,6 +2,7 @@ import { UnknownAttachmentError } from "../attachments/attachment-stager";
 import { ConversationNotFoundError } from "../conversations/conversation-service";
 import { HermesHelperError } from "../hermes/helper-process";
 import { HermesRpcError, HermesUnavailableError } from "../hermes/rpc-peer";
+import { McpRejectedError } from "../mcp/mcp-service";
 import { MemoryWriteRejectedError } from "../memory/memory-service";
 import { ModelSettingRejectedError, ProfileNotFoundError } from "../models/model-service";
 import { ScheduleNotFoundError, ScheduleRejectedError } from "../schedules/schedule-service";
@@ -28,6 +29,9 @@ function toErrorResponse(error: unknown, method: string, path: string): Response
   }
   if (error instanceof ModelSettingRejectedError) {
     return errorResponse(422, "model_setting_rejected", error.message);
+  }
+  if (error instanceof McpRejectedError) {
+    return errorResponse(422, "mcp_rejected", error.message);
   }
   if (error instanceof SettingRejectedError) {
     return errorResponse(422, "setting_rejected", error.message);

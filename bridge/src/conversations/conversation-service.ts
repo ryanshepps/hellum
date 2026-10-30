@@ -75,6 +75,7 @@ export class ConversationService {
   private readonly liveTurns = new Map<string, LiveTurn>();
   private readonly processing = new Set<string>();
   private credentialsChanged = false;
+  private mcpChanged = false;
 
   private constructor(
     private readonly gateway: HermesGateway,
@@ -103,6 +104,10 @@ export class ConversationService {
 
   markCredentialsChanged(): void {
     this.credentialsChanged = true;
+  }
+
+  markMcpChanged(): void {
+    this.mcpChanged = true;
   }
 
   async releaseIdleSessions(): Promise<void> {
@@ -167,6 +172,7 @@ export class ConversationService {
     const attached = resolveAttachments(this.attachments, attachmentIds);
     const live = conversationId && (await this.isKnown(conversationId)) ? await this.live.open(conversationId) : await this.createSession();
     await this.reloadCredentials(live);
+    await this.reloadMcp(live);
     const staged = await stageAttachments(this.gateway, this.attachments, live.sid, attached);
     const recordedTurns = userTurnCount(await this.live.history(live.conversationId));
     const turn = this.live.claimTurn(live.conversationId, recordedTurns, this.processing.has(live.conversationId));
@@ -306,6 +312,14 @@ export class ConversationService {
     }
     await this.gateway.request("reload.env", { session_id: live.sid }, z.unknown());
     this.credentialsChanged = false;
+  }
+
+  private async reloadMcp(live: LiveSession): Promise<void> {
+    if (!this.mcpChanged) {
+      return;
+    }
+    await this.gateway.request("reload.mcp", { session_id: live.sid, confirm: true }, z.unknown());
+    this.mcpChanged = false;
   }
 
   private async mutate(conversationId: string, operation: "rename" | "delete", payload: Readonly<Record<string, string>>): Promise<void> {

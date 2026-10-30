@@ -25,6 +25,7 @@ export async function startTestBridge(env: Readonly<Record<string, string>> = {}
       HELLUM_WEB_DIST: join(import.meta.dir, "../fixtures/web"),
       HELLUM_HERMES_GATEWAY_ARGV: FAKE_GATEWAY_ARGV,
       HELLUM_HERMES_HELPER_ARGV: FAKE_HELPER_ARGV,
+      FAKE_HERMES_MCP_FILE: join(stateDir, "fake-mcp.json"),
       FAKE_HERMES_MEMORY_FILE: join(stateDir, "fake-memory.json"),
       FAKE_HERMES_CRON_FILE: join(stateDir, "fake-cron.json"),
       FAKE_HERMES_SKILLS_FILE: join(stateDir, "fake-skills.json"),
