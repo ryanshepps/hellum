@@ -680,21 +680,6 @@
     "updateAssistant": "Actualiza el asistente a la versión {version} o posterior para exportar un paquete de depuración.",
     "useDesktopApp": "Exporta desde la aplicación de escritorio de Vellum en el equipo que ejecuta este asistente."
   },
-  "debugControlsPanel": {
-    "backups": "Copias de seguridad",
-    "loadFailedToast": "No se pudo cargar la información del asistente",
-    "loading": "Cargando información del asistente...",
-    "loginNotice": "Inicia sesión en la plataforma Vellum para administrar las copias de seguridad.",
-    "noAssistant": "No se encontró ningún asistente. Crea un asistente para acceder a los controles de depuración.",
-    "onboardingClearedToast": "Indicadores de incorporación borrados.",
-    "replay": "Repetir",
-    "replayDescription": "Borra los indicadores locales de incorporación y vuelve a recorrer las pantallas de privacidad → creación. Tu asistente existente se conserva.",
-    "replayTitle": "Repetir incorporación (solo Vellum)",
-    "restartDescription": "Reinicia la máquina del asistente. Estará brevemente no disponible durante el reinicio.",
-    "restartTitle": "Reiniciar asistente",
-    "subtitle": "Administra copias de seguridad, reinicia tu asistente o entra en modo de recuperación para conectar al terminal de depuración.",
-    "title": "General"
-  },
   "deleteAccountSection": {
     "confirmLabel": "Eliminar cuenta",
     "confirmMessage": "Esto eliminará permanentemente tu cuenta y todos los datos asociados. Esta acción no se puede deshacer.",

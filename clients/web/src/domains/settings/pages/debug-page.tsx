@@ -6,7 +6,6 @@ import { useActiveAssistantId } from "@/assistant/use-active-assistant-id";
 import { AllConversationsView } from "@/domains/settings/components/all-conversations-view";
 import { AssistantTerminalPanel } from "@/domains/settings/components/panels/assistant-terminal-panel";
 import { DatabaseDebugPanel } from "@/domains/settings/components/panels/database-debug-panel";
-import { DebugControlsPanel } from "@/domains/settings/components/panels/debug-controls-panel";
 import { DoctorPanel } from "@/domains/settings/components/panels/doctor-panel";
 import { ToneLabPanel } from "@/domains/settings/components/tone-lab/tone-lab-panel";
 import { resolveDebugTabParam } from "@/domains/settings/pages/debug-page.helpers";
@@ -16,7 +15,6 @@ import { navigateToConversation } from "@/utils/conversation-navigation";
 import { Tabs } from "@vellumai/design-library/components/tabs";
 
 const ALL_TABS = [
-  { id: "general", labelKey: "debugPage.tabs.general", defaultLabel: "General" },
   { id: "terminal", labelKey: "debugPage.tabs.terminal", defaultLabel: "Terminal" },
   { id: "doctor", labelKey: "debugPage.tabs.doctor", defaultLabel: "Doctor" },
   { id: "database", labelKey: "debugPage.tabs.database", defaultLabel: "Database" },
@@ -26,7 +24,7 @@ const ALL_TABS = [
 
 type DebugTabId = (typeof ALL_TABS)[number]["id"];
 
-const DEFAULT_TAB: DebugTabId = "general";
+const DEFAULT_TAB: DebugTabId = "conversations";
 
 export function DebugPage() {
   const { t } = useTranslation("settings");
@@ -62,8 +60,8 @@ export function DebugPage() {
   );
 
   // A gated deep-link (e.g. ?tab=doctor on a self-hosted assistant) has no
-  // matching visible tab, so fall back to General rather than rendering a
-  // panel with no trigger.
+  // matching visible tab, so fall back to the default tab rather than
+  // rendering a panel with no trigger.
   const { tabId, conversationsFilter } = resolveDebugTabParam(
     searchParams.get("tab"),
   );
@@ -87,7 +85,7 @@ export function DebugPage() {
     // The Terminal and Doctor panels rely on a `flex min-h-0 flex-1 flex-col`
     // ancestor chain to size their console/messages area; the settings `<main>`
     // is a bounded-height flex column, so the page root and Tabs.Root extend
-    // that chain. General keeps block flow (`pt-4`) and scrolls.
+    // that chain.
     <div className="flex min-h-0 flex-1 flex-col">
       <Tabs.Root
         value={activeTab}
@@ -101,9 +99,6 @@ export function DebugPage() {
             </Tabs.Trigger>
           ))}
         </Tabs.List>
-        <Tabs.Panel value="general" className="pt-4">
-          <DebugControlsPanel />
-        </Tabs.Panel>
         {tabs.some((tab) => tab.id === "terminal") && (
           <Tabs.Panel
             value="terminal"

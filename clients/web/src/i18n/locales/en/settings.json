@@ -687,21 +687,6 @@
     "updateAssistant": "Update the assistant to {version} or newer to export a debug bundle.",
     "useDesktopApp": "Export from the Vellum desktop app on the computer running this assistant."
   },
-  "debugControlsPanel": {
-    "backups": "Backups",
-    "loadFailedToast": "Failed to load assistant info",
-    "loading": "Loading assistant info...",
-    "loginNotice": "Log in to the Vellum platform to manage backups.",
-    "noAssistant": "No assistant found. Hatch an assistant to access debug controls.",
-    "onboardingClearedToast": "Onboarding flags cleared.",
-    "replay": "Replay",
-    "replayDescription": "Clear local onboarding flags and re-walk the privacy → hatch screens. Your existing assistant is preserved.",
-    "replayTitle": "Replay onboarding (Vellum-only)",
-    "restartDescription": "Restart the assistant machine. It will be briefly unavailable during the restart.",
-    "restartTitle": "Restart Assistant",
-    "subtitle": "Manage backups, restart your assistant, or enter Recovery Mode to connect to the debug terminal.",
-    "title": "General"
-  },
   "deleteAccountSection": {
     "confirmLabel": "Delete Account",
     "confirmMessage": "This will permanently delete your account and all associated data. This action cannot be undone.",
@@ -2473,7 +2458,6 @@
   },
   "debugPage": {
     "tabs": {
-      "general": "General",
       "terminal": "Terminal",
       "doctor": "Doctor",
       "database": "Database",

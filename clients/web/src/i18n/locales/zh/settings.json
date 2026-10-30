@@ -680,21 +680,6 @@
     "updateAssistant": "请将助手更新到 {version} 或更高版本以导出调试包。",
     "useDesktopApp": "请在运行此助手的电脑上，通过 Vellum 桌面应用导出。"
   },
-  "debugControlsPanel": {
-    "backups": "备份",
-    "loadFailedToast": "加载助手信息失败",
-    "loading": "正在加载助手信息...",
-    "loginNotice": "登录 Vellum 平台以管理备份。",
-    "noAssistant": "未找到助手。孵化一个助手以访问调试控制。",
-    "onboardingClearedToast": "新手引导标记已清除。",
-    "replay": "重播",
-    "replayDescription": "清除本地新手引导标记，并重新体验隐私 → 孵化屏幕。您现有的助手将保留。",
-    "replayTitle": "重播新手引导（仅限 Vellum）",
-    "restartDescription": "重启助手机器。重启期间它将暂时不可用。",
-    "restartTitle": "重启助手",
-    "subtitle": "管理备份、重启您的助手，或进入恢复模式以连接到调试终端。",
-    "title": "通用"
-  },
   "deleteAccountSection": {
     "confirmLabel": "删除账户",
     "confirmMessage": "这将永久删除您的账户及所有相关数据。此操作无法撤销。",
@@ -2367,7 +2352,6 @@
   },
   "debugPage": {
     "tabs": {
-      "general": "常规",
       "terminal": "终端",
       "doctor": "诊断",
       "database": "数据库",
