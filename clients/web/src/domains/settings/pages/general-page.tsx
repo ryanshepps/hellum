@@ -17,7 +17,6 @@ import {
   AssistantUpgrades,
   LocalAssistantUpgrades,
 } from "@/domains/settings/components/assistant-upgrades";
-import { DeleteAccountSection } from "@/domains/settings/components/delete-account-section";
 import { DevModeVersionUnlock } from "@/domains/settings/components/dev-mode-version-unlock";
 import { NativeAppCard } from "@/domains/settings/components/native-app-card";
 import { PairDeviceCard } from "@/domains/settings/pair-device/pair-device-card";
@@ -25,7 +24,6 @@ import { PreferencesModal } from "@/domains/settings/components/preferences-moda
 import { PreviewReleaseChannel } from "@/domains/settings/components/preview-release-channel";
 import { PreviewUiChannel } from "@/domains/settings/components/preview-ui-channel";
 import { ResizeCard } from "@/domains/settings/components/resize-card";
-import { RetireAssistant } from "@/domains/settings/components/retire-assistant";
 import { TimezoneSection } from "@/domains/settings/components/timezone-section";
 import { UpdateWindowModal } from "@/domains/settings/components/update-window-modal";
 import { TwoFactorSection } from "@/domains/settings/security/two-factor-section";
@@ -94,7 +92,6 @@ export function GeneralPage() {
   const selected = getSelectedAssistant();
   const hasSelectedLocalAssistant =
     isLocalClient() && !!assistant && !!selected && isLocalAssistant(selected);
-  const canRetireLocally = hasSelectedLocalAssistant;
   const canUpgradeLocally = hasSelectedLocalAssistant && !isRemoteGatewayMode();
   // Whether an upgrade panel (platform or local) is on screen. Both panels
   // render the "Current" version line that carries the 7-tap developer-mode
@@ -120,13 +117,6 @@ export function GeneralPage() {
 
   const versionValue =
     healthz?.version ?? assistant?.current_release_version ?? null;
-
-  const showRetire =
-    ((platformGate === "full" || canRetireLocally) && !!platformAssistant) ||
-    (platformGate === "disabled" && !canRetireLocally);
-  // Mirrors DeleteAccountSection's internal platformHostedOnly gate — it
-  // returns null when gated, so the card must not render an empty shell.
-  const showDeleteAccount = infraGate !== "gated";
 
   return (
     <div className="space-y-4">
@@ -313,37 +303,6 @@ export function GeneralPage() {
       )}
 
       {isElectron() && <TeleportCard />}
-
-      {(showRetire || showDeleteAccount) && (
-        <DetailCard variant="danger" title={t("generalPage.dangerZoneTitle")}>
-          <div className="flex flex-col gap-6">
-            {showRetire && (
-              <section className="flex flex-col gap-2">
-                <h3 className="text-title-small text-[var(--content-emphasised)]">
-                  {t("generalPage.retireAssistantTitle")}
-                </h3>
-                <p className="text-body-medium-default text-[var(--content-tertiary)]">
-                  {t("generalPage.retireAssistantDescription")}
-                </p>
-                <div className="mt-1">
-                  {(platformGate === "full" || canRetireLocally) &&
-                  platformAssistant ? (
-                    <RetireAssistant assistantId={platformAssistant.id} />
-                  ) : (
-                    <PlatformLoginNotice>
-                      {t("generalPage.retireAssistantLoginNotice")}
-                    </PlatformLoginNotice>
-                  )}
-                </div>
-              </section>
-            )}
-            {showRetire && showDeleteAccount && (
-              <div className="border-t border-[var(--border-subtle)]" />
-            )}
-            <DeleteAccountSection />
-          </div>
-        </DetailCard>
-      )}
     </div>
   );
 }
