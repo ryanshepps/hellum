@@ -31,10 +31,6 @@ export class NotificationRouter {
     return this.deliveries;
   }
 
-  hasNotifiedSourceContextSince(sourceContextId: string, sinceMs: number): boolean {
-    return this.events.hasNotifiedSourceContextSince(sourceContextId, sinceMs);
-  }
-
   stop(): void {
     this.platform?.close();
   }

@@ -30,10 +30,6 @@ export class NotificationLog {
     return this.events.some((event) => event.dedupeKey === dedupeKey);
   }
 
-  hasNotifiedSourceContextSince(sourceContextId: string, sinceMs: number): boolean {
-    return this.events.some((event) => event.sourceContextId === sourceContextId && event.emittedAt >= sinceMs);
-  }
-
   record(event: NotificationEventRecord): Promise<void> {
     this.events = [...this.events, event].slice(-MAX_EVENTS);
     return this.save(this.events);

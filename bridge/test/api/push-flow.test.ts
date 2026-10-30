@@ -108,17 +108,12 @@ describe("push notifications", () => {
     });
   });
 
-  test("a scheduled run notifies under the schedule's name, once", async () => {
+  test("a scheduled run saved locally does not notify", async () => {
     const { api, fakeApns } = await startWithPush();
     await api.send("POST", "push-tokens/", { token: DEVICE_TOKEN, platform: "ios", bundle_id: "com.example.hellum", apns_environment: "production" });
-    const created = (await (
-      await api.send("POST", "schedules", { name: "Nightly sweep", expression: "0 3 * * *", message: "Sweep the repo", syntax: "cron", mode: "execute" })
-    ).json()) as { schedule: { id: string } };
-    await writeOutsideReplies([{ id: `cron_${created.schedule.id}_20261026_030001`, source: "cron", title: "", text: "No new issues.", message_id: "9" }]);
-    const [push] = await fakeApns.waitFor(1);
-    expect(JSON.parse(push?.body ?? "{}")).toMatchObject({ aps: { alert: { title: "Nightly sweep", body: "No new issues." } } });
+    await writeOutsideReplies([{ id: "cron_a1b2c3d4e5f6_20261026_030001", source: "cron", title: "", text: "No new issues.", message_id: "9" }]);
     await Bun.sleep(400);
-    expect(fakeApns.received).toHaveLength(1);
+    expect(fakeApns.received).toHaveLength(0);
   });
 
   test("a scheduled run Hermes delivers to Hellum reaches the phone and opens the run", async () => {

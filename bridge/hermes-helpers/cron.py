@@ -83,7 +83,7 @@ def main():
                 name=request.get("name"),
                 schedule=request.get("schedule"),
                 prompt=request.get("prompt"),
-                deliver="local",
+                deliver="hellum",
             )
         )
     elif action == "update":

@@ -60,7 +60,7 @@ export function handleCron(request: CronRequest): object {
         created_at: "2026-10-23T12:00:00+00:00",
         script: null,
         no_agent: false,
-        deliver: "local",
+        deliver: "hellum",
       });
       save();
       return { success: true, job_id: id };
