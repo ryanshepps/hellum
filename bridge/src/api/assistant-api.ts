@@ -1,4 +1,5 @@
 import { UnknownAttachmentError } from "../attachments/attachment-stager";
+import { AvatarRejectedError } from "../avatar/avatar-store";
 import { ConversationNotFoundError } from "../conversations/conversation-service";
 import { HermesHelperError } from "../hermes/helper-process";
 import { HermesRpcError, HermesUnavailableError } from "../hermes/rpc-peer";
@@ -29,6 +30,9 @@ function toErrorResponse(error: unknown, method: string, path: string): Response
   }
   if (error instanceof ModelSettingRejectedError) {
     return errorResponse(422, "model_setting_rejected", error.message);
+  }
+  if (error instanceof AvatarRejectedError) {
+    return errorResponse(400, "invalid_request", error.message);
   }
   if (error instanceof McpRejectedError) {
     return errorResponse(422, "mcp_rejected", error.message);

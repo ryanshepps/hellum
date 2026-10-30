@@ -17,6 +17,7 @@ import { voiceRoutes } from "./api/voice-routes";
 import { systemRoutes } from "./api/system-routes";
 import { settingsRoutes } from "./api/settings-routes";
 import { createAuthRoutes } from "./auth/auth-routes";
+import { AvatarStore } from "./avatar/avatar-store";
 import { createFileAccessStore } from "./auth/access-store";
 import { AuthService } from "./auth/auth-service";
 import { createFileDeviceStore } from "./auth/device-store";
@@ -111,7 +112,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
   const hermesSettings = new HermesSettings(config.hermesHelpers, () => conversations.markCredentialsChanged());
   const assistantApi = createAssistantApi(new Set([SELF_ASSISTANT_ID, config.assistantId, identity.platformAssistantId]), [
     ...systemRoutes(config.assistantName, await displayVersion(config.hermesHelpers.cwd)),
-    ...avatarRoutes(),
+    ...avatarRoutes(new AvatarStore(config.stateDir, (avatarPath) => hub.publish({ type: "avatar_updated", avatarPath }))),
     ...pushRoutes(pushTokens, identity.platformAssistantId),
     ...attachmentRoutes(attachments),
     ...memoryRoutes(new MemoryService(config.hermesHelpers)),
