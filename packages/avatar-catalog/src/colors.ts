@@ -10,6 +10,7 @@ import type { ColorDefinition } from "./types.js";
  * values would put ~47 kB of SVG path data on that path.
  */
 export const AVATAR_COLORS: ColorDefinition[] = [
+  { id: "black", hex: "#000000" },
   { id: "green", hex: "#4C9B50" },
   { id: "orange", hex: "#E9642F" },
   { id: "pink", hex: "#DB4B77" },
