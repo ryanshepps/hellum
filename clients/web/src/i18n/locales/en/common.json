@@ -983,9 +983,6 @@
     "setupRequired": "Domain setup required",
     "setupRequiredTitle": "This domain has not been provisioned with the email provider. It cannot send or receive email until setup is complete."
   },
-  "managedServicesBanner": {
-    "body": "Managed services are metered and deducted from your Vellum account balance. <link>View pricing</link>"
-  },
   "serviceCard": {
     "managedLabel": "Managed",
     "modeToggleAriaLabel": "Service mode",

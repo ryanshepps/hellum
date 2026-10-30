@@ -218,9 +218,6 @@
   "localNotification": {
     "goToConversation": "Перейти к диалогу"
   },
-  "managedServicesBanner": {
-    "body": "Управляемые сервисы тарифицируются и списываются с баланса аккаунта Vellum. <link>Смотреть цены</link>"
-  },
   "nativeAppBanner": {
     "bannerAria": "Скачать приложение {appName}",
     "bannerAriaGeneric": "Скачать приложение Vellum",

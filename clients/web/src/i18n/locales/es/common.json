@@ -977,9 +977,6 @@
     "setupRequired": "Configuración del dominio requerida",
     "setupRequiredTitle": "Este dominio no se ha aprovisionado con el proveedor de correo. No puede enviar ni recibir correo hasta completar la configuración."
   },
-  "managedServicesBanner": {
-    "body": "Los servicios administrados se miden y se deducen del saldo de tu cuenta de Vellum. <link>Ver precios</link>"
-  },
   "serviceCard": {
     "managedLabel": "Administrado",
     "modeToggleAriaLabel": "Modo de servicio",

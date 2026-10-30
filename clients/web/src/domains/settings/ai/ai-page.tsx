@@ -7,7 +7,6 @@ import {
   LanguageModelCard,
   type LanguageModelPanelState,
 } from "@/domains/settings/ai/language-model-card";
-import { ManagedServicesBanner } from "@/components/managed-services-banner";
 import { ProfileDetailPanel } from "@/domains/settings/ai/profile-detail-panel";
 import { OverridesDetailPanel } from "@/domains/settings/ai/overrides-detail-panel";
 import { ProviderDetailPanel } from "@/domains/settings/ai/provider-detail-panel";
@@ -42,8 +41,6 @@ export function AiPage() {
 
   const section = (
     <div className="min-h-0 flex-1 space-y-5 overflow-y-auto">
-      <ManagedServicesBanner />
-
       <LanguageModelCard
         panel={lmPanel}
         onOpenPanel={setLmPanel}

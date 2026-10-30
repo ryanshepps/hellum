@@ -983,9 +983,6 @@
     "setupRequired": "需要设置域名",
     "setupRequiredTitle": "此域名尚未在电子邮件提供商处完成配置。在完成设置前，它无法发送或接收电子邮件。"
   },
-  "managedServicesBanner": {
-    "body": "托管服务按量计费，并从您的 Vellum 账户余额中扣除。<link>查看定价</link>"
-  },
   "serviceCard": {
     "managedLabel": "托管",
     "modeToggleAriaLabel": "服务模式",

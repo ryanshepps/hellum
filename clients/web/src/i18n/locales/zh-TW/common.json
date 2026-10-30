@@ -983,9 +983,6 @@
     "setupRequired": "需要設定網域",
     "setupRequiredTitle": "此網域尚未在電子郵件提供者完成佈建。在完成設定前，它無法傳送或接收電子郵件。"
   },
-  "managedServicesBanner": {
-    "body": "受管服務按用量計費，並從您的 Vellum 帳戶餘額中扣除。<link>檢視定價</link>"
-  },
   "serviceCard": {
     "managedLabel": "受管",
     "modeToggleAriaLabel": "服務模式",
