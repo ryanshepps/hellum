@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.getcwd())
 
 from cron.jobs import _job_output_dir, load_jobs  # noqa: E402
+from cron.scheduler_delivery import cron_delivery_targets  # noqa: E402
 from hermes_time import get_timezone  # noqa: E402
 from tools.cronjob_tools import cronjob  # noqa: E402
 
@@ -74,6 +75,8 @@ def main():
             "timezone": configured_timezone(),
             "jobs": [job_view(job) for job in load_jobs()],
         }
+    elif action == "delivery_targets":
+        result = {"success": True, "targets": cron_delivery_targets()}
     elif action == "runs":
         result = {"success": True, "runs": job_runs(request.get("job_id"), int(request.get("limit", 25)))}
     elif action == "create":

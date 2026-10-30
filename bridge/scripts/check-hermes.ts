@@ -2,7 +2,9 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { z } from "zod";
 import { loadConfig } from "../src/config";
+import { runHermesHelper } from "../src/hermes/helper-process";
 import { startBridge } from "../src/server";
 
 const READY_TIMEOUT_MS = 60_000;
@@ -18,19 +20,23 @@ const CHECKS: readonly Check[] = [
   { name: "model settings", path: () => "config" },
 ];
 
+const DeliveryTargetsSchema = z.object({
+  success: z.literal(true),
+  targets: z.array(z.object({ id: z.string(), home_target_set: z.boolean() })),
+});
+
 const stateDir = await mkdtemp(join(tmpdir(), "hellum-check-"));
-const bridge = await startBridge(
-  loadConfig({
-    ...process.env,
-    HELLUM_PORT: "0",
-    HELLUM_STATE_DIR: stateDir,
-    HELLUM_WEB_DIST: existsSync(BUILT_WEB) ? BUILT_WEB : FIXTURE_WEB,
-    HELLUM_HERMES_GATEWAY_ARGV: undefined,
-    HELLUM_APNS_KEY_PATH: undefined,
-    HELLUM_APNS_KEY_ID: undefined,
-    HELLUM_APNS_TEAM_ID: undefined,
-  }),
-);
+const config = loadConfig({
+  ...process.env,
+  HELLUM_PORT: "0",
+  HELLUM_STATE_DIR: stateDir,
+  HELLUM_WEB_DIST: existsSync(BUILT_WEB) ? BUILT_WEB : FIXTURE_WEB,
+  HELLUM_HERMES_GATEWAY_ARGV: undefined,
+  HELLUM_APNS_KEY_PATH: undefined,
+  HELLUM_APNS_KEY_ID: undefined,
+  HELLUM_APNS_TEAM_ID: undefined,
+});
+const bridge = await startBridge(config);
 
 function report(name: string, ok: boolean, detail: string): boolean {
   process.stdout.write(`${ok ? "ok  " : "FAIL"} ${name}: ${detail}\n`);
@@ -77,7 +83,13 @@ async function run(): Promise<boolean> {
     const response = await get(headers, check.path(latest));
     passed = report(check.name, response.ok, `HTTP ${response.status}`) && passed;
   }
-  return passed;
+  return (await deliversToHellum()) && passed;
+}
+
+async function deliversToHellum(): Promise<boolean> {
+  const { targets } = await runHermesHelper(config.hermesHelpers, "cron", { action: "delivery_targets" }, DeliveryTargetsSchema);
+  const hellum = targets.find((target) => target.id === "hellum");
+  return report("Hermes delivers to Hellum", hellum?.home_target_set === true, hellum ? "hellum platform connected" : "hellum plugin not loaded");
 }
 
 let passed = false;
