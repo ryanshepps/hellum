@@ -2469,8 +2469,6 @@
     "debug": "Debug",
     "developer": "Developer",
     "personality": "Personality",
-    "logout": "Log Out",
-    "login": "Log In",
     "title": "Settings"
   },
   "debugPage": {

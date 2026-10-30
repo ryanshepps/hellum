@@ -1,17 +1,13 @@
-import { LogIn, LogOut } from "lucide-react";
 import { useCallback, useEffect, useMemo } from "react";
-import { Outlet, useLocation, useNavigate } from "react-router";
+import { Outlet, useLocation } from "react-router";
 
 import { useTranslation } from "@/i18n";
-import { useOnboardingLogin } from "@/hooks/use-onboarding-login";
 import { usePlatformGate } from "@/hooks/use-platform-gate";
-import { handleLogout } from "@/lib/auth/handle-logout";
 import { useCanUseInternalThreadActions } from "@/lib/auth/internal-thread-actions";
 import { useSupportsBookmarks } from "@/lib/backwards-compat/use-supports-bookmarks";
 import { useSupportsCredentialsSettings } from "@/lib/backwards-compat/use-supports-credentials-settings";
 import { isBrowserNotificationHost } from "@/runtime/notifications";
 import { useIsNativeAndroid } from "@/runtime/platform-detection";
-import { useHasPlatformSession } from "@/stores/auth-store";
 import { useAssistantFeatureFlagStore } from "@/stores/assistant-feature-flag-store";
 import { useResolvedAssistantsStore } from "@/stores/resolved-assistants-store";
 import { useTitleBarStore } from "@/stores/title-bar-store";
@@ -60,10 +56,6 @@ export function SettingsLayout() {
   // `showBillingTab`. Signed-out / self-hosted users see just "Usage".
   const billingGate = usePlatformGate();
   const { pathname } = useLocation();
-  const navigate = useNavigate();
-  // Show Log Out when a platform session exists, Log In otherwise.
-  const hasPlatformSession = useHasPlatformSession();
-  const { login } = useOnboardingLogin();
 
   const getSidebarLabel = useCallback(
     (id: string, defaultLabel: string) => {
@@ -159,30 +151,10 @@ export function SettingsLayout() {
         ),
       );
     }
-    // The auth action is pinned to the very bottom of the nav.
-    items.push(
-      hasPlatformSession
-        ? {
-            id: "logout",
-            label: t("sidebar.logout", "Log Out"),
-            icon: LogOut,
-            onSelect: () => void handleLogout(navigate),
-          }
-        : {
-            id: "login",
-            label: t("sidebar.login", "Log In"),
-            icon: LogIn,
-            onSelect: () => void login(),
-          },
-    );
     return items;
   }, [
     settingsDeveloperNav,
     vellumHostedInference,
-    hasPlatformSession,
-    navigate,
-    login,
-    t,
     getSidebarLabel,
   ]);
 
