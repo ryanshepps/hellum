@@ -5,12 +5,14 @@ const ReadResultSchema = z.object({
   success: z.literal(true),
   values: z.record(z.string(), z.unknown()),
   env: z.record(z.string(), z.boolean()),
+  revealed: z.record(z.string(), z.string()),
 });
 const WriteResultSchema = z.object({ success: z.boolean(), error: z.string().nullable() });
 
 export type HermesSettingsSnapshot = {
   readonly values: Readonly<Record<string, unknown>>;
   readonly env: Readonly<Record<string, boolean>>;
+  readonly revealed: Readonly<Record<string, string>>;
 };
 
 export type HermesSettingsChange = {
@@ -33,8 +35,8 @@ export class HermesSettings {
     private readonly onCredentialsChanged: () => void,
   ) {}
 
-  read(keys: readonly string[], env: readonly string[] = []): Promise<HermesSettingsSnapshot> {
-    return runHermesHelper(this.helper, "settings", { action: "read", keys, env }, ReadResultSchema);
+  read(keys: readonly string[], env: readonly string[] = [], reveal: readonly string[] = []): Promise<HermesSettingsSnapshot> {
+    return runHermesHelper(this.helper, "settings", { action: "read", keys, env, reveal }, ReadResultSchema);
   }
 
   async write(change: HermesSettingsChange): Promise<void> {

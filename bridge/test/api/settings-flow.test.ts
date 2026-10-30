@@ -55,3 +55,50 @@ describe("settings Hermes does not own", () => {
     expect(hermes()).toEqual({ values: {}, env: {} });
   });
 });
+
+describe("web search and fetch", () => {
+  test("Settings shows Automatic until a backend is chosen", async () => {
+    const api = await start();
+    expect(await config(api)).toMatchObject({
+      services: { "web-search": { provider: "inference-provider-native" }, "web-fetch": { provider: "default" } },
+    });
+  });
+
+  test("the chosen providers become Hermes' search and extract backends", async () => {
+    const api = await start();
+    await api.send("PATCH", "config", { services: { "web-search": { provider: "brave", mode: "your-own" }, "web-fetch": { provider: "firecrawl" } } });
+    expect(hermes().values).toEqual({ "web.search_backend": "brave-free", "web.extract_backend": "firecrawl" });
+    expect(await config(api)).toMatchObject({ services: { "web-search": { provider: "brave" }, "web-fetch": { provider: "firecrawl" } } });
+  });
+
+  test("going back to Automatic hands the choice back to Hermes", async () => {
+    const api = await start();
+    await api.send("PATCH", "config", { services: { "web-search": { provider: "exa" } } });
+    await api.send("PATCH", "config", { services: { "web-search": { provider: "inference-provider-native" } } });
+    expect(hermes().values).toEqual({});
+  });
+
+  test("a SearXNG address is stored where Hermes looks for it", async () => {
+    const api = await start();
+    await api.send("PATCH", "config", { services: { "web-search": { provider: "searxng", apiBase: "http://127.0.0.1:8888" } } });
+    expect(hermes().env).toEqual({ SEARXNG_URL: "http://127.0.0.1:8888" });
+    expect(await config(api)).toMatchObject({ services: { "web-search": { provider: "searxng", apiBase: "http://127.0.0.1:8888" } } });
+  });
+
+  test.each([
+    ["a provider Hermes lacks", { "web-search": { provider: "vellum" } }],
+    ["a SearXNG address that is not a URL", { "web-search": { provider: "searxng", apiBase: "my searx" } }],
+  ])("%s is refused", async (_label, services) => {
+    const api = await start();
+    expect((await api.send("PATCH", "config", { services })).status).toBe(422);
+    expect(hermes()).toEqual({ values: {}, env: {} });
+  });
+
+  test("a web provider's API key is saved to Hermes' environment and reported as stored", async () => {
+    const api = await start();
+    expect((await api.send("POST", "secrets", { type: "api_key", name: "exa", value: "exa-key" })).status).toBe(200);
+    expect(hermes().env).toEqual({ EXA_API_KEY: "exa-key" });
+    const read = await api.send("POST", "secrets/read", { type: "api_key", name: "exa" });
+    expect(await read.json()).toMatchObject({ found: true, value: "" });
+  });
+});

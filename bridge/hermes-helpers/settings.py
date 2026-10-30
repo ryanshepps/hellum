@@ -3,7 +3,8 @@
 Run with the Hermes virtualenv and the hermes-agent checkout on sys.path.
 Reads one JSON request from stdin and writes one JSON response to stdout.
 Config keys come from config.yaml. Environment values are written to Hermes'
-.env, and only whether each one is set is ever reported back.
+.env. Only whether each one is set is reported back, except for the
+non-secret names a request lists under "reveal", such as a server URL.
 """
 
 import contextlib
@@ -28,13 +29,18 @@ def lookup(config, dotted_key):
     return node
 
 
-def read(keys, env_names):
+def read(keys, env_names, reveal):
     config = load_config()
     values = {}
     for key in keys:
         value = lookup(config, key)
         values[key] = None if value is MISSING else value
-    return {"success": True, "values": values, "env": {name: bool(get_env_value(name)) for name in env_names}}
+    return {
+        "success": True,
+        "values": values,
+        "env": {name: bool(get_env_value(name)) for name in env_names},
+        "revealed": {name: get_env_value(name) or "" for name in reveal},
+    }
 
 
 def quietly(change):
@@ -69,7 +75,7 @@ def main():
     request = json.loads(sys.stdin.read() or "{}")
     action = request.get("action")
     if action == "read":
-        result = read(list(request.get("keys") or []), list(request.get("env") or []))
+        result = read(list(request.get("keys") or []), list(request.get("env") or []), list(request.get("reveal") or []))
     elif action == "write":
         result = write(
             dict(request.get("set") or {}),

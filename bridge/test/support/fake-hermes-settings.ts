@@ -6,6 +6,7 @@ export type SettingsRequest = {
   action: string;
   keys?: string[];
   env?: string[] | Record<string, string>;
+  reveal?: string[];
   set?: Record<string, string>;
   unset?: string[];
   env_unset?: string[];
@@ -31,6 +32,7 @@ export function handleSettings(request: SettingsRequest): object {
         success: true,
         values: Object.fromEntries((request.keys ?? []).map((key) => [key, state.values[key] ?? null])),
         env: Object.fromEntries(((request.env as string[] | undefined) ?? []).map((name) => [name, Boolean(state.env[name])])),
+        revealed: Object.fromEntries((request.reveal ?? []).map((name) => [name, state.env[name] ?? ""])),
       };
     case "write": {
       if (Object.values(request.set ?? {}).includes("refuse")) {

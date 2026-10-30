@@ -38,9 +38,11 @@ import { PlatformPush } from "./notifications/platform-push";
 import { startReplyNotifications } from "./notifications/reply-producer";
 import { PushTokenRegistry } from "./push/push-tokens";
 import { ScheduleDescriptionsSchema, ScheduleService } from "./schedules/schedule-service";
+import { CredentialService } from "./settings/credentials";
 import { HermesSettings } from "./settings/hermes-settings";
 import { SETTINGS_SECTIONS } from "./settings/sections";
 import { SettingsService } from "./settings/settings-service";
+import { WEB_KEY_ENV } from "./settings/web";
 import { SkillService } from "./skills/skill-service";
 import { VoiceService } from "./voice/voice-service";
 import { buildRemoteGatewayConfig } from "./spa/index-html";
@@ -99,13 +101,14 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
     () => conversations.releaseIdleSessions(),
     () => conversations.markCredentialsChanged(),
   );
+  const hermesSettings = new HermesSettings(config.hermesHelpers, () => conversations.markCredentialsChanged());
   const assistantApi = createAssistantApi(new Set([SELF_ASSISTANT_ID, config.assistantId, identity.platformAssistantId]), [
     ...systemRoutes(config.assistantName),
     ...pushRoutes(pushTokens, identity.platformAssistantId),
     ...attachmentRoutes(attachments),
     ...memoryRoutes(new MemoryService(config.hermesHelpers)),
-    ...modelRoutes(models),
-    ...settingsRoutes(models, new SettingsService(new HermesSettings(config.hermesHelpers, () => conversations.markCredentialsChanged()), SETTINGS_SECTIONS)),
+    ...modelRoutes(models, new CredentialService(models, hermesSettings, WEB_KEY_ENV)),
+    ...settingsRoutes(models, new SettingsService(hermesSettings, SETTINGS_SECTIONS)),
     ...scheduleRoutes(
       new ScheduleService(
         config.hermesHelpers,

@@ -5,6 +5,7 @@ export type ConfigPatch = Readonly<Record<string, unknown>>;
 export type SettingsSection = {
   readonly keys: readonly string[];
   readonly env?: readonly string[];
+  readonly reveal?: readonly string[];
   readonly view: (snapshot: HermesSettingsSnapshot) => object;
   readonly change: (patch: ConfigPatch) => HermesSettingsChange | null;
 };
@@ -24,7 +25,7 @@ export function mergeDeep(base: Json, overlay: Json): Json {
   return merged;
 }
 
-function combine(changes: readonly HermesSettingsChange[]): HermesSettingsChange {
+export function combineChanges(changes: readonly HermesSettingsChange[]): HermesSettingsChange {
   return {
     set: Object.assign({}, ...changes.map((change) => change.set ?? {})),
     unset: changes.flatMap((change) => change.unset ?? []),
@@ -43,6 +44,7 @@ export class SettingsService {
     const snapshot = await this.hermes.read(
       [...new Set(this.sections.flatMap((section) => section.keys))],
       [...new Set(this.sections.flatMap((section) => section.env ?? []))],
+      [...new Set(this.sections.flatMap((section) => section.reveal ?? []))],
     );
     return this.sections.reduce<Json>((view, section) => mergeDeep(view, section.view(snapshot) as Json), {});
   }
@@ -50,7 +52,7 @@ export class SettingsService {
   async apply(patch: ConfigPatch): Promise<void> {
     const changes = this.sections.flatMap((section) => section.change(patch) ?? []);
     if (changes.length > 0) {
-      await this.hermes.write(combine(changes));
+      await this.hermes.write(combineChanges(changes));
     }
   }
 }

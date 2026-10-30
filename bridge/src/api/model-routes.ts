@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { errorResponse, readJsonBody } from "../http/json";
 import type { ModelService } from "../models/model-service";
+import type { CredentialService } from "../settings/credentials";
 import type { Route } from "./route-table";
 
 const ActiveProfileBodySchema = z.object({ name: z.string().min(1) });
@@ -10,7 +11,7 @@ const SecretReadBodySchema = z.object({ type: z.string(), name: z.string().min(1
 
 const MASKED_SECRET = "••••••••";
 
-export function modelRoutes(models: ModelService): readonly Route[] {
+export function modelRoutes(models: ModelService, credentials: CredentialService): readonly Route[] {
   return [
     { method: "GET", pattern: "config/llm/call-sites", handle: () => Response.json({ domains: [], callSites: [] }) },
     {
@@ -61,7 +62,7 @@ export function modelRoutes(models: ModelService): readonly Route[] {
         if (!body) {
           return errorResponse(400, "invalid_request", "type, name and value are required");
         }
-        await models.saveSecret(body.name, body.value);
+        await credentials.save(body.name, body.value);
         return Response.json({ success: true, type: body.type, name: body.name });
       },
     },
@@ -73,7 +74,7 @@ export function modelRoutes(models: ModelService): readonly Route[] {
         if (!body) {
           return errorResponse(400, "invalid_request", "type and name are required");
         }
-        const found = await models.hasSecret(body.name);
+        const found = await credentials.has(body.name);
         return Response.json({ found, value: "", masked: found ? MASKED_SECRET : "", unreachable: false });
       },
     },
