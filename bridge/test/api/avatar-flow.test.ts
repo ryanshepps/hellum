@@ -35,7 +35,7 @@ async function redPng(): Promise<string> {
 describe("avatar", () => {
   test("a new assistant wears Hellum's eyes", async () => {
     const api = await start();
-    expect(await state(api)).toMatchObject({ kind: "image", traits: null });
+    expect(await state(api)).toMatchObject({ kind: "image", traits: null, accent: { hex: "#000000" } });
     const image = await api.get(IMAGE_PATH);
     expect(image.headers.get("Content-Type")).toBe("image/svg+xml");
   });
@@ -97,7 +97,7 @@ describe("avatar", () => {
     const api = await start();
     await api.send("POST", "avatar/render-from-traits", await validTraits(api));
     expect(await (await api.send("POST", "avatar/remove")).json()).toEqual({ ok: true, hadAvatar: true });
-    expect(await state(api)).toMatchObject({ kind: "image", source: "upload", accent: null });
+    expect(await state(api)).toMatchObject({ kind: "image", source: "upload", accent: { hex: "#000000" } });
   });
 
   test("a chosen avatar survives a bridge restart", async () => {

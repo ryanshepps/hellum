@@ -24,7 +24,7 @@ const DEFAULT_AVATAR_STATE: AvatarState = {
   traits: null,
   source: "upload",
   image: { updatedAt: "1970-01-01T00:00:00.000Z", etag: "hellum-default" },
-  accent: null,
+  accent: { hex: "#000000", source: "palette" },
 };
 
 export class AvatarRejectedError extends Error {
