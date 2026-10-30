@@ -6,6 +6,7 @@ import { handleModels, type ModelsRequest } from "./fake-hermes-models";
 import { handleSessions, type SessionsRequest } from "./fake-hermes-sessions";
 import { handleSettings, type SettingsRequest } from "./fake-hermes-settings";
 import { handleSkills, type SkillsRequest } from "./fake-hermes-skills";
+import { handleUsage } from "./fake-hermes-usage";
 import { handleVoice, type VoiceRequest } from "./fake-hermes-voice";
 
 const helper = basename(process.argv[2] ?? "", ".py");
@@ -32,6 +33,9 @@ switch (helper) {
     break;
   case "settings":
     process.stdout.write(JSON.stringify(handleSettings(request as SettingsRequest)));
+    break;
+  case "usage":
+    process.stdout.write(JSON.stringify(handleUsage()));
     break;
   case "voice":
     process.stdout.write(JSON.stringify(handleVoice(request as VoiceRequest)));

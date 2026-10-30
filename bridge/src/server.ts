@@ -10,6 +10,7 @@ import { conversationRoutes } from "./api/conversation-routes";
 import { pushRoutes } from "./api/push-routes";
 import { scheduleRoutes } from "./api/schedule-routes";
 import { skillRoutes } from "./api/skill-routes";
+import { usageRoutes } from "./api/usage-routes";
 import { voiceRoutes } from "./api/voice-routes";
 import { systemRoutes } from "./api/system-routes";
 import { settingsRoutes } from "./api/settings-routes";
@@ -46,6 +47,7 @@ import { SETTINGS_SECTIONS } from "./settings/sections";
 import { SettingsService } from "./settings/settings-service";
 import { WEB_KEY_ENV } from "./settings/web";
 import { SkillService } from "./skills/skill-service";
+import { UsageService } from "./usage/usage-service";
 import { VoiceService } from "./voice/voice-service";
 import { buildRemoteGatewayConfig } from "./spa/index-html";
 import { createSpaHandler } from "./spa/spa-handler";
@@ -121,6 +123,7 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
       ),
     ),
     ...skillRoutes(new SkillService(config.hermesHelpers)),
+    ...usageRoutes(new UsageService(config.hermesHelpers), Intl.DateTimeFormat().resolvedOptions().timeZone),
     ...voiceRoutes(new VoiceService(config.hermesHelpers, join(config.stateDir, "voice"))),
     ...conversationRoutes(conversations, hub),
   ]);
