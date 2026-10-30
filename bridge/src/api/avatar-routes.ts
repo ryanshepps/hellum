@@ -1,3 +1,4 @@
+import { getCharacterComponents } from "@vellumai/avatar-catalog";
 import { join } from "node:path";
 import { errorResponse } from "../http/json";
 import type { Route } from "./route-table";
@@ -18,6 +19,6 @@ export function avatarRoutes(): readonly Route[] {
         query.get("path") === AVATAR_IMAGE_PATH ? new Response(Bun.file(AVATAR_FILE), { headers: { "Content-Type": "image/svg+xml" } }) : absent(),
     },
     { method: "GET", pattern: "workspace/file", handle: absent },
-    { method: "GET", pattern: "avatar/character-components", handle: absent },
+    { method: "GET", pattern: "avatar/character-components", handle: () => Response.json(getCharacterComponents()) },
   ];
 }

@@ -13,10 +13,13 @@
   },
   "dependencies": {
     "@vellumai/assistant-api": "workspace:*",
+    "@vellumai/avatar-catalog": "workspace:*",
+    "@vellumai/avatar-manifest": "workspace:*",
     "@vellumai/service-contracts": "workspace:*",
     "qrcode": "1.5.4",
     "remark-gfm": "4.0.1",
     "remark-parse": "11.0.0",
+    "sharp": "0.35.4",
     "unified": "11.0.5",
     "zod": "4.3.6"
   },
