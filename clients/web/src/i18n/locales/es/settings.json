@@ -2238,8 +2238,7 @@
     "providerLabel": "Proveedor",
     "savedToast": "Configuración de búsqueda web guardada.",
     "subtitle": "Configura cómo tu asistente debe buscar en la web",
-    "title": "Búsqueda web",
-    "vellumNote": "La búsqueda se ejecuta a través de tu cuenta de Vellum."
+    "title": "Búsqueda web"
   },
   "yourOwnOauthTab": {
     "accountFallback": "Cuenta de {name}",

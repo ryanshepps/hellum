@@ -2220,8 +2220,7 @@
     "providerLabel": "Провайдер",
     "savedToast": "Настройки веб-поиска сохранены.",
     "subtitle": "Настройка веб-поиска ассистента",
-    "title": "Веб-поиск",
-    "vellumNote": "Поиск идёт через аккаунт Vellum."
+    "title": "Веб-поиск"
   },
   "yourOwnOauthTab": {
     "accountFallback": "Аккаунт {name}",

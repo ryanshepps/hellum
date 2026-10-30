@@ -2225,8 +2225,7 @@
     "providerLabel": "提供者",
     "savedToast": "網路搜尋設定已儲存。",
     "subtitle": "設定您的助理應如何搜尋網路",
-    "title": "網路搜尋",
-    "vellumNote": "搜尋透過您的 Vellum 帳戶執行。"
+    "title": "網路搜尋"
   },
   "yourOwnOauthTab": {
     "accountFallback": "{name} 帳戶",

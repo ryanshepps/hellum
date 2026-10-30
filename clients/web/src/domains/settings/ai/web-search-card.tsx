@@ -44,8 +44,6 @@ import {
   credentialPresenceQueryKey,
   useStoredCredentialPresence,
 } from "@/domains/settings/ai/use-stored-credential-presence";
-import { supportsWebSearchVellumProvider } from "@/lib/backwards-compat/use-supports-web-search-vellum-provider";
-import { whenAssistantVersionKnown } from "@/lib/backwards-compat/utils";
 
 export function WebSearchCard() {
   const { t } = useTranslation("settings");
@@ -81,19 +79,10 @@ export function WebSearchCard() {
       );
     }
     const wsService = daemonConfig.services?.["web-search"] as
-      | { provider?: string; mode?: string; apiBase?: string }
+      | { provider?: string; apiBase?: string }
       | undefined;
-    // A config written by the legacy mode toggle marks managed via `mode`
-    // while `provider` holds the BYOK restore value — the daemon routes it to
-    // Vellum, so the card must render it as Vellum too. Provider Native is
-    // exempt: it stays itself under managed mode (see migration 132).
-    const daemonProvider =
-      wsService?.mode === "managed" &&
-      wsService?.provider !== "inference-provider-native"
-        ? "vellum"
-        : wsService?.provider;
     return (
-      daemonProvider ||
+      wsService?.provider ||
       getLocalSetting(LS_WEB_SEARCH_PROVIDER, "inference-provider-native")
     );
   }, [daemonConfig]);
@@ -168,27 +157,11 @@ export function WebSearchCard() {
       if (hasUserKey) {
         await provisionProviderKey(webSearchProvider, trimmed);
       }
-      // The provider is written as a pair with `mode`: a stale
-      // `mode: "managed"` from the legacy toggle would win over a BYOK
-      // choice unless reset. Daemons older than the vellum catalog entry
-      // reject the provider value outright, so for them a Vellum selection
-      // writes only the legacy managed mode and lets the deep-merge keep the
-      // stored provider — the read bridge renders that pair as Vellum again.
-      await whenAssistantVersionKnown();
-      const webSearchService: {
-        provider?: string;
-        mode: "managed" | "your-own";
-        apiBase?: string;
-      } =
-        webSearchProvider === "vellum"
-          ? supportsWebSearchVellumProvider()
-            ? { provider: "vellum", mode: "managed" }
-            : { mode: "managed" }
-          : {
-              provider: webSearchProvider,
-              mode: "your-own",
-              ...(showsApiBase ? { apiBase: trimmedApiBase } : {}),
-            };
+      const webSearchService = {
+        provider: webSearchProvider,
+        mode: "your-own",
+        ...(showsApiBase ? { apiBase: trimmedApiBase } : {}),
+      };
       await configMutation
         .mutateAsync({
           path: { assistant_id: assistantId },
@@ -274,12 +247,6 @@ export function WebSearchCard() {
             }))}
           />
         </div>
-
-        {webSearchProvider === "vellum" && (
-          <p className="text-body-medium-lighter text-[var(--content-tertiary)]">
-            {t("webSearchCard.vellumNote")}
-          </p>
-        )}
 
         {showsApiBase && (
           <div className="space-y-1">

@@ -1,13 +1,9 @@
 /**
- * Tests for `WebSearchCard`'s provider-only configuration (the Managed /
- * Your Own mode toggle is gone — Vellum is a provider like any other):
+ * Tests for `WebSearchCard`'s provider-only configuration:
  *
  *   1. No mode segmented-control renders in the card header.
- *   2. Vellum is selectable, needs no API key, and saves as a
- *      provider+mode pair for old-daemon compatibility.
- *   3. BYOK providers still gate Save on a credential.
- *   4. Legacy managed-mode daemon configs render as Vellum — except
- *      Provider Native, which stays itself (mirrors migration 132).
+ *   2. Hermes' web search backends are offered, Automatic first.
+ *   3. BYOK providers gate Save on a credential.
  *
  * The design-library Select is real, driven via its combobox trigger like
  * `speech-to-text-card.test.tsx`.
@@ -76,20 +72,6 @@ mock.module("@/hooks/use-is-org-ready", () => ({
   useIsOrgReady: () => false,
 }));
 
-// Version gate for `provider: "vellum"` — supported by default; the
-// old-daemon test flips it off.
-let daemonSupportsVellumProvider = true;
-mock.module(
-  "@/lib/backwards-compat/use-supports-web-search-vellum-provider",
-  () => ({
-    MIN_VERSION: "0.10.12",
-    supportsWebSearchVellumProvider: () => daemonSupportsVellumProvider,
-  }),
-);
-mock.module("@/lib/backwards-compat/utils", () => ({
-  whenAssistantVersionKnown: () => Promise.resolve(),
-}));
-
 const { WebSearchCard } = await import("@/domains/settings/ai/web-search-card");
 const { LS_WEB_SEARCH_PROVIDER } = await import("@/utils/local-settings-keys");
 
@@ -139,7 +121,6 @@ describe("WebSearchCard — provider-only configuration", () => {
     configPatchCalls.length = 0;
     provisionedKeys.length = 0;
     hasStoredCredential = false;
-    daemonSupportsVellumProvider = true;
     daemonConfigData = { services: {} };
   });
 
@@ -157,53 +138,26 @@ describe("WebSearchCard — provider-only configuration", () => {
     expect(providerTrigger()).toBeTruthy();
   });
 
-  test("Vellum and Provider Native are offered alongside the BYOK providers", () => {
+  test("Hermes' web search backends are offered, Automatic first", () => {
     renderCard();
 
     fireEvent.click(providerTrigger());
     const options = visibleOptions();
     expect(options).toEqual([
-      "Vellum",
-      "Provider Native",
-      "Perplexity",
-      "Brave",
+      "Automatic",
+      "Exa",
+      "Parallel",
       "Tavily",
+      "Perplexity",
       "Firecrawl",
       "Keenable",
-      "fastCRW",
+      "Brave",
       "SearXNG",
-      "TinyFish",
-      "Exa",
-      "Serply",
+      "DuckDuckGo",
     ]);
   });
 
-  test("selecting Vellum hides the API key field and saves the provider+mode pair", async () => {
-    renderCard();
-
-    fireEvent.click(providerTrigger());
-    selectOption("Vellum");
-
-    expect(screen.queryByText("API Key")).toBeNull();
-    expect(
-      screen.getByText(/Search runs through your Vellum account/),
-    ).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(configPatchCalls.length).toBe(1));
-    // Written as a pair so the save stays valid on daemons whose schema
-    // still couples provider "vellum" to mode "managed".
-    expect(configPatchCalls[0]!.body).toMatchObject({
-      services: {
-        "web-search": { provider: "vellum", mode: "managed" },
-      },
-    });
-    expect(provisionedKeys).toHaveLength(0);
-    expect(localStorage.getItem(LS_WEB_SEARCH_PROVIDER)).toBe("vellum");
-  });
-
-  test("Provider Native needs no key and saves with mode your-own", async () => {
+  test("Automatic needs no key and saves with mode your-own", async () => {
     // Start from a non-default provider so Save enables on the change.
     daemonConfigData = {
       services: { "web-search": { provider: "brave", mode: "your-own" } },
@@ -211,7 +165,7 @@ describe("WebSearchCard — provider-only configuration", () => {
     renderCard();
 
     fireEvent.click(providerTrigger());
-    selectOption("Provider Native");
+    selectOption("Automatic");
 
     expect(screen.queryByText("API Key")).toBeNull();
 
@@ -258,39 +212,6 @@ describe("WebSearchCard — provider-only configuration", () => {
     });
   });
 
-  test("fastCRW shows API Base and allows save without a key when base is custom", async () => {
-    renderCard();
-
-    fireEvent.click(providerTrigger());
-    selectOption("fastCRW");
-
-    expect(screen.getByText("API Base")).toBeTruthy();
-    const saveButton = screen.getByRole("button", {
-      name: "Save",
-    }) as HTMLButtonElement;
-    expect(saveButton.disabled).toBe(true);
-
-    const apiBaseInput = screen.getByPlaceholderText("https://api.fastcrw.com");
-    fireEvent.change(apiBaseInput, {
-      target: { value: "http://localhost:3000" },
-    });
-    expect(saveButton.disabled).toBe(false);
-
-    fireEvent.click(saveButton);
-
-    await waitFor(() => expect(configPatchCalls.length).toBe(1));
-    expect(provisionedKeys).toHaveLength(0);
-    expect(configPatchCalls[0]!.body).toMatchObject({
-      services: {
-        "web-search": {
-          provider: "fastcrw",
-          mode: "your-own",
-          apiBase: "http://localhost:3000",
-        },
-      },
-    });
-  });
-
   test("SearXNG requires API Base and allows save without a key", async () => {
     renderCard();
 
@@ -324,95 +245,29 @@ describe("WebSearchCard — provider-only configuration", () => {
     });
   });
 
-  test("TinyFish still requires a key when API Base is custom", () => {
+  test("DuckDuckGo needs no key and no API Base", async () => {
     renderCard();
 
     fireEvent.click(providerTrigger());
-    selectOption("TinyFish");
+    selectOption("DuckDuckGo");
 
-    const saveButton = screen.getByRole("button", {
-      name: "Save",
-    }) as HTMLButtonElement;
-    const apiBaseInput = screen.getByPlaceholderText(
-      "https://api.search.tinyfish.ai",
-    );
-    fireEvent.change(apiBaseInput, {
-      target: { value: "https://search.example.com/api" },
-    });
-
-    expect(saveButton.disabled).toBe(true);
-
-    const keyInput = screen.getByPlaceholderText("TinyFish API key...");
-    fireEvent.change(keyInput, { target: { value: "tinyfish-secret" } });
-    expect(saveButton.disabled).toBe(false);
-  });
-
-  test("a daemon predating the vellum provider gets the legacy managed write", async () => {
-    // Old daemon schemas reject provider "vellum" outright; the Vellum
-    // selection must degrade to the legacy Managed representation — mode
-    // only, letting the deep-merge keep the stored provider so the read
-    // bridge renders the pair as Vellum again.
-    daemonSupportsVellumProvider = false;
-    renderCard();
-
-    fireEvent.click(providerTrigger());
-    selectOption("Vellum");
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(configPatchCalls.length).toBe(1));
-    const body = configPatchCalls[0]!.body as {
-      services: { "web-search": Record<string, unknown> };
-    };
-    expect(body.services["web-search"]).toEqual({ mode: "managed" });
-  });
-
-  // A config written by the legacy mode toggle marks managed via `mode`
-  // while `provider` holds the BYOK restore value.
-  test("a legacy managed-mode daemon renders as Vellum", () => {
-    daemonConfigData = {
-      services: { "web-search": { mode: "managed", provider: "brave" } },
-    };
-    renderCard();
-
-    expect(providerTrigger().textContent).toContain("Vellum");
     expect(screen.queryByText("API Key")).toBeNull();
-  });
-
-  test("a legacy managed-mode Provider Native daemon stays Provider Native", () => {
-    // The platform default config: managed mode never meant "Vellum search"
-    // for Provider Native — migration 132 preserves it, so must the card.
-    daemonConfigData = {
-      services: {
-        "web-search": {
-          mode: "managed",
-          provider: "inference-provider-native",
-        },
-      },
-    };
-    renderCard();
-
-    expect(providerTrigger().textContent).toContain("Provider Native");
-    expect(providerTrigger().textContent).not.toContain("Vellum");
-  });
-
-  test("escaping a legacy managed-mode daemon resets mode alongside the provider", async () => {
-    // Without the mode reset, the stale `mode: "managed"` would win over the
-    // BYOK provider choice and the user would silently stay on Vellum.
-    daemonConfigData = {
-      services: { "web-search": { mode: "managed", provider: "brave" } },
-    };
-    hasStoredCredential = true;
-    renderCard();
-
-    fireEvent.click(providerTrigger());
-    selectOption("Brave");
+    expect(screen.queryByText("API Base")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(configPatchCalls.length).toBe(1));
+    expect(provisionedKeys).toHaveLength(0);
     expect(configPatchCalls[0]!.body).toMatchObject({
-      services: {
-        "web-search": { provider: "brave", mode: "your-own" },
-      },
+      services: { "web-search": { provider: "ddgs", mode: "your-own" } },
     });
+  });
+
+  test("the provider Hermes reports is the one shown", () => {
+    daemonConfigData = {
+      services: { "web-search": { provider: "exa", mode: "your-own" } },
+    };
+    renderCard();
+
+    expect(providerTrigger().textContent).toContain("Exa");
   });
 });

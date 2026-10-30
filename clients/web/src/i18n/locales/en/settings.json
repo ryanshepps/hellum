@@ -2339,8 +2339,7 @@
     "providerLabel": "Provider",
     "savedToast": "Web search settings saved.",
     "subtitle": "Configure how your assistant should search the web",
-    "title": "Web Search",
-    "vellumNote": "Search runs through your Vellum account."
+    "title": "Web Search"
   },
   "yourOwnOauthTab": {
     "accountFallback": "{name} Account",

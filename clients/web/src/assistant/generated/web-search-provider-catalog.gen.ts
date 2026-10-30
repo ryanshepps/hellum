@@ -1,83 +1,71 @@
 // Static catalog of web search providers available in the AI settings page.
-// Originally generated in the platform repo; maintained as a static file here.
+// Mirrors the web_search backends Hermes ships (tools/web_tools.py); the
+// bridge maps each id onto Hermes' web.search_backend.
 
 /** Ordered list of provider ids — drives the picker option order. */
 export const WEB_SEARCH_PROVIDER_IDS: readonly string[] = [
-  "vellum",
   "inference-provider-native",
-  "perplexity",
-  "brave",
+  "exa",
+  "parallel",
   "tavily",
+  "perplexity",
   "firecrawl",
   "keenable",
-  "fastcrw",
+  "brave",
   "searxng",
-  "tinyfish",
-  "exa",
-  "serply",
+  "ddgs",
 ];
 
 /** Short display name used in picker UI. */
 export const WEB_SEARCH_PROVIDER_DISPLAY_NAMES: Readonly<
   Record<string, string>
 > = {
-  vellum: "Vellum",
-  "inference-provider-native": "Provider Native",
-  perplexity: "Perplexity",
-  brave: "Brave",
+  "inference-provider-native": "Automatic",
+  exa: "Exa",
+  parallel: "Parallel",
   tavily: "Tavily",
+  perplexity: "Perplexity",
   firecrawl: "Firecrawl",
   keenable: "Keenable",
-  fastcrw: "fastCRW",
+  brave: "Brave",
   searxng: "SearXNG",
-  tinyfish: "TinyFish",
-  exa: "Exa",
-  serply: "Serply",
+  ddgs: "DuckDuckGo",
 };
 
 /** Placeholder hint shown in the API-key input. BYOK providers only. */
 export const WEB_SEARCH_PROVIDER_KEY_PLACEHOLDERS: Readonly<
   Record<string, string>
 > = {
-  perplexity: "pplx-...",
-  brave: "BSA...",
+  exa: "Exa API key...",
+  parallel: "Parallel API key...",
   tavily: "tvly-...",
+  perplexity: "pplx-...",
   firecrawl: "fc-...",
   keenable: "keen_... (optional)",
-  fastcrw: "crw_live_...",
-  searxng: "token (optional)",
-  tinyfish: "TinyFish API key...",
-  exa: "Exa API key...",
-  serply: "Serply API key...",
+  brave: "BSA...",
 };
 
 /** localStorage key used to persist each BYOK provider's user-supplied key. */
 export const WEB_SEARCH_PROVIDER_KEY_STORAGE: Readonly<Record<string, string>> =
   {
-    perplexity: "vellum:ai:perplexityKey",
-    brave: "vellum:ai:braveKey",
+    exa: "vellum:ai:exaKey",
+    parallel: "vellum:ai:parallelKey",
     tavily: "vellum:ai:tavilyKey",
+    perplexity: "vellum:ai:perplexityKey",
     firecrawl: "vellum:ai:firecrawlKey",
     keenable: "vellum:ai:keenableKey",
-    fastcrw: "vellum:ai:fastcrwKey",
-    searxng: "vellum:ai:searxngKey",
-    tinyfish: "vellum:ai:tinyfishKey",
-    exa: "vellum:ai:exaKey",
-    serply: "vellum:ai:serplyKey",
+    brave: "vellum:ai:braveKey",
   };
 
 /** Provider ids that require a user-supplied API key. */
 export const WEB_SEARCH_BYOK_PROVIDER_IDS: ReadonlySet<string> = new Set([
-  "perplexity",
-  "brave",
+  "exa",
+  "parallel",
   "tavily",
+  "perplexity",
   "firecrawl",
   "keenable",
-  "fastcrw",
-  "searxng",
-  "tinyfish",
-  "exa",
-  "serply",
+  "brave",
 ]);
 
 /**
@@ -85,19 +73,14 @@ export const WEB_SEARCH_BYOK_PROVIDER_IDS: ReadonlySet<string> = new Set([
  * Save is not gated on a credential for these.
  */
 export const WEB_SEARCH_KEYLESS_BYOK_PROVIDER_IDS: ReadonlySet<string> =
-  new Set(["keenable", "searxng"]);
+  new Set(["keenable"]);
 
 /** Provider ids that show an optional API Base field in settings. */
 export const WEB_SEARCH_API_BASE_PROVIDER_IDS: ReadonlySet<string> = new Set([
-  "fastcrw",
   "searxng",
-  "tinyfish",
 ]);
 
 /** Cloud default API origin when API Base is left empty. */
 export const WEB_SEARCH_PROVIDER_DEFAULT_API_BASE: Readonly<
   Record<string, string>
-> = {
-  fastcrw: "https://api.fastcrw.com",
-  tinyfish: "https://api.search.tinyfish.ai",
-};
+> = {};
