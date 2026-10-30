@@ -847,24 +847,6 @@
     "reactivate": "Reactivar",
     "title": "Tu plan Pro terminará el {date}."
   },
-  "imageGenerationCard": {
-    "activeModelLabel": "Modelo activo",
-    "apiKeyLabel": "Clave de API",
-    "configUpdateFailedToast": "No se pudo actualizar la configuración del asistente. Inténtalo de nuevo.",
-    "geminiApiKeyPlaceholder": "Introduce tu clave de API de Gemini",
-    "localPreferencesFailedToast": "Guardado, pero no se pudieron escribir las preferencias locales.",
-    "modelAriaLabel": "Modelo de generación de imágenes",
-    "modelUpdateFailedToast": "No se pudo actualizar el modelo de generación de imágenes. Inténtalo de nuevo.",
-    "openaiApiKeyPlaceholder": "Introduce tu clave de API de OpenAI",
-    "openrouterApiKeyPlaceholder": "Introduce tu clave de API de OpenRouter",
-    "openrouterModelPlaceholder": "google/gemini-3.1-flash-image-preview",
-    "providerAriaLabel": "Proveedor de generación de imágenes",
-    "providerLabel": "Proveedor",
-    "savedToast": "Configuración de generación de imágenes guardada.",
-    "subtitle": "Configura qué modelo usa tu asistente para generar imágenes",
-    "title": "Generación de imágenes",
-    "vellumNote": "La generación de imágenes se ejecuta a través de tu cuenta de Vellum."
-  },
   "integrationRow": {
     "configureLabel": "Configurar {name}",
     "connect": "Conectar",

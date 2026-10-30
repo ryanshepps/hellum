@@ -25,7 +25,7 @@ import { toast } from "@vellumai/design-library/components/toast";
 /**
  * Hook for provisioning provider API keys on the daemon.
  *
- * Used by web-search-card and image-generation-card to store BYOK
+ * Used by web-search-card and web-fetch-card to store BYOK
  * credentials. Returns a stable callback.
  */
 export function useProvisionProviderKey() {

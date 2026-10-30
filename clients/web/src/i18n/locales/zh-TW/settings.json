@@ -847,24 +847,6 @@
     "reactivate": "重新啟用",
     "title": "您的專業版方案將於 {date} 結束。"
   },
-  "imageGenerationCard": {
-    "activeModelLabel": "作用中的模型",
-    "apiKeyLabel": "API 金鑰",
-    "configUpdateFailedToast": "更新助理設定失敗。請再試一次。",
-    "geminiApiKeyPlaceholder": "輸入您的 Gemini API 金鑰",
-    "localPreferencesFailedToast": "已儲存，但無法寫入本機偏好設定。",
-    "modelAriaLabel": "圖片生成模型",
-    "modelUpdateFailedToast": "更新圖片生成模型失敗。請再試一次。",
-    "openaiApiKeyPlaceholder": "輸入您的 OpenAI API 金鑰",
-    "openrouterApiKeyPlaceholder": "輸入您的 OpenRouter API 金鑰",
-    "openrouterModelPlaceholder": "google/gemini-3.1-flash-image-preview",
-    "providerAriaLabel": "圖片生成供應商",
-    "providerLabel": "供應商",
-    "savedToast": "圖片生成設定已儲存。",
-    "subtitle": "設定您的助理用於生成圖片的模型",
-    "title": "圖片生成",
-    "vellumNote": "圖片生成透過您的 Vellum 帳號執行。"
-  },
   "integrationRow": {
     "configureLabel": "設定 {name}",
     "connect": "連線",

@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 
 import { useActiveAssistantId } from "@/assistant/use-active-assistant-id";
 import { DetailDrawer, MobileDetailOverlay } from "@/components/detail-drawer";
-import { ImageGenerationCard } from "@/domains/settings/ai/image-generation-card";
 import {
   LanguageModelCard,
   type LanguageModelPanelState,
@@ -48,7 +47,6 @@ export function AiPage() {
       />
       <WebSearchCard />
       <WebFetchCard />
-      <ImageGenerationCard />
       {/* Speech providers are BYO provider config like every other card here.
           They used to sit behind a "Services" tab on the Voice page, where the
           voice picker got buried under an API-key form. */}
