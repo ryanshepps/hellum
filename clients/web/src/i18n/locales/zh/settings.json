@@ -495,31 +495,14 @@
     "viewPlans": "查看套餐"
   },
   "communityPage": {
-    "communityHubDescription": "社区分享的展示、指南和项目。",
-    "communityHubTitle": "社区中心",
-    "discordBenefitAnswers": "从社区更快地获得答案",
-    "discordBenefitFeedback": "分享反馈并请求功能",
-    "discordBenefitTeam": "直接与团队交流",
-    "discordLabel": "Discord",
-    "discordSubtitle": "与团队交流，分享反馈，请求功能，并更快地获得答案。",
-    "discordTitle": "加入我们的社区",
-    "followOnXDescription": "产品更新、发布和幕后花絮。",
-    "followOnXTitle": "在 X 上关注",
-    "heroDescription": "Vellum 是一个开放构建的项目，拥有不断壮大的开发者、设计师和修补匠社区。以下是参与方式。",
     "heroTag": "社区",
     "heroTitle": "与我们一起开放构建。",
-    "joinDiscord": "加入 Discord",
-    "moreFromVellum": "更多 Vellum 内容",
     "openSourceBenefitContribute": "贡献修复和新功能",
     "openSourceBenefitIssues": "提出问题并报告错误",
     "openSourceBenefitStar": "为仓库加星以关注更新",
     "openSourceLabel": "开源",
     "openSourceSubtitle": "阅读源代码，为仓库加星，并在 GitHub 上贡献修复和功能。",
-    "openSourceTitle": "Vellum 是开源的",
-    "starOnGitHub": "在 GitHub 上加星",
-    "viewSource": "查看源代码",
-    "youtubeChannelDescription": "演练、教程和产品深度解析。",
-    "youtubeChannelTitle": "YouTube 频道"
+    "starOnGitHub": "在 GitHub 上加星"
   },
   "completeState": {
     "assistantFallbackName": "您的助手",

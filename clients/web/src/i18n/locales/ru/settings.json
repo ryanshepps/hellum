@@ -481,31 +481,14 @@
     "viewPlans": "Смотреть планы"
   },
   "communityPage": {
-    "communityHubDescription": "Витрины, гайды и проекты от сообщества.",
-    "communityHubTitle": "Центр сообщества",
-    "discordBenefitAnswers": "Быстрее получай ответы от сообщества",
-    "discordBenefitFeedback": "Отзывы и предложения функций",
-    "discordBenefitTeam": "Прямое общение с командой",
-    "discordLabel": "Discord",
-    "discordSubtitle": "Общение с командой, отзывы, предложения функций и быстрые ответы.",
-    "discordTitle": "Присоединяйся к сообществу",
-    "followOnXDescription": "Обновления продукта, релизы и закулисье.",
-    "followOnXTitle": "Подписаться в X",
-    "heroDescription": "Vellum разрабатывают вместе с растущим сообществом разработчиков, дизайнеров и экспериментаторов. Ты тоже можешь присоединиться.",
     "heroTag": "Сообщество",
     "heroTitle": "Помоги улучшить ассистента",
-    "joinDiscord": "Присоединиться к Discord",
-    "moreFromVellum": "Ещё от Vellum",
     "openSourceBenefitContribute": "Исправления и новые функции",
     "openSourceBenefitIssues": "Issues и сообщения об ошибках",
     "openSourceBenefitStar": "Звезда репозиторию",
     "openSourceLabel": "Open Source",
     "openSourceSubtitle": "Исходный код Vellum.",
-    "openSourceTitle": "Репозиторий Vellum",
-    "starOnGitHub": "Звезда на GitHub",
-    "viewSource": "Смотреть исходники",
-    "youtubeChannelDescription": "Обзоры, туториалы и разборы продукта.",
-    "youtubeChannelTitle": "Канал YouTube"
+    "starOnGitHub": "Звезда на GitHub"
   },
   "completeState": {
     "assistantFallbackName": "твоему ассистенту",

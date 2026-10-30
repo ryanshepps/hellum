@@ -495,31 +495,14 @@
     "viewPlans": "查看方案"
   },
   "communityPage": {
-    "communityHubDescription": "社群分享的展示、指南和專案。",
-    "communityHubTitle": "社群中心",
-    "discordBenefitAnswers": "從社群更快地獲得解答",
-    "discordBenefitFeedback": "分享回饋並提出功能請求",
-    "discordBenefitTeam": "直接與團隊交流",
-    "discordLabel": "Discord",
-    "discordSubtitle": "與團隊交流、分享回饋、提出功能請求，並更快地獲得解答。",
-    "discordTitle": "加入我們的社群",
-    "followOnXDescription": "產品更新、發布和幕後花絮。",
-    "followOnXTitle": "在 X 上追蹤",
-    "heroDescription": "Vellum 是一個開放建構的專案，擁有不斷壯大的開發人員、設計師和修補者社群。以下是參與方式。",
     "heroTag": "社群",
     "heroTitle": "與我們一起開放建構。",
-    "joinDiscord": "加入 Discord",
-    "moreFromVellum": "更多 Vellum 內容",
     "openSourceBenefitContribute": "貢獻修復和新功能",
     "openSourceBenefitIssues": "提出問題並回報錯誤",
     "openSourceBenefitStar": "為儲存庫加星以追蹤更新",
     "openSourceLabel": "開放原始碼",
     "openSourceSubtitle": "閱讀原始碼、為儲存庫加星，並在 GitHub 上貢獻修復和功能。",
-    "openSourceTitle": "Vellum 是開放原始碼專案",
-    "starOnGitHub": "在 GitHub 上加星",
-    "viewSource": "檢視原始碼",
-    "youtubeChannelDescription": "逐步解說、教學課程和產品深入探討。",
-    "youtubeChannelTitle": "YouTube 頻道"
+    "starOnGitHub": "在 GitHub 上加星"
   },
   "completeState": {
     "assistantFallbackName": "您的助理",

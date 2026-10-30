@@ -3,24 +3,19 @@ import {
   Bug,
   ExternalLink,
   GitPullRequest,
-  Globe,
-  Heart,
   Play,
-  Sparkles,
   Star,
-  Users,
 } from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 
 import { ExternalAnchor } from "@/components/external-anchor";
-import { DiscordLogo } from "@/components/icons/discord-logo";
 import { GitHubLogo } from "@/components/icons/github-logo";
-import { XLogo } from "@/components/icons/x-logo";
-import { YouTubeLogo } from "@/components/icons/youtube-logo";
-import { joinDiscord } from "@/hooks/use-discord-nudge";
-import { GITHUB_REPO_URL, useGitHubNudgeState } from "@/hooks/use-github-nudge";
 import { useTranslation } from "@/i18n";
-import { VELLUM_COMMUNITY_URL } from "@/utils/external-urls";
+import {
+  HELLUM_REPO_URL,
+  HERMES_REPO_URL,
+  VELLUM_REPO_URL,
+} from "@/utils/external-urls";
 import { Button } from "@vellumai/design-library/components/button";
 import { Card } from "@vellumai/design-library/components/card";
 import { Tag } from "@vellumai/design-library/components/tag";
@@ -215,99 +210,64 @@ function ResourceCard({
 
 export function CommunityPage() {
   const { t } = useTranslation("settings");
-  const { handleStar } = useGitHubNudgeState();
 
   return (
     <div className="space-y-6">
       <HeroBanner t={t} />
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <FeatureCard
-          accentColor="var(--content-emphasised)"
-          iconColor="var(--surface-base)"
-          label={t("communityPage.openSourceLabel")}
-          icon={<GitHubLogo size={20} />}
-          title={t("communityPage.openSourceTitle")}
-          subtitle={t("communityPage.openSourceSubtitle")}
-          benefits={[
-            {
-              icon: Star,
-              text: t("communityPage.openSourceBenefitStar"),
-            },
-            {
-              icon: Bug,
-              text: t("communityPage.openSourceBenefitIssues"),
-            },
-            {
-              icon: GitPullRequest,
-              text: t("communityPage.openSourceBenefitContribute"),
-            },
-          ]}
-          primaryAction={{
-            label: t("communityPage.starOnGitHub"),
-            icon: <Star size={16} />,
-            onClick: handleStar,
-          }}
-          secondaryAction={{
-            label: t("communityPage.viewSource"),
-            href: GITHUB_REPO_URL,
-          }}
-        />
-
-        <FeatureCard
-          accentColor="#5865F2"
-          label={t("communityPage.discordLabel")}
-          icon={<DiscordLogo size={20} />}
-          title={t("communityPage.discordTitle")}
-          subtitle={t("communityPage.discordSubtitle")}
-          benefits={[
-            {
-              icon: Heart,
-              text: t("communityPage.discordBenefitTeam"),
-            },
-            {
-              icon: Sparkles,
-              text: t("communityPage.discordBenefitFeedback"),
-            },
-            {
-              icon: Users,
-              text: t("communityPage.discordBenefitAnswers"),
-            },
-          ]}
-          primaryAction={{
-            label: t("communityPage.joinDiscord"),
-            icon: <DiscordLogo size={16} style={{ color: "currentColor" }} />,
-            onClick: joinDiscord,
-          }}
-        />
-      </div>
+      <FeatureCard
+        accentColor="var(--content-emphasised)"
+        iconColor="var(--surface-base)"
+        label={t("communityPage.openSourceLabel")}
+        icon={<GitHubLogo size={20} />}
+        title={t("communityPage.openSourceTitle")}
+        subtitle={t("communityPage.openSourceSubtitle")}
+        benefits={[
+          {
+            icon: Star,
+            text: t("communityPage.openSourceBenefitStar"),
+          },
+          {
+            icon: Bug,
+            text: t("communityPage.openSourceBenefitIssues"),
+          },
+          {
+            icon: GitPullRequest,
+            text: t("communityPage.openSourceBenefitContribute"),
+          },
+        ]}
+        primaryAction={{
+          label: t("communityPage.starOnGitHub"),
+          icon: <Star size={16} />,
+          onClick: () =>
+            window.open(HELLUM_REPO_URL, "_blank", "noopener,noreferrer"),
+        }}
+        secondaryAction={{
+          label: t("communityPage.openIssue"),
+          href: `${HELLUM_REPO_URL}/issues`,
+        }}
+      />
 
       <div className="flex flex-col gap-4">
         <h2 className="text-label-medium-default uppercase tracking-wider text-[color:var(--content-tertiary)]">
-          {t("communityPage.moreFromVellum")}
+          {t("communityPage.builtOn")}
         </h2>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <ResourceCard
-            icon={<Globe size={20} />}
-            iconBg="#22c55e"
-            title={t("communityPage.communityHubTitle")}
-            description={t("communityPage.communityHubDescription")}
-            href={VELLUM_COMMUNITY_URL}
-          />
-          <ResourceCard
-            icon={<XLogo size={20} />}
+            icon={<GitHubLogo size={20} />}
             iconBg="var(--content-default)"
             iconColor="var(--surface-base)"
-            title={t("communityPage.followOnXTitle")}
-            description={t("communityPage.followOnXDescription")}
-            href="https://x.com/vellum_ai"
+            title={t("communityPage.vellumTitle")}
+            description={t("communityPage.vellumDescription")}
+            href={VELLUM_REPO_URL}
           />
           <ResourceCard
-            icon={<YouTubeLogo size={20} />}
-            iconBg="#ef4444"
-            title={t("communityPage.youtubeChannelTitle")}
-            description={t("communityPage.youtubeChannelDescription")}
-            href="https://www.youtube.com/@Vellum_AI"
+            icon={<GitHubLogo size={20} />}
+            iconBg="var(--content-default)"
+            iconColor="var(--surface-base)"
+            title={t("communityPage.hermesTitle")}
+            description={t("communityPage.hermesDescription")}
+            href={HERMES_REPO_URL}
           />
         </div>
       </div>

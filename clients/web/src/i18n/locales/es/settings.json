@@ -495,31 +495,14 @@
     "viewPlans": "Ver planes"
   },
   "communityPage": {
-    "communityHubDescription": "Muestras, guías y proyectos compartidos por la comunidad.",
-    "communityHubTitle": "Centro de la comunidad",
-    "discordBenefitAnswers": "Obtén respuestas más rápido de la comunidad",
-    "discordBenefitFeedback": "Comparte comentarios y solicita funciones",
-    "discordBenefitTeam": "Habla directamente con el equipo",
-    "discordLabel": "Discord",
-    "discordSubtitle": "Habla con el equipo, comparte comentarios, solicita funciones y obtén respuestas más rápido.",
-    "discordTitle": "Únete a nuestra comunidad",
-    "followOnXDescription": "Actualizaciones del producto, lanzamientos y detrás de escena.",
-    "followOnXTitle": "Seguir en X",
-    "heroDescription": "Vellum se construye en abierto con una comunidad creciente de desarrolladores, diseñadores y experimentadores. Así puedes participar.",
     "heroTag": "Comunidad",
     "heroTitle": "Construye con nosotros, en abierto.",
-    "joinDiscord": "Unirse a Discord",
-    "moreFromVellum": "Más de Vellum",
     "openSourceBenefitContribute": "Contribuye con correcciones y nuevas funciones",
     "openSourceBenefitIssues": "Abre incidencias y reporta errores",
     "openSourceBenefitStar": "Marca el repositorio para seguir las actualizaciones",
     "openSourceLabel": "Código abierto",
     "openSourceSubtitle": "Lee el código fuente, marca el repositorio y contribuye con correcciones y funciones en GitHub.",
-    "openSourceTitle": "Vellum es de código abierto",
-    "starOnGitHub": "Marcar en GitHub",
-    "viewSource": "Ver código fuente",
-    "youtubeChannelDescription": "Recorridos, tutoriales y análisis profundos del producto.",
-    "youtubeChannelTitle": "Canal de YouTube"
+    "starOnGitHub": "Marcar en GitHub"
   },
   "completeState": {
     "assistantFallbackName": "tu asistente",
