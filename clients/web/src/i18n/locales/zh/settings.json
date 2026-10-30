@@ -1,21 +1,4 @@
 {
-  "accessConsentSetting": {
-    "description": "启用后，Vellum 员工将能够访问您的助手及其数据以进行调试。建议您保持此功能关闭，仅在需要 Vellum 支持团队协助调查问题时暂时开启。",
-    "expireAgain": "24 小时后到期",
-    "expiresAt": "员工访问将于{when}结束。",
-    "extend": "延长 24 小时",
-    "keepOn": "保持开启，直到我关闭",
-    "loadError": "未能加载同意设置。",
-    "loginNotice": "登录 Vellum 平台以管理管理员数据访问权限。",
-    "staysOn": "员工访问将保持开启，直到您关闭为止。",
-    "title": "允许员工访问",
-    "toastDisabled": "管理员数据访问已禁用。",
-    "toastEnabled": "管理员数据访问已启用。",
-    "toastExpiring": "管理员数据访问将在 24 小时后结束。",
-    "toastExtended": "管理员数据访问已延长。",
-    "toastKeptOn": "管理员数据访问将保持开启，直到您关闭为止。",
-    "toastUpdateFailed": "未能更新日志访问同意。"
-  },
   "adjustPlanModal": {
     "alreadyOnPro": "您已是专业版用户。",
     "back": "返回",
@@ -1336,23 +1319,6 @@
     "unavailableTitle": "预览版渠道不可用",
     "unknownDate": "未知"
   },
-  "privacyPage": {
-    "llmLogRetentionDescription": "在此设备上保留 LLM 请求和响应日志的时长。这些日志记录发送给模型提供商的提示词和完成内容，用于调试。较短的保留期可提高隐私性；较长的保留期有助于排查问题。",
-    "llmLogRetentionLabel": "LLM 请求日志保留期",
-    "retentionDontRetain": "不保留",
-    "retentionKeepForever": "永久保留",
-    "retentionNinetyDays": "90 天",
-    "retentionOneDay": "1 天",
-    "retentionOneHour": "1 小时",
-    "retentionSevenDays": "7 天",
-    "retentionThirtyDays": "30 天",
-    "shareAnalyticsHelper": "发送汇总的产品使用数据",
-    "shareAnalyticsLabel": "共享分析数据",
-    "shareDiagnosticsHelper": "发送崩溃报告、对话跟踪和会话回放数据",
-    "shareDiagnosticsLabel": "共享诊断数据",
-    "subtitleWithPolicy": "查看我们收集的数据以及如何在我们的<policyLink>隐私政策</policyLink>中使用这些数据的详细信息。",
-    "title": "隐私"
-  },
   "profileAdvancedParams": {
     "contextWindowLabel": "上下文窗口",
     "defaultValueLabel": "默认 · {value}",
@@ -1905,52 +1871,6 @@
   "timezoneSection": {
     "description": "用于显示时间及安排提醒。",
     "title": "时区"
-  },
-  "trustRuleFormModal": {
-    "cancel": "取消",
-    "closeAriaLabel": "关闭",
-    "defaultDescription": "{tool} - {pattern}",
-    "descriptionLabel": "描述（可选）",
-    "patternFallback": "模式",
-    "patternLabel": "模式",
-    "patternPlaceholder": "例如：git *",
-    "riskHigh": "高",
-    "riskHighDescription": "始终需要明确批准",
-    "riskLevelLabel": "风险级别",
-    "riskLow": "低",
-    "riskLowDescription": "无需提示自动批准",
-    "riskMedium": "中",
-    "riskMediumDescription": "执行前提示",
-    "save": "保存",
-    "saveFailed": "保存信任规则失败。",
-    "saving": "正在保存…",
-    "title": "编辑信任规则",
-    "toolLabel": "工具"
-  },
-  "trustRules": {
-    "description": "管理按工具划分的规则，这些规则控制哪些操作自动批准，哪些需要您的明确许可。",
-    "manage": "管理",
-    "title": "信任规则"
-  },
-  "trustRulesModal": {
-    "cancel": "取消",
-    "defaultTag": "默认",
-    "delete": "删除",
-    "deleteErrorFallback": "删除信任规则失败。",
-    "deleteMessage": "是否移除 {tool} 的 {risk} 风险规则（匹配“{pattern}”）？",
-    "deleteRuleAria": "删除 {tool} 规则",
-    "deleteTitle": "删除信任规则？",
-    "done": "完成",
-    "editRuleAria": "编辑 {tool} 规则",
-    "empty": "暂无信任规则。当您对权限提示中的操作进行分类时，将创建规则。",
-    "loadErrorFallback": "加载信任规则失败。",
-    "loading": "正在加载…",
-    "modifiedTag": "已修改",
-    "riskHigh": "高",
-    "riskLow": "低",
-    "riskMedium": "中",
-    "showAllDefaults": "显示所有默认值",
-    "title": "信任规则"
   },
   "tunnelStatusRow": {
     "checkedAt": "{when} 已检查",

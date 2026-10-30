@@ -44,7 +44,6 @@ const DEVICE_SETTINGS = {
   // saved preference) so consent-resolution paths can write it independently.
   diagnosticsReporting: { key: "device:diagnostics_reporting" },
   biometricEnabled: { key: "device:biometric_enabled" },
-  llmLogRetention: { key: "device:llm_log_retention" },
   timezone: { key: "device:timezone" },
   // UI language, as a tag from `SUPPORTED_LOCALES`. Absent means "follow the
   // host's preferred languages"; a value here is an explicit user override and

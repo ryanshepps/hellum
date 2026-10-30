@@ -8,10 +8,18 @@ import { getGlobalThresholds, setGlobalThresholds } from "@/lib/threshold-api";
 import {
   THRESHOLD_PRESETS,
   presetFromThreshold,
+  type ThresholdPreset,
 } from "@/utils/threshold-presets";
 import { Card } from "@vellumai/design-library/components/card";
 import { Disclosure } from "@vellumai/design-library/components/disclosure";
 import { Select } from "@vellumai/design-library/components/select";
+
+const CONVERSATION_PRESETS = THRESHOLD_PRESETS.filter(
+  (p) => p.id !== "conservative",
+);
+const UNATTENDED_PRESETS = THRESHOLD_PRESETS.filter(
+  (p) => p.id === "strict" || p.id === "fullAccess",
+);
 
 function Divider() {
   return (
@@ -23,15 +31,32 @@ export function RiskToleranceSettings() {
   const { t } = useTranslation("settings");
   const assistantId = useActiveAssistantId();
 
-  const presetOptions = useMemo(
-    () =>
-      THRESHOLD_PRESETS.map((p) => ({
-        value: p.id,
-        label: t(p.labelKey, p.label),
-        icon: <p.icon className="h-3.5 w-3.5" />,
-      })),
+  const toOption = useCallback(
+    (p: ThresholdPreset) => ({
+      value: p.id,
+      label: t(p.labelKey, p.label),
+      icon: <p.icon className="h-3.5 w-3.5" />,
+    }),
     [t],
   );
+  const conversationOptions = useMemo(
+    () => CONVERSATION_PRESETS.map(toOption),
+    [toOption],
+  );
+  const unattendedOptions = useMemo(
+    () => UNATTENDED_PRESETS.map(toOption),
+    [toOption],
+  );
+  const presetDescription = (id: string): string => {
+    switch (id) {
+      case "strict":
+        return t("riskToleranceSettings.strictDescription");
+      case "relaxed":
+        return t("riskToleranceSettings.relaxedDescription");
+      default:
+        return t("riskToleranceSettings.fullAccessDescription");
+    }
+  };
 
   const queryClient = useQueryClient();
   const { data: thresholds, isError: loadError } = useQuery({
@@ -43,7 +68,7 @@ export function RiskToleranceSettings() {
   const [interactivePresetId, setInteractivePresetId] =
     useState<string>("relaxed");
   const [autonomousPresetId, setAutonomousPresetId] =
-    useState<string>("conservative");
+    useState<string>("strict");
   const [headlessPresetId, setHeadlessPresetId] = useState<string>("strict");
 
   const hasUserInteracted = useRef(false);
@@ -181,13 +206,13 @@ export function RiskToleranceSettings() {
             <Select
               value={interactivePresetId}
               onChange={handleInteractiveChange}
-              options={presetOptions}
+              options={conversationOptions}
               disabled={dropdownsDisabled}
             />
           </div>
           {interactivePreset && (
             <p className="mt-2 text-body-small-default text-[var(--content-tertiary)]">
-              {t(interactivePreset.descriptionKey, interactivePreset.description)}
+              {presetDescription(interactivePreset.id)}
             </p>
           )}
         </div>
@@ -211,13 +236,13 @@ export function RiskToleranceSettings() {
                 <Select
                   value={autonomousPresetId}
                   onChange={handleAutonomousChange}
-                  options={presetOptions}
+                  options={unattendedOptions}
                   disabled={dropdownsDisabled}
                 />
               </div>
               {autonomousPreset && (
                 <p className="mt-2 text-body-small-default text-[var(--content-tertiary)]">
-                  {t(autonomousPreset.descriptionKey, autonomousPreset.description)}
+                  {presetDescription(autonomousPreset.id)}
                 </p>
               )}
             </div>
@@ -235,13 +260,13 @@ export function RiskToleranceSettings() {
                 <Select
                   value={headlessPresetId}
                   onChange={handleHeadlessChange}
-                  options={presetOptions}
+                  options={unattendedOptions}
                   disabled={dropdownsDisabled}
                 />
               </div>
               {headlessPreset && (
                 <p className="mt-2 text-body-small-default text-[var(--content-tertiary)]">
-                  {t(headlessPreset.descriptionKey, headlessPreset.description)}
+                  {presetDescription(headlessPreset.id)}
                 </p>
               )}
             </div>
