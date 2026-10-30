@@ -18,6 +18,7 @@ from gateway.platforms.base import BasePlatformAdapter, SendResult
 
 DEFAULT_ADMIN_SOCKET = os.path.expanduser("~/.hellum/admin.sock")
 HOME_CHAT_ID = "devices"
+HOME_CHANNEL_NAME = "iPhone push and open Hellum tabs"
 SEND_TIMEOUT_SECONDS = 15.0
 CRON_WRAPPED = re.compile(
     r"\ACronjob Response: (?P<name>.*)\n\(job_id: (?P<job_id>[^)]*)\)\n-+\n\n(?P<body>.*?)"
@@ -98,7 +99,10 @@ async def standalone_send(pconfig, chat_id: str, message: str, *, thread_id=None
 
 def env_enablement() -> Optional[dict]:
     seed = seed_extra_from_env((("HELLUM_ADMIN_SOCKET", "admin_socket", None),), home_env="HELLUM_HOME_CHANNEL", home_default=HOME_CHAT_ID)
-    return seed if os.path.exists(seed.get("admin_socket", DEFAULT_ADMIN_SOCKET)) else None
+    if not os.path.exists(seed.get("admin_socket", DEFAULT_ADMIN_SOCKET)):
+        return None
+    home = {**seed["home_channel"], "name": get_scoped_secret("HELLUM_HOME_CHANNEL_NAME", HOME_CHANNEL_NAME)}
+    return {**seed, "home_channel": home}
 
 
 def register(ctx) -> None:
