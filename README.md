@@ -24,6 +24,7 @@ Not yet supported: attachments, memory, schedules, skills, documents, voice, and
 | Path | What it is |
 | --- | --- |
 | `bridge/` | The Hellum bridge: HTTP API, SSE, pairing, Hermes client, APNs. |
+| `bridge/hermes-plugin/hellum/` | Hermes platform plugin that delivers Hermes messages to Hellum devices. |
 | `clients/web/` | Vellum's web client, in self-hosted mode with the Vellum platform disabled. |
 | `clients/ios/` | Vellum's Capacitor iOS shell, rebranded as Hellum. |
 | `packages/`, `assistant/src/api/` | Vellum packages the web client builds against. |
@@ -66,7 +67,16 @@ bun run bridge/scripts/install-launch-agent.ts
 
 The launch agent is named `<bundle ID>.bridge`, using `HELLUM_BUNDLE_ID` from `clients/ios/App/App/Config/Local.xcconfig` (see [Build the iOS app](#build-the-ios-app-for-testflight)), or `com.example.hellum.bridge` without one. Logs go to `~/.hellum/bridge.log`. To run it in the foreground instead: `cd ~/.hellum && bun run ~/path/to/hellum/bridge/src/main.ts`.
 
-### 5. Expose it to your tailnet
+### 5. Let Hermes deliver to your devices
+
+```sh
+ln -s ~/path/to/hellum/bridge/hermes-plugin/hellum ~/.hermes/plugins/hellum
+hermes plugins enable hellum
+```
+
+This registers Hellum as a Hermes messaging platform. Scheduled jobs with `deliver: hellum` (or `all`), and `send_message` to `hellum`, push to your paired iPhone and open browser tabs through the bridge's admin socket. `deliver: local` saves a job's result without notifying anyone.
+
+### 6. Expose it to your tailnet
 
 ```sh
 tailscale serve --bg --https=4443 http://127.0.0.1:7870

@@ -1,0 +1,15 @@
+name: hellum
+label: Hellum
+kind: platform
+version: 1.0.0
+description: >
+  Delivers Hermes messages and scheduled job results to the user's Hellum
+  devices (iPhone push and open browser tabs) through the Hellum bridge.
+author: Hellum
+optional_env:
+  - name: HELLUM_ADMIN_SOCKET
+    description: "Hellum bridge admin socket (default ~/.hellum/admin.sock)"
+    password: false
+  - name: HELLUM_HOME_CHANNEL
+    description: "Cron home target for deliver=hellum (default: devices)"
+    password: false
