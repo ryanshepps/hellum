@@ -1,21 +1,7 @@
 import { z } from "zod";
 import { errorResponse, readJsonBody } from "../http/json";
 import type { ModelService } from "../models/model-service";
-import { ProfileEntrySchema } from "../translate/inference";
 import type { Route } from "./route-table";
-
-const ConfigPatchSchema = z
-  .object({
-    llm: z
-      .object({
-        profiles: z.record(z.string(), ProfileEntrySchema.nullable()).optional(),
-        profileOrder: z.array(z.string()).optional(),
-        activeProfile: z.string().min(1).optional(),
-      })
-      .passthrough()
-      .optional(),
-  })
-  .passthrough();
 
 const ActiveProfileBodySchema = z.object({ name: z.string().min(1) });
 const ConnectionBodySchema = z.object({ name: z.string().min(1), provider: z.string().min(1) }).passthrough();
@@ -24,24 +10,8 @@ const SecretReadBodySchema = z.object({ type: z.string(), name: z.string().min(1
 
 const MASKED_SECRET = "••••••••";
 
-export function modelRoutes(models: ModelService, baseConfig: object): readonly Route[] {
-  const config = async () => Response.json({ ...baseConfig, llm: await models.llm() }, { headers: { "Cache-Control": "no-store" } });
+export function modelRoutes(models: ModelService): readonly Route[] {
   return [
-    { method: "GET", pattern: "config", handle: config },
-    {
-      method: "PATCH",
-      pattern: "config",
-      handle: async ({ request }) => {
-        const body = await readJsonBody(request, ConfigPatchSchema);
-        if (!body) {
-          return errorResponse(400, "invalid_request", "invalid config patch");
-        }
-        if (body.llm) {
-          await models.patchLlm(body.llm);
-        }
-        return config();
-      },
-    },
     { method: "GET", pattern: "config/llm/call-sites", handle: () => Response.json({ domains: [], callSites: [] }) },
     {
       method: "PUT",

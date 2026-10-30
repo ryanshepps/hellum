@@ -10,7 +10,8 @@ import { pushRoutes } from "./api/push-routes";
 import { scheduleRoutes } from "./api/schedule-routes";
 import { skillRoutes } from "./api/skill-routes";
 import { voiceRoutes } from "./api/voice-routes";
-import { DEFAULT_CONFIG, systemRoutes } from "./api/system-routes";
+import { systemRoutes } from "./api/system-routes";
+import { settingsRoutes } from "./api/settings-routes";
 import { createAuthRoutes } from "./auth/auth-routes";
 import { createFileAccessStore } from "./auth/access-store";
 import { AuthService } from "./auth/auth-service";
@@ -37,6 +38,9 @@ import { PlatformPush } from "./notifications/platform-push";
 import { startReplyNotifications } from "./notifications/reply-producer";
 import { PushTokenRegistry } from "./push/push-tokens";
 import { ScheduleDescriptionsSchema, ScheduleService } from "./schedules/schedule-service";
+import { HermesSettings } from "./settings/hermes-settings";
+import { SETTINGS_SECTIONS } from "./settings/sections";
+import { SettingsService } from "./settings/settings-service";
 import { SkillService } from "./skills/skill-service";
 import { VoiceService } from "./voice/voice-service";
 import { buildRemoteGatewayConfig } from "./spa/index-html";
@@ -89,20 +93,19 @@ export async function startBridge(config: BridgeConfig): Promise<BridgeServer> {
   });
   const spa = createSpaHandler(config.webDistDir, buildRemoteGatewayConfig(config.assistantName, config.assistantId));
   const authRoutes = createAuthRoutes(auth, config.assistantId);
+  const models = new ModelService(
+    config.hermesHelpers,
+    privateJsonFile(join(config.stateDir, "llm-profiles.json"), ProfileStoreSchema, EMPTY_PROFILE_STORE),
+    () => conversations.releaseIdleSessions(),
+    () => conversations.markCredentialsChanged(),
+  );
   const assistantApi = createAssistantApi(new Set([SELF_ASSISTANT_ID, config.assistantId, identity.platformAssistantId]), [
     ...systemRoutes(config.assistantName),
     ...pushRoutes(pushTokens, identity.platformAssistantId),
     ...attachmentRoutes(attachments),
     ...memoryRoutes(new MemoryService(config.hermesHelpers)),
-    ...modelRoutes(
-      new ModelService(
-        config.hermesHelpers,
-        privateJsonFile(join(config.stateDir, "llm-profiles.json"), ProfileStoreSchema, EMPTY_PROFILE_STORE),
-        () => conversations.releaseIdleSessions(),
-        () => conversations.markCredentialsChanged(),
-      ),
-      DEFAULT_CONFIG,
-    ),
+    ...modelRoutes(models),
+    ...settingsRoutes(models, new SettingsService(new HermesSettings(config.hermesHelpers, () => conversations.markCredentialsChanged()), SETTINGS_SECTIONS)),
     ...scheduleRoutes(
       new ScheduleService(
         config.hermesHelpers,

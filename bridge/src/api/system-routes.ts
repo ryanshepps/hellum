@@ -2,12 +2,6 @@ import type { Route } from "./route-table";
 
 const VERSION = "hellum-0.1.0";
 
-export const DEFAULT_CONFIG = {
-  conversations: { autoArchive: { enabled: false, afterDays: 30 } },
-  notifications: { newMessageEnabled: true, allAlertsEnabled: false },
-  memory: { enabled: true },
-} as const;
-
 const DEFAULT_SOUNDS = { globalEnabled: false, volume: 0.5, events: {} } as const;
 
 const DEFAULT_THRESHOLDS = { interactive: "medium", autonomous: "low", headless: "low" } as const;
