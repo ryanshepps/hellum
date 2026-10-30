@@ -7,13 +7,12 @@ import { Input } from "@vellumai/design-library/components/input";
 import { Modal } from "@vellumai/design-library/components/modal";
 
 type TransportType = "stdio" | "sse" | "streamable-http";
-type AuthType = "none" | "bearer" | "api-key" | "oauth";
+type AuthType = "none" | "bearer" | "api-key";
 
 type SettingsTranslate = ReturnType<typeof useTranslation<"settings">>["t"];
 
 const AUTH_OPTION_KEYS = [
   { value: "none", labelKey: "mcpAddServerModal.authNone" },
-  { value: "oauth", labelKey: "mcpAddServerModal.authOAuth" },
   { value: "bearer", labelKey: "mcpAddServerModal.authBearer" },
   { value: "api-key", labelKey: "mcpAddServerModal.authApiKey" },
 ] as const satisfies ReadonlyArray<{
@@ -142,8 +141,6 @@ export function McpAddServerModal({
         apiKeyValue.trim()
       ) {
         config.headers = { [apiKeyHeader.trim()]: apiKeyValue.trim() };
-      } else if (authType === "oauth") {
-        config.autoAuth = true;
       }
     }
 
@@ -298,12 +295,6 @@ export function McpAddServerModal({
                     ))}
                   </select>
                 </div>
-
-                {authType === "oauth" ? (
-                  <p className="rounded-md border border-[var(--border-element)] bg-[var(--surface-base)] px-3 py-2 text-body-small-lighter text-[var(--content-tertiary)]">
-                    {t("mcpAddServerModal.oauthHint")}
-                  </p>
-                ) : null}
 
                 {authType === "bearer" ? (
                   <div className="space-y-1.5">
