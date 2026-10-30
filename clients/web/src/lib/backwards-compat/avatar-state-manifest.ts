@@ -22,14 +22,18 @@
  * `useSupportsAvatarStateManifest` hook so the avatar query re-runs through
  * the correct path the moment the assistant version resolves.
  */
-import {
-  assistantSupports,
-  useAssistantSupports,
-  versionSupports,
-  whenAssistantVersionKnown,
-} from "./utils";
+import { useAssistantIdentityStore } from "@/stores/assistant-identity-store";
+
+import { versionSupports, whenAssistantVersionKnown } from "./utils";
 
 export const MIN_VERSION = "0.8.7";
+
+/** Hellum's bridge serves the manifest routes under a version that isn't semver. */
+const HELLUM_VERSION_PREFIX = "hellum-";
+
+function isHellum(version: string | null | undefined): boolean {
+  return version?.startsWith(HELLUM_VERSION_PREFIX) ?? false;
+}
 
 /**
  * Per-assistant variant of {@link supportsAvatarStateManifest} for list
@@ -44,7 +48,7 @@ export const MIN_VERSION = "0.8.7";
 export function versionSupportsAvatarStateManifest(
   version: string | null | undefined,
 ): boolean {
-  return versionSupports(version, MIN_VERSION);
+  return isHellum(version) || versionSupports(version, MIN_VERSION);
 }
 
 /**
@@ -57,7 +61,9 @@ export function versionSupportsAvatarStateManifest(
  * must keep the legacy workspace-file path alive on the `false` branch.
  */
 export function supportsAvatarStateManifest(): boolean {
-  return assistantSupports(MIN_VERSION);
+  return versionSupportsAvatarStateManifest(
+    useAssistantIdentityStore.getState().version,
+  );
 }
 
 /**
@@ -66,7 +72,9 @@ export function supportsAvatarStateManifest(): boolean {
  * assistant's version crosses `MIN_VERSION`.
  */
 export function useSupportsAvatarStateManifest(): boolean {
-  return useAssistantSupports(MIN_VERSION);
+  return versionSupportsAvatarStateManifest(
+    useAssistantIdentityStore.use.version(),
+  );
 }
 
 /**

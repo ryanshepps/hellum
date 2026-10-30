@@ -51,6 +51,11 @@ describe("supportsAvatarStateManifest", () => {
     expect(supportsAvatarStateManifest()).toBe(true);
   });
 
+  test("returns true for Hellum's bridge", () => {
+    setVersion("hellum-0.1.0");
+    expect(supportsAvatarStateManifest()).toBe(true);
+  });
+
   test("returns false for unparseable versions", () => {
     setVersion("garbage");
     expect(supportsAvatarStateManifest()).toBe(false);
