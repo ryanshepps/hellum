@@ -4,8 +4,6 @@ const VERSION = "hellum-0.1.0";
 
 const DEFAULT_SOUNDS = { globalEnabled: false, volume: 0.5, events: {} } as const;
 
-const DEFAULT_THRESHOLDS = { interactive: "medium", autonomous: "low", headless: "low" } as const;
-
 function json(body: object, status = 200): Response {
   return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
@@ -29,7 +27,6 @@ export function systemRoutes(assistantName: string): readonly Route[] {
         }),
     },
     { method: "GET", pattern: "feature-flags", handle: () => json({ flags: [] }) },
-    { method: "GET", pattern: "permissions/thresholds", handle: () => json(DEFAULT_THRESHOLDS) },
     { method: "GET", pattern: "sounds/config", handle: () => json(DEFAULT_SOUNDS) },
     { method: "PUT", pattern: "sounds/config", handle: () => json(DEFAULT_SOUNDS) },
     { method: "GET", pattern: "workspace/theme", handle: () => json({ theme: null, source: "none", issues: [] }) },
@@ -60,10 +57,5 @@ export function systemRoutes(assistantName: string): readonly Route[] {
     { method: "GET", pattern: "background-tools", handle: () => json({ tools: [], completed: [] }) },
     { method: "GET", pattern: "documents", handle: () => json({ documents: [] }) },
     { method: "GET", pattern: "suggestion", handle: () => json({ suggestion: null, messageId: null, source: "none" }) },
-    {
-      method: "GET",
-      pattern: "permissions/thresholds/conversations/:conversationId",
-      handle: () => json({ threshold: DEFAULT_THRESHOLDS.interactive }),
-    },
   ];
 }

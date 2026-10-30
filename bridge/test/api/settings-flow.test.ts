@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { readSettingsState } from "../support/fake-hermes-settings";
+import { readSettingsState, writeSettingsState } from "../support/fake-hermes-settings";
 import { authedClient, pairDevice, startTestBridge, type TestBridge } from "../support/test-bridge";
 
 let bridge: TestBridge | null = null;
@@ -145,5 +145,32 @@ describe("speech", () => {
   test("a credential Hermes has no place for is refused", async () => {
     const api = await start();
     expect((await api.send("POST", "credentials/set", { service: "google", field: "client_secret", value: "x" })).status).toBe(422);
+  });
+});
+
+describe("assistant access", () => {
+  const thresholds = { interactive: "medium", autonomous: "none", headless: "high" };
+
+  test("the access levels become Hermes' approval modes and read back", async () => {
+    const api = await start();
+    const response = await api.send("PUT", "permissions/thresholds", thresholds);
+    expect(await response.json()).toEqual(thresholds);
+    expect(hermes().values).toEqual({ "approvals.mode": "smart", "approvals.cron_mode": "deny", "approvals.unattended_mode": "approve" });
+  });
+
+  test("YAML's unquoted off, which arrives as false, reads as full access", async () => {
+    const api = await start();
+    writeSettingsState({ values: { "approvals.mode": false }, env: {} }, join(bridge?.stateDir ?? "", "fake-settings.json"));
+    expect(await (await api.get("permissions/thresholds")).json()).toMatchObject({ interactive: "high" });
+    expect(await (await api.get("permissions/thresholds/conversations/c1")).json()).toEqual({ threshold: "high" });
+  });
+
+  test.each([
+    ["a level Hermes lacks for chats", { ...thresholds, interactive: "low" }],
+    ["a level between block and allow for background work", { ...thresholds, autonomous: "medium" }],
+  ])("%s is refused", async (_label, body) => {
+    const api = await start();
+    expect((await api.send("PUT", "permissions/thresholds", body)).status).toBe(422);
+    expect(hermes().values).toEqual({});
   });
 });

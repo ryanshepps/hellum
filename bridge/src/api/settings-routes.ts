@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { errorResponse, readJsonBody } from "../http/json";
 import type { ModelService } from "../models/model-service";
+import { approvalChange, approvalThresholds, APPROVAL_KEYS, ThresholdsSchema } from "../settings/approvals";
 import type { HermesSettings } from "../settings/hermes-settings";
 import { mergeDeep, type SettingsService } from "../settings/settings-service";
 import { SPEECH_KEY_ENV, sttCatalog, ttsCatalog } from "../settings/speech";
@@ -33,6 +34,7 @@ export function settingsRoutes(models: ModelService, settings: SettingsService, 
     const [llm, hermes] = await Promise.all([models.llm(), settings.view()]);
     return Response.json(mergeDeep(DEFAULT_CONFIG, { ...hermes, llm }), { headers: { "Cache-Control": "no-store" } });
   };
+  const thresholds = async () => approvalThresholds((await hermes.read(APPROVAL_KEYS)).values);
   return [
     { method: "GET", pattern: "config", handle: config },
     {
@@ -49,6 +51,24 @@ export function settingsRoutes(models: ModelService, settings: SettingsService, 
         await settings.apply(body);
         return config();
       },
+    },
+    { method: "GET", pattern: "permissions/thresholds", handle: async () => Response.json(await thresholds()) },
+    {
+      method: "PUT",
+      pattern: "permissions/thresholds",
+      handle: async ({ request }) => {
+        const body = await readJsonBody(request, ThresholdsSchema);
+        if (!body) {
+          return errorResponse(400, "invalid_request", "interactive, autonomous and headless are required");
+        }
+        await hermes.write(approvalChange(body));
+        return Response.json(await thresholds());
+      },
+    },
+    {
+      method: "GET",
+      pattern: "permissions/thresholds/conversations/:conversationId",
+      handle: async () => Response.json({ threshold: (await thresholds()).interactive }),
     },
     { method: "GET", pattern: "tts/providers", handle: () => Response.json({ providers: ttsCatalog() }) },
     { method: "GET", pattern: "stt/providers", handle: () => Response.json({ providers: sttCatalog() }) },
