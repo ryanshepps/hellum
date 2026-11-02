@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { describeCadence, intervalToCron, parseRunReport, toVellumScheduleRuns } from "../../src/translate/schedules";
+import { type HermesJob, describeCadence, intervalToCron, parseRunReport, toVellumSchedule, toVellumScheduleRuns } from "../../src/translate/schedules";
 
 describe("intervalToCron", () => {
   test.each([
@@ -63,5 +63,33 @@ describe("toVellumScheduleRuns", () => {
   test("a run without a session still appears, unlinked", () => {
     const [run] = toVellumScheduleRuns("job2", [{ id: "a", finished_at: "2026-10-23T09:00:20Z", output: "x" }], sessions);
     expect(run).toMatchObject({ conversationId: null, conversationExists: false, durationMs: null, conversations: [] });
+  });
+});
+
+describe("toVellumSchedule", () => {
+  const job: HermesJob = {
+    id: "job1",
+    name: "Morning brief",
+    prompt: "Brief me",
+    schedule: { kind: "cron", expr: "0 9 * * *" },
+    schedule_display: "0 9 * * *",
+    enabled: true,
+    state: "scheduled",
+    next_run_at: null,
+    last_run_at: null,
+    last_status: null,
+    last_error: null,
+    created_at: null,
+    script: null,
+    no_agent: false,
+    deliver: "origin",
+  };
+
+  test("a job pinned to its own timezone reports that zone", () => {
+    expect(toVellumSchedule({ ...job, timezone: "Asia/Tokyo" }, "", "America/Toronto").timezone).toBe("Asia/Tokyo");
+  });
+
+  test("a job without a pinned timezone reports the profile's zone", () => {
+    expect(toVellumSchedule(job, "", "America/Toronto").timezone).toBe("America/Toronto");
   });
 });
