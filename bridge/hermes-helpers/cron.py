@@ -32,6 +32,7 @@ JOB_FIELDS = (
     "script",
     "no_agent",
     "deliver",
+    "timezone",
 )
 
 

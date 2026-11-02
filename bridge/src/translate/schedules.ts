@@ -24,6 +24,7 @@ export const HermesJobSchema = z.object({
   script: z.string().nullable(),
   no_agent: z.boolean().nullable(),
   deliver: z.string().nullable(),
+  timezone: z.string().nullish(),
 });
 
 export type HermesJob = z.infer<typeof HermesJobSchema>;
@@ -142,7 +143,7 @@ export function toVellumSchedule(job: HermesJob, description: string, timezone: 
     syntax: "cron",
     expression: cronExpression ?? job.schedule_display ?? null,
     cronExpression,
-    timezone,
+    timezone: job.timezone || timezone,
     message: job.prompt ?? "",
     script: job.script ?? null,
     nextRunAt: toMs(job.next_run_at) ?? 0,
