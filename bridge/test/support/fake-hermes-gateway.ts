@@ -131,6 +131,12 @@ async function promptReply(sid: string, session: StoredSession, prompt: string):
     const value = await askViewer(sid, "secret", { prompt: "Paste your key", env_var: prompt.slice("secret:".length) });
     return value ? `stored ${value.length} characters` : "skipped";
   }
+  if (prompt.startsWith("login:")) {
+    const origin = prompt.slice("login:".length);
+    const value = await askViewer(sid, "vault.save_login", { origin, site: new URL(origin).host });
+    const login = value ? (JSON.parse(value) as { identifier: string; password: string }) : null;
+    return login ? `saved ${login.identifier} with a ${login.password.length}-character password` : "not saved";
+  }
   if (prompt === "sudo:") {
     const password = await askViewer(sid, "sudo", { command: "sudo true" });
     return password ? "authenticated" : "skipped";
