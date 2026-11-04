@@ -80,6 +80,27 @@ describe("Hermes questions become cards", () => {
     expect(replyText(await events.until(isType("message_complete", sent.conversationId)))).toBe("authenticated");
   });
 
+  test("a site login is saved to Hermes' vault without its password reaching the card", async () => {
+    const { api, events } = await start();
+    const sent = await sendMessage(api, "login:https://login.yahoo.com");
+    const surface = shownSurface(await events.until(isType("ui_surface_show")));
+    expect(surface.data).toMatchObject({ fields: [{ id: "identifier", type: "text" }, { id: "password", type: "password" }] });
+
+    await api.send("POST", "surface-actions", { surfaceId: surface.surfaceId, actionId: "submit", data: { identifier: " ryan@example.com ", password: "hunter22" } });
+    const received = await events.until(isType("message_complete", sent.conversationId));
+    expect(received.find(isType("ui_surface_complete"))?.message).toMatchObject({ summary: "Saved login for login.yahoo.com" });
+    expect(JSON.stringify(received)).not.toContain("hunter22");
+    expect(replyText(received)).toBe("saved ryan@example.com with a 8-character password");
+  });
+
+  test("skipping a site login tells Hermes nothing was saved", async () => {
+    const { api, events } = await start();
+    const sent = await sendMessage(api, "login:https://login.yahoo.com");
+    const surface = shownSurface(await events.until(isType("ui_surface_show")));
+    await api.send("POST", "surface-actions", { surfaceId: surface.surfaceId, actionId: "cancel" });
+    expect(replyText(await events.until(isType("message_complete", sent.conversationId)))).toBe("not saved");
+  });
+
   test("skipping a question answers Hermes with nothing", async () => {
     const { api, events } = await start();
     const sent = await sendMessage(api, "ask:Anything else?");

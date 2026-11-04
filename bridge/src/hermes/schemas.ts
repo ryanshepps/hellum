@@ -72,12 +72,15 @@ const SecretParamsSchema = z.object({ session_id: z.string(), prompt: z.string()
 
 const SudoParamsSchema = z.object({ session_id: z.string() });
 
+const SaveLoginParamsSchema = z.object({ session_id: z.string(), origin: z.string(), site: z.string() });
+
 export type PromptControl = { readonly promptId: string; readonly generation: number };
 
 export type HermesPrompt =
   | { readonly kind: "clarify"; readonly requestId: string; readonly control: PromptControl; readonly question: string; readonly choices: readonly string[] }
   | { readonly kind: "secret"; readonly requestId: string; readonly prompt: string; readonly envVar: string }
-  | { readonly kind: "sudo"; readonly requestId: string };
+  | { readonly kind: "sudo"; readonly requestId: string }
+  | { readonly kind: "login"; readonly requestId: string; readonly origin: string; readonly site: string };
 
 const ApprovalPayloadSchema = z.object({
   ...ControlFields,
@@ -192,6 +195,12 @@ export function parseServerPrompt(request: ServerRequest): ServerPrompt | null {
     case "sudo": {
       const parsed = SudoParamsSchema.safeParse(request.params);
       return parsed.success ? { sessionId: parsed.data.session_id, prompt: { kind: "sudo", requestId: request.id } } : null;
+    }
+    case "vault.save_login": {
+      const parsed = SaveLoginParamsSchema.safeParse(request.params);
+      return parsed.success
+        ? { sessionId: parsed.data.session_id, prompt: { kind: "login", requestId: request.id, origin: parsed.data.origin, site: parsed.data.site } }
+        : null;
     }
     default:
       return null;

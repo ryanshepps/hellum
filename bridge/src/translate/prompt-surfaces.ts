@@ -61,6 +61,19 @@ function surfaceBody(prompt: HermesPrompt): Pick<SurfaceShowEvent, "surfaceType"
           fields: [{ id: "password", type: "password", label: "Password", required: true }],
         },
       };
+    case "login":
+      return {
+        surfaceType: "form",
+        title: `Sign in to ${prompt.site}`,
+        data: {
+          description: `Hermes needs your login for ${prompt.origin}. It saves it encrypted in its vault on your Mac and types it into the page itself, so the model never sees your password.`,
+          submitLabel: "Save login",
+          fields: [
+            { id: "identifier", type: "text", label: "Email, phone, or username", required: true },
+            { id: "password", type: "password", label: "Password", required: true },
+          ],
+        },
+      };
     default: {
       const exhaustive: never = prompt;
       return exhaustive;
@@ -116,6 +129,13 @@ export function promptReply(prompt: HermesPrompt, actionId: string, data: Readon
     case "sudo": {
       const password = cancelled ? "" : stringField(data, "password");
       return { kind: "response", requestId: prompt.requestId, value: password, summary: password ? "Password sent" : CANCELLED };
+    }
+    case "login": {
+      const identifier = cancelled ? "" : stringField(data, "identifier").trim();
+      const password = cancelled ? "" : stringField(data, "password");
+      return identifier && password
+        ? { kind: "response", requestId: prompt.requestId, value: JSON.stringify({ identifier, password }), summary: `Saved login for ${prompt.site}` }
+        : { kind: "response", requestId: prompt.requestId, value: "", summary: CANCELLED };
     }
     default: {
       const exhaustive: never = prompt;
