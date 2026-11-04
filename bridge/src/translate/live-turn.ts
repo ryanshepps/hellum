@@ -115,9 +115,19 @@ export function liveTurnMessages(turn: LiveTurn): readonly ConversationMessage[]
     role: "assistant",
     timestamp: new Date(turn.startedAt + 1).toISOString(),
     attachments: [],
-    contentBlocks: [...turn.blocks],
   };
-  return [user, assistant];
+  return [user, withBlocks(assistant, turn.blocks)];
+}
+
+type SurfaceBlock = Extract<ConversationContentBlock, { type: "surface" }>;
+
+function isSurface(block: ConversationContentBlock): block is SurfaceBlock {
+  return block.type === "surface";
+}
+
+function withBlocks(message: ConversationMessage, blocks: readonly ConversationContentBlock[]): ConversationMessage {
+  const surfaces = blocks.filter(isSurface).map((block) => block.surface);
+  return { ...message, contentBlocks: [...blocks], ...(surfaces.length > 0 ? { surfaces } : {}) };
 }
 
 export function mergeLiveTurn(history: readonly ConversationMessage[], turn: LiveTurn | null): readonly ConversationMessage[] {
@@ -128,7 +138,12 @@ export function mergeLiveTurn(history: readonly ConversationMessage[], turn: Liv
     message.id === turn.userMessageId && turn.clientMessageId ? { ...message, clientMessageId: turn.clientMessageId } : message,
   );
   if (withClientId.some((message) => message.id === turn.assistantMessageId)) {
-    return withClientId;
+    const questions = turn.blocks.filter(isSurface);
+    return questions.length === 0
+      ? withClientId
+      : withClientId.map((message) =>
+          message.id === turn.assistantMessageId ? withBlocks(message, [...(message.contentBlocks ?? []), ...questions]) : message,
+        );
   }
   const live = liveTurnMessages(turn);
   const hasUser = withClientId.some((message) => message.id === turn.userMessageId);

@@ -65,6 +65,16 @@ describe("mergeLiveTurn", () => {
     expect(merged).toEqual([{ ...savedUser, clientMessageId: "client-7" }, savedAssistant]);
   });
 
+  test("keeps the turn's questions on the reply Hermes saved mid-turn", () => {
+    const question = { type: "ui_surface_show", conversationId: "c", messageId: "c:a1", surfaceId: "c:a1:prompt:p1", surfaceType: "choice", data: {} } as const;
+    const asking = folded([{ type: "assistant_text_delta", text: "Done." }, question]);
+    const merged = mergeLiveTurn([savedUser, savedAssistant], asking);
+    expect(merged[1]?.contentBlocks).toEqual([{ type: "text", text: "Done." }, ...asking.blocks.slice(1)]);
+    expect(merged[1]?.surfaces?.map((surface) => surface.surfaceId)).toEqual(["c:a1:prompt:p1"]);
+    const answered = foldLiveTurn(asking, { type: "ui_surface_complete", conversationId: "c", surfaceId: "c:a1:prompt:p1", summary: "Tea" });
+    expect(mergeLiveTurn([savedUser, savedAssistant], answered)[1]?.surfaces).toMatchObject([{ surfaceId: "c:a1:prompt:p1", completed: true, completionSummary: "Tea" }]);
+  });
+
   test("an in-flight turn with no output yet shows only the user message", () => {
     expect(mergeLiveTurn([], folded([])).map((message) => message.id)).toEqual(["c:u1"]);
   });
