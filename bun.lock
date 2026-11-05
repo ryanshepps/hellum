@@ -41,7 +41,7 @@
     },
     "clients/web": {
       "name": "@vellumai/web",
-      "version": "0.12.6",
+      "version": "0.12.8",
       "dependencies": {
         "@capacitor-community/camera-preview": "8.0.1",
         "@capacitor/android": "8.3.4",
