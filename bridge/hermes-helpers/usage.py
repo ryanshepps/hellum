@@ -2,7 +2,7 @@
 
 Run with the Hermes virtualenv and the hermes-agent checkout on sys.path.
 Reads one JSON request from stdin and writes one JSON response to stdout.
-Uses Hermes' SessionDB read-only and its own pricing for sessions that have
+Uses Hermes' usage analytics read-only and its own pricing for sessions that have
 no recorded cost.
 """
 
@@ -13,7 +13,7 @@ import sys
 sys.path.insert(0, os.getcwd())
 
 from agent.insights import _estimate_cost  # noqa: E402
-from hermes_state import SessionDB  # noqa: E402
+from persistence_assembly import open_persistence_reader, profile_scope  # noqa: E402
 
 FIELDS = (
     "id", "source", "model", "started_at", "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
@@ -22,7 +22,7 @@ FIELDS = (
 
 
 def session_view(row):
-    session = dict(zip(FIELDS, row))
+    session = {field: row.get(field) for field in FIELDS}
     recorded = session["actual_cost_usd"] if session["actual_cost_usd"] is not None else session["estimated_cost_usd"]
     cost, status = (recorded, "recorded") if recorded else _estimate_cost(session)
     return {
@@ -41,12 +41,10 @@ def session_view(row):
 
 
 def sessions(start, end):
-    db = SessionDB(read_only=True)
-    rows = db._conn.execute(
-        f"SELECT {', '.join(FIELDS)} FROM sessions WHERE started_at >= ? AND started_at < ? ORDER BY started_at",
-        (start, end),
-    ).fetchall()
-    return {"success": True, "sessions": [session_view(tuple(row)) for row in rows]}
+    with open_persistence_reader(profile_scope().profile_dir) as reader:
+        rows = reader.usage_analytics.insight_sessions(started_since=start)
+    in_range = sorted((row for row in rows if row["started_at"] < end), key=lambda row: row["started_at"])
+    return {"success": True, "sessions": [session_view(row) for row in in_range]}
 
 
 def main():
