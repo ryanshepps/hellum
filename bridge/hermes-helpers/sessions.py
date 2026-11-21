@@ -3,7 +3,7 @@ sessions Hellum did not start, and when each message of a session was first writ
 
 Run with the Hermes virtualenv and the hermes-agent checkout on sys.path.
 Reads one JSON request from stdin and writes one JSON response to stdout.
-Uses Hermes' own SessionDB read-only, and Hermes' cron silence rule so a
+Reads Hermes' session store through its read-only storage interface, and Hermes' cron silence rule so a
 run that answered [SILENT] stays quiet here too.
 """
 
@@ -14,8 +14,14 @@ import sys
 sys.path.insert(0, os.getcwd())
 
 from cron.scheduler import _is_cron_silence_response  # noqa: E402
-from hermes_state import SessionDB  # noqa: E402
-from persistence.conversation.sessions import INTERNAL_LISTING_SOURCES  # noqa: E402
+from persistence.conversation.messages import TranscriptRead, TranscriptView  # noqa: E402
+from persistence.conversation.sessions import (  # noqa: E402
+    INTERNAL_LISTING_SOURCES,
+    SessionOrder,
+    SessionQuery,
+    SessionWindow,
+)
+from persistence_assembly import open_persistence_reader, profile_scope  # noqa: E402
 
 SCAN_LIMIT = 100
 LISTED_FIELDS = ("id", "title", "preview", "started_at", "message_count", "source", "runtime_revision", "runtime_generation")
@@ -30,14 +36,27 @@ def text_of(content):
     return ""
 
 
+def open_store():
+    return open_persistence_reader(profile_scope().profile_dir)
+
+
+def recent_sessions(store, limit, exclude_sources=()):
+    query = SessionQuery(exclude_sources=tuple(exclude_sources), order=SessionOrder.LAST_ACTIVE)
+    return [entry.as_list_row() for entry in store.sessions.list_sessions(query, SessionWindow(limit=limit))]
+
+
+def transcript(store, session_id, view=TranscriptView.ACTIVE):
+    return [row.as_wire_row() for row in store.messages.read_transcript(session_id, TranscriptRead(view=view))]
+
+
 def list_sessions(limit):
-    db = SessionDB(read_only=True)
-    rows = db.list_sessions_rich(limit=limit, exclude_sources=list(INTERNAL_LISTING_SOURCES), order_by_last_active=True)
+    with open_store() as store:
+        rows = recent_sessions(store, limit, INTERNAL_LISTING_SOURCES)
     return [{field: row.get(field) for field in LISTED_FIELDS} for row in rows]
 
 
-def finished_reply(db, session):
-    messages = [message for message in db.get_messages(session["id"]) if message.get("role") in CONVERSATION_ROLES]
+def finished_reply(store, session):
+    messages = [message for message in transcript(store, session["id"]) if message.get("role") in CONVERSATION_ROLES]
     if not messages:
         return None
     last = messages[-1]
@@ -57,15 +76,14 @@ def finished_reply(db, session):
 
 
 def finished_replies(sources, since):
-    db = SessionDB(read_only=True)
-    sessions = db.list_sessions_rich(limit=SCAN_LIMIT, order_by_last_active=True)
     replies = []
-    for session in sessions:
-        if session.get("source") not in sources or (session.get("last_active") or 0) <= since:
-            continue
-        reply = finished_reply(db, session)
-        if reply and reply["replied_at"] > since:
-            replies.append(reply)
+    with open_store() as store:
+        for session in recent_sessions(store, SCAN_LIMIT):
+            if session.get("source") not in sources or (session.get("last_active") or 0) <= since:
+                continue
+            reply = finished_reply(store, session)
+            if reply and reply["replied_at"] > since:
+                replies.append(reply)
     return replies
 
 
@@ -92,8 +110,9 @@ def active_row_times(rows):
 
 
 def message_times(session_id):
-    db = SessionDB(read_only=True)
-    return {str(row["id"]): at for row, at in active_row_times(db.get_messages(session_id, include_inactive=True))}
+    with open_store() as store:
+        rows = transcript(store, session_id, TranscriptView.ALL)
+    return {str(row["id"]): at for row, at in active_row_times(rows)}
 
 
 def main():
