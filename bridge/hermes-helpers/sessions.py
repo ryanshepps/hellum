@@ -15,7 +15,7 @@ sys.path.insert(0, os.getcwd())
 
 from cron.scheduler import _is_cron_silence_response  # noqa: E402
 from hermes_state import SessionDB  # noqa: E402
-from hermes_state_sessions import INTERNAL_LISTING_SOURCES  # noqa: E402
+from persistence.conversation.sessions import INTERNAL_LISTING_SOURCES  # noqa: E402
 
 SCAN_LIMIT = 100
 LISTED_FIELDS = ("id", "title", "preview", "started_at", "message_count", "source", "runtime_revision", "runtime_generation")
